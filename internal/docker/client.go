@@ -27,7 +27,7 @@ func newHTTPClient(socketPath string) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext:           dial,
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: 120 * time.Second,
 		},
 	}
 }

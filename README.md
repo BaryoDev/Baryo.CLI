@@ -323,11 +323,25 @@ socket_path: "tcp://localhost:12434"
 
 Or via environment variable: `DOCKER_MODEL_SOCKET=tcp://localhost:12434`.
 
+### Tool use
+
+Baryo gives the model access to local tools so it can read files, search code, and explore your project when asked.
+
+Available tools:
+- **read_file** — read the contents of a file
+- **glob** — find files matching a pattern (supports `**`)
+- **grep** — search file contents by regex
+- **list_directory** — list directory contents as a tree
+
+Tools are called automatically when the model decides they're needed. Results are shown inline in the chat. The `.git` directory is excluded from file listings, and `.gitignore` rules are respected.
+
+Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
+
 ## How it works
 
 Baryo communicates with Docker Model Runner through its Unix socket (or TCP endpoint), using the OpenAI-compatible `/v1/chat/completions` API. Responses are streamed token-by-token using Server-Sent Events (SSE).
 
-Models are discovered via `docker model list --json` and the full conversation context is maintained across turns.
+Models are discovered via `docker model list --json` and the full conversation context is maintained across turns. When tools are provided, the model can make function calls that Baryo executes locally and feeds back into the conversation.
 
 ## License
 

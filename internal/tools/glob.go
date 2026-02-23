@@ -89,9 +89,14 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("invalid glob pattern: %v", err), IsError: true}
 	}
 
-	// Filter out gitignored files and directories.
+	// Filter out gitignored files, directories, and .git internals.
 	var filtered []string
 	for _, m := range matches {
+		// Skip .git directory contents.
+		if m == ".git" || strings.HasPrefix(m, ".git/") || strings.HasPrefix(m, ".git"+string(filepath.Separator)) {
+			continue
+		}
+
 		absPath := filepath.Join(searchRoot, m)
 
 		// Skip directories — only return files.

@@ -6,6 +6,7 @@ package tui
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -147,8 +148,20 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Input history navigation
+		// Viewport scrolling — up/down arrows scroll the conversation.
 		if msg.String() == "up" && !m.isStream {
+			m.viewport.ScrollUp(1)
+			m.updateViewport()
+			return m, nil
+		}
+		if msg.String() == "down" && !m.isStream {
+			m.viewport.ScrollDown(1)
+			m.updateViewport()
+			return m, nil
+		}
+
+		// Input history navigation — ctrl+p/ctrl+n (readline-style).
+		if msg.String() == "ctrl+p" && !m.isStream {
 			if len(m.inputHistory) == 0 {
 				break
 			}
@@ -162,7 +175,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
-		if msg.String() == "down" && !m.isStream {
+		if msg.String() == "ctrl+n" && !m.isStream {
 			if m.historyIdx == -1 {
 				break
 			}
@@ -495,17 +508,9 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 }
 
 // toolSystemPrompt is injected to instruct the model to use available tools.
-const toolSystemPrompt = `You have access to tools. Always prefer using tools over explaining how to use them.
-
-Available tools:
-- read_file: Read the contents of a file. Use when the user asks to read, view, or show a file.
-- glob: Find files matching a pattern (supports **). Use when the user asks to find or list files.
-- grep: Search file contents by regex. Use when the user asks to search for text or patterns in code.
-
-When you receive tool results, always report the key findings to the user. Do not make unnecessary extra tool calls.
-
-If you cannot use the tool calling API directly, invoke tools by writing:
-<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>`
+//
+//go:embed prompts/tools.md
+var toolSystemPrompt string
 
 // buildMessages prepends the system prompt to the conversation messages.
 func (m *ChatModel) buildMessages() []docker.ChatMessage {
@@ -680,7 +685,7 @@ func (m ChatModel) View() string {
 	} else if m.isStream {
 		status = HelpStyle.Render("streaming...")
 	} else {
-		status = HelpStyle.Render("enter send • ↑↓ history • ctrl+c quit")
+		status = HelpStyle.Render("enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit")
 	}
 
 	return fmt.Sprintf("%s\n%s\n%s\n%s",

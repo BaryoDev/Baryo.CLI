@@ -5,6 +5,7 @@
 package config
 
 import (
+	_ "embed"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,7 +16,9 @@ import (
 )
 
 // DefaultSystemPrompt is the built-in system prompt shipped with the binary.
-const DefaultSystemPrompt = "You are Baryo, a helpful AI assistant running locally via Docker Model Runner. Be concise, accurate, and helpful. When showing code, use fenced code blocks with the language specified."
+//
+//go:embed prompts/system.md
+var DefaultSystemPrompt string
 
 // Config holds merged configuration from all sources.
 type Config struct {

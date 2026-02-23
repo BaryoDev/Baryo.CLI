@@ -20,12 +20,15 @@ type TextToolCall struct {
 // Regex patterns tried in priority order (first match wins per occurrence).
 var (
 	// 1. XML-wrapped: <tool_call>{"name": "read_file", "arguments": {"path": "main.go"}}</tool_call>
-	reXMLToolCall = regexp.MustCompile(`<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	reXMLToolCall = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
 
-	// 2. Function call syntax: read_file({"path": "main.go"})
+	// 2. Named XML tag: <glob>{"pattern":"**/*.go"}</glob>, <list_directory></list_directory>, <list_directory/>
+	reNamedXMLCall = regexp.MustCompile(`(?s)<([a-z_][a-z0-9_]*)>\s*(.*?)\s*</([a-z_][a-z0-9_]*)>|<([a-z_][a-z0-9_]*)\s*/>`)
+
+	// 3. Function call syntax: read_file({"path": "main.go"})
 	reFuncCall = regexp.MustCompile(`([a-z_][a-z0-9_]*)\((\{.*?\})\)`)
 
-	// 3. Bare JSON: {"name": "read_file", "arguments": {"path": "main.go"}}
+	// 4. Bare JSON: {"name": "read_file", "arguments": {"path": "main.go"}}
 	reBareJSON = regexp.MustCompile(`\{\s*"name"\s*:\s*"([a-z_][a-z0-9_]*)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}`)
 )
 
@@ -79,7 +82,47 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 		matched = append(matched, match{fullStart, fullEnd})
 	}
 
-	// Pattern 2: Function call syntax
+	// Pattern 2: Named XML tag (e.g. <glob>{"pattern":"**/*"}</glob>, <list_directory></list_directory>)
+	for _, loc := range reNamedXMLCall.FindAllStringSubmatchIndex(text, -1) {
+		fullStart, fullEnd := loc[0], loc[1]
+		if overlaps(fullStart, fullEnd) {
+			continue
+		}
+
+		var name, body string
+		if loc[2] >= 0 {
+			// Matched <name>body</name>
+			open := text[loc[2]:loc[3]]
+			closeTag := text[loc[6]:loc[7]]
+			if open != closeTag {
+				continue
+			}
+			name = open
+			body = strings.TrimSpace(text[loc[4]:loc[5]])
+		} else {
+			// Matched <name/>
+			name = text[loc[8]:loc[9]]
+		}
+
+		name = normalizeToolName(name)
+		if !validNames[name] {
+			continue
+		}
+
+		args := parseFlexibleArgs(body)
+		if args == "" {
+			continue
+		}
+
+		calls = append(calls, TextToolCall{
+			Name:      name,
+			Arguments: args,
+			Raw:       text[fullStart:fullEnd],
+		})
+		matched = append(matched, match{fullStart, fullEnd})
+	}
+
+	// Pattern 3: Function call syntax (e.g. read_file({"path":"main.go"}))
 	for _, loc := range reFuncCall.FindAllStringSubmatchIndex(text, -1) {
 		fullStart, fullEnd := loc[0], loc[1]
 		if overlaps(fullStart, fullEnd) {
@@ -101,7 +144,7 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 		matched = append(matched, match{fullStart, fullEnd})
 	}
 
-	// Pattern 3: Bare JSON
+	// Pattern 4: Bare JSON
 	for _, loc := range reBareJSON.FindAllStringSubmatchIndex(text, -1) {
 		fullStart, fullEnd := loc[0], loc[1]
 		if overlaps(fullStart, fullEnd) {
@@ -132,6 +175,39 @@ func stripToolCallText(content string, calls []TextToolCall) string {
 		content = strings.Replace(content, c.Raw, "", 1)
 	}
 	return strings.TrimSpace(content)
+}
+
+// parseFlexibleArgs tries to interpret body as valid JSON arguments.
+// Handles: empty body, valid JSON object, bare key-values like "path": ".".
+// Returns valid JSON string or empty string if unparseable.
+func parseFlexibleArgs(body string) string {
+	if body == "" {
+		return "{}"
+	}
+	// Already a valid JSON object.
+	if json.Valid([]byte(body)) {
+		// Must be an object, not a string/number/array.
+		if strings.HasPrefix(body, "{") {
+			return body
+		}
+	}
+	// Try wrapping bare key-values in braces: "path": "." → {"path": "."}
+	wrapped := "{" + body + "}"
+	if json.Valid([]byte(wrapped)) {
+		return wrapped
+	}
+	return ""
+}
+
+// normalizeToolName strips common suffixes models add to tool names.
+func normalizeToolName(name string) string {
+	for _, suffix := range []string{"_call", "_tool"} {
+		trimmed := strings.TrimSuffix(name, suffix)
+		if trimmed != name && trimmed != "" {
+			return trimmed
+		}
+	}
+	return name
 }
 
 // buildValidToolNames extracts tool function names from definitions.

@@ -16,6 +16,7 @@ import (
 type SessionSelectModel struct {
 	sessions []session.Summary
 	cursor   int
+	offset   int // first visible item index
 	width    int
 	height   int
 }
@@ -27,21 +28,50 @@ func NewSessionSelect(sessions []session.Summary) SessionSelectModel {
 	}
 }
 
+// pageSize returns how many items fit on screen (minimum 5).
+func (m *SessionSelectModel) pageSize() int {
+	// title(2) + help bar(1) + scroll indicators(2) = ~5 overhead
+	// each session takes ~3 lines (label + detail + blank)
+	usable := m.height - 5
+	n := usable / 3
+	if n < 5 {
+		return 5
+	}
+	return n
+}
+
+// adjustScroll ensures the cursor is within the visible window.
+func (m *SessionSelectModel) adjustScroll() {
+	ps := m.pageSize()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+ps {
+		m.offset = m.cursor - ps + 1
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
+}
+
 func (m SessionSelectModel) Update(msg tea.Msg) (SessionSelectModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.adjustScroll()
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
+				m.adjustScroll()
 			}
 		case "down", "j":
 			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
+				m.adjustScroll()
 			}
 		case "enter":
 			if len(m.sessions) > 0 {
@@ -77,7 +107,23 @@ func (m SessionSelectModel) View() string {
 		return b.String()
 	}
 
-	for i, s := range m.sessions {
+	// Determine visible window
+	ps := m.pageSize()
+	end := m.offset + ps
+	if end > len(m.sessions) {
+		end = len(m.sessions)
+	}
+
+	// Scroll indicator at top
+	if m.offset > 0 {
+		b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↑ %d more above", m.offset)))
+		b.WriteString("\n\n")
+	}
+
+	// Render only visible items
+	for i := m.offset; i < end; i++ {
+		s := m.sessions[i]
+
 		cursor := "  "
 		style := NormalModelStyle
 		if i == m.cursor {
@@ -94,6 +140,13 @@ func (m SessionSelectModel) View() string {
 
 		b.WriteString(cursor + label + "\n")
 		b.WriteString("  " + detail + "\n\n")
+	}
+
+	// Scroll indicator at bottom
+	remaining := len(m.sessions) - end
+	if remaining > 0 {
+		b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
+		b.WriteString("\n\n")
 	}
 
 	b.WriteString(HelpStyle.Render("↑/↓ navigate • enter select • esc back • ctrl+c quit"))
