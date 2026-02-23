@@ -43,9 +43,8 @@ changelog:
 brews:
   - repository:
       owner: arnelirobles
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+      name: baryo-cli
+    directory: HomebrewFormula
     homepage: "https://github.com/arnelirobles/baryo-cli"
     description: "A local AI chat CLI powered by Docker Model Runner"
     license: "MPL-2.0"
@@ -57,8 +56,8 @@ brews:
 scoops:
   - repository:
       owner: arnelirobles
-      name: scoop-baryo
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      name: baryo-cli
+    directory: ScoopBucket
     homepage: "https://github.com/arnelirobles/baryo-cli"
     description: "A local AI chat CLI powered by Docker Model Runner"
     license: "MPL-2.0"

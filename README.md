@@ -18,7 +18,8 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 ### macOS / Linux (Homebrew)
 
 ```bash
-brew install arnelirobles/tap/baryo
+brew tap arnelirobles/baryo-cli https://github.com/arnelirobles/baryo-cli
+brew install baryo
 ```
 
 ### macOS / Linux (shell script)
@@ -30,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/arnelirobles/baryo-cli/main/install
 ### Windows (Scoop)
 
 ```powershell
-scoop bucket add baryo https://github.com/arnelirobles/scoop-baryo
+scoop bucket add baryo https://github.com/arnelirobles/baryo-cli
 scoop install baryo
 ```
 
@@ -51,6 +52,17 @@ git clone https://github.com/arnelirobles/baryo-cli.git
 cd baryo-cli
 go build -o baryo .
 ```
+
+### Publishing a new release
+
+Tag and push — GitHub Actions handles the rest:
+
+```bash
+git tag v0.1.0
+git push origin main --tags
+```
+
+This automatically builds binaries for all platforms, creates a GitHub Release, and updates the Homebrew formula and Scoop manifest in this repo.
 
 ## Usage
 
