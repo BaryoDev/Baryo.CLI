@@ -1,0 +1,23 @@
+# Binary
+baryo
+
+# Test binary
+*.test
+
+# Coverage
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*

@@ -25,7 +25,10 @@
       "Bash(find:*)",
       "Bash(timeout:*)",
       "Bash(gtimeout:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)"
     ]
   }
 }
