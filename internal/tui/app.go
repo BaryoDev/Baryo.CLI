@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
 type screen int
@@ -17,6 +18,7 @@ const (
 	screenLoading screen = iota
 	screenModelSelect
 	screenChat
+	screenSessionSelect
 )
 
 // AppModel is the top-level bubbletea model that drives screen transitions.
@@ -26,9 +28,12 @@ type AppModel struct {
 	socketPath string
 
 	preselectedModel *docker.DockerModel
+	resumeSession    *session.Session
+	sessionList      []session.Summary
 
-	modelSelect ModelSelectModel
-	chat        ChatModel
+	modelSelect   ModelSelectModel
+	sessionSelect SessionSelectModel
+	chat          ChatModel
 
 	err    error
 	width  int
@@ -52,6 +57,20 @@ func WithPreselectedModel(model docker.DockerModel) AppOption {
 	}
 }
 
+// WithSession resumes a saved session, skipping model loading and picker.
+func WithSession(sess *session.Session) AppOption {
+	return func(a *AppModel) {
+		a.resumeSession = sess
+	}
+}
+
+// WithSessionList starts on the session picker screen.
+func WithSessionList(summaries []session.Summary) AppOption {
+	return func(a *AppModel) {
+		a.sessionList = summaries
+	}
+}
+
 // NewApp creates the initial application model.
 func NewApp(opts ...AppOption) AppModel {
 	s := spinner.New(
@@ -69,6 +88,18 @@ func NewApp(opts ...AppOption) AppModel {
 }
 
 func (m AppModel) Init() tea.Cmd {
+	// If resuming a specific session, skip everything
+	if m.resumeSession != nil {
+		return func() tea.Msg {
+			return SessionLoadedMsg{Session: m.resumeSession}
+		}
+	}
+	// If showing session picker, skip model loading
+	if m.sessionList != nil {
+		return func() tea.Msg {
+			return ShowSessionsMsg{Sessions: m.sessionList}
+		}
+	}
 	return tea.Batch(m.spinner.Tick, loadModels)
 }
 
@@ -82,6 +113,30 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+
+	// Global message handlers (can arrive from any screen)
+	case SessionLoadedMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		m.screen = screenChat
+		m.chat = NewChatFromSession(m.socketPath, msg.Session)
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
+			Width:  m.width,
+			Height: m.height,
+		})
+		return m, cmd
+
+	case ShowSessionsMsg:
+		m.screen = screenSessionSelect
+		m.sessionSelect = NewSessionSelect(msg.Sessions)
+		return m, nil
+
+	case SessionCancelledMsg:
+		m.screen = screenChat
+		return m, nil
 	}
 
 	switch m.screen {
@@ -91,6 +146,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateModelSelect(msg)
 	case screenChat:
 		return m.updateChat(msg)
+	case screenSessionSelect:
+		return m.updateSessionSelect(msg)
 	}
 
 	return m, nil
@@ -151,6 +208,12 @@ func (m AppModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m AppModel) updateSessionSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.sessionSelect, cmd = m.sessionSelect.Update(msg)
+	return m, cmd
+}
+
 func (m AppModel) View() string {
 	switch m.screen {
 	case screenLoading:
@@ -165,6 +228,9 @@ func (m AppModel) View() string {
 
 	case screenChat:
 		return m.chat.View()
+
+	case screenSessionSelect:
+		return m.sessionSelect.View()
 	}
 
 	return ""

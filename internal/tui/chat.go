@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
 // ChatModel is the chat conversation screen.
@@ -25,6 +26,7 @@ type ChatModel struct {
 	history    []chatEntry // rendered conversation history
 	streaming  string      // current streaming text accumulator
 	isStream   bool        // whether we are currently streaming
+	session    *session.Session
 
 	textarea textarea.Model
 	viewport viewport.Model
@@ -44,6 +46,36 @@ type chatEntry struct {
 
 // NewChat creates a new chat screen for the given model.
 func NewChat(socketPath, modelName, modelTag string) ChatModel {
+	ta := newTextarea()
+	sess, _ := session.New(modelName, modelTag)
+	return ChatModel{
+		socketPath: socketPath,
+		modelName:  modelName,
+		modelTag:   modelTag,
+		textarea:   ta,
+		session:    sess,
+	}
+}
+
+// NewChatFromSession restores a chat screen from a saved session.
+func NewChatFromSession(socketPath string, sess *session.Session) ChatModel {
+	ta := newTextarea()
+	history := make([]chatEntry, len(sess.Messages))
+	for i, m := range sess.Messages {
+		history[i] = chatEntry{role: m.Role, content: m.Content}
+	}
+	return ChatModel{
+		socketPath: socketPath,
+		modelName:  sess.ModelName,
+		modelTag:   sess.ModelTag,
+		messages:   append([]docker.ChatMessage{}, sess.Messages...),
+		history:    history,
+		textarea:   ta,
+		session:    sess,
+	}
+}
+
+func newTextarea() textarea.Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -51,13 +83,7 @@ func NewChat(socketPath, modelName, modelTag string) ChatModel {
 	ta.SetWidth(80)
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 4096
-
-	return ChatModel{
-		socketPath: socketPath,
-		modelName:  modelName,
-		modelTag:   modelTag,
-		textarea:   ta,
-	}
+	return ta
 }
 
 func (m ChatModel) Init() tea.Cmd {
@@ -84,6 +110,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.viewport.Height = msg.Height - inputHeight - headerHeight
 		}
 		m.textarea.SetWidth(msg.Width - 2)
+		m.updateViewport()
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -100,6 +127,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			m.textarea.Reset()
+
+			// Handle slash commands
+			if strings.HasPrefix(text, "/") {
+				return m.handleCommand(text)
+			}
 
 			// Add user message
 			m.messages = append(m.messages, docker.ChatMessage{
@@ -125,7 +157,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 	case StreamTokenMsg:
 		if msg.Done {
-			// Streaming complete — render markdown and save
+			// Streaming complete — save to history and auto-save session
 			rendered := m.streaming
 			m.history = append(m.history, chatEntry{
 				role:    "assistant",
@@ -139,6 +171,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.isStream = false
 			m.cancelFunc = nil
 			m.tokenCh = nil
+			m.saveSession()
 			m.updateViewport()
 			return m, nil
 		}
@@ -160,6 +193,47 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
+	switch strings.TrimSpace(text) {
+	case "/clear":
+		sess, _ := session.New(m.modelName, m.modelTag)
+		m.messages = nil
+		m.history = nil
+		m.session = sess
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Session cleared. Starting fresh.",
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/sessions":
+		return m, func() tea.Msg {
+			summaries, err := session.List()
+			if err != nil {
+				return ShowSessionsMsg{}
+			}
+			return ShowSessionsMsg{Sessions: summaries}
+		}
+
+	default:
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions", text),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+}
+
+func (m *ChatModel) saveSession() {
+	if m.session == nil {
+		return
+	}
+	m.session.Messages = m.messages
+	_ = m.session.Save() // best-effort, don't interrupt chat on save error
 }
 
 func (m *ChatModel) updateViewport() {

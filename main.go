@@ -12,6 +12,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/cli"
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
 )
 
@@ -48,7 +49,31 @@ func main() {
 		opts := []tui.AppOption{
 			tui.WithSocketPath(cfg.SocketPath),
 		}
-		if cfg.Model != "" {
+
+		// Handle session resume flags
+		if flags.ResumeID != "" {
+			sess, err := session.Load(flags.ResumeID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			opts = append(opts, tui.WithSession(sess))
+		} else if flags.Resume {
+			summaries, err := session.List()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			opts = append(opts, tui.WithSessionList(summaries))
+		} else if flags.Continue {
+			cwd, _ := os.Getwd()
+			sess, err := session.LatestForDir(cwd)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			opts = append(opts, tui.WithSession(sess))
+		} else if cfg.Model != "" {
 			model, err := resolveModel(cfg.Model)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -56,6 +81,7 @@ func main() {
 			}
 			opts = append(opts, tui.WithPreselectedModel(model))
 		}
+
 		p := tea.NewProgram(tui.NewApp(opts...), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

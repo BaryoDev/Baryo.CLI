@@ -4,7 +4,10 @@
 
 package tui
 
-import "github.com/arnelirobles/baryo-cli/internal/docker"
+import (
+	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/session"
+)
 
 // ModelsLoadedMsg is sent when the model list has been fetched.
 type ModelsLoadedMsg struct {
@@ -22,3 +25,17 @@ type StreamTokenMsg struct {
 type ModelSelectedMsg struct {
 	Model docker.DockerModel
 }
+
+// ShowSessionsMsg requests transition to the session picker screen.
+type ShowSessionsMsg struct {
+	Sessions []session.Summary
+}
+
+// SessionLoadedMsg is sent when a session has been loaded from disk.
+type SessionLoadedMsg struct {
+	Session *session.Session
+	Err     error
+}
+
+// SessionCancelledMsg is sent when the user presses esc on the session picker.
+type SessionCancelledMsg struct{}

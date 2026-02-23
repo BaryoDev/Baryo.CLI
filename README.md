@@ -74,12 +74,34 @@ baryo -p "generate a .gitignore for Go" > .gitignore
 
 When stdin is piped, it's included as context alongside your prompt.
 
+### Session persistence
+
+Conversations are automatically saved after each turn to `~/.baryo/sessions/`.
+
+```bash
+# Resume the most recent session in this directory
+baryo -c
+
+# Pick a saved session from a list
+baryo -r
+
+# Resume a specific session by ID
+baryo --resume-id abc123
+```
+
+Inside the TUI you can also use:
+- `/sessions` — list and pick a saved session to resume
+- `/clear` — start a fresh conversation
+
 ### Flags
 
 | Flag | Description |
 |------|-------------|
 | `-p <prompt>` | Send a prompt in non-interactive (print) mode |
 | `--model <name>` | Select a model by name or substring |
+| `-c`, `--continue` | Resume the most recent session in this directory |
+| `-r`, `--resume` | List and pick a saved session to resume |
+| `--resume-id <id>` | Resume a specific session by ID |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
 

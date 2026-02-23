@@ -29,6 +29,9 @@ const (
 type Config struct {
 	Prompt    string
 	Model     string
+	Continue  bool
+	Resume    bool
+	ResumeID  string
 	ShowHelp  bool
 	ShowVer   bool
 	StdinData string
@@ -43,6 +46,11 @@ func Parse() Config {
 
 	fs.StringVar(&cfg.Prompt, "p", "", "prompt to send (non-interactive)")
 	fs.StringVar(&cfg.Model, "model", "", "model name or substring to match")
+	fs.BoolVar(&cfg.Continue, "c", false, "resume most recent session")
+	fs.BoolVar(&cfg.Continue, "continue", false, "resume most recent session")
+	fs.BoolVar(&cfg.Resume, "r", false, "list and pick a saved session")
+	fs.BoolVar(&cfg.Resume, "resume", false, "list and pick a saved session")
+	fs.StringVar(&cfg.ResumeID, "resume-id", "", "resume a specific session by ID")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
@@ -105,14 +113,24 @@ A local AI chat CLI powered by Docker Model Runner.
 Flags:
   -p <prompt>       Send a prompt in non-interactive (print) mode
   --model <name>    Select a model by name or substring
+  -c, --continue    Resume the most recent session in this directory
+  -r, --resume      List and pick a saved session to resume
+  --resume-id <id>  Resume a specific session by ID
   --version         Print version and exit
   --help            Print this help message
+
+TUI Commands:
+  /clear            Start a fresh conversation
+  /sessions         List and pick a saved session to resume
 
 Examples:
   baryo                          Launch interactive TUI
   baryo --model mistral          Launch TUI with a specific model
   baryo -p "what is 2+2"         Print mode: stream answer to stdout
   baryo --model m -p "hello"     Print mode with specific model
+  baryo -c                       Resume last session in this directory
+  baryo -r                       Pick a session to resume
+  baryo --resume-id abc123       Resume session by ID
   cat file.go | baryo -p "explain this"  Pipe stdin as context
 `)
 }
