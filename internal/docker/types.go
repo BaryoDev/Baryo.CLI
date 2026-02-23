@@ -31,11 +31,21 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// ChatParams holds optional model parameters for inference.
+type ChatParams struct {
+	Temperature *float64 `json:"temperature,omitempty" yaml:"temperature"`
+	TopP        *float64 `json:"top_p,omitempty"       yaml:"top_p"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"  yaml:"max_tokens"`
+}
+
 // ChatRequest is the body sent to /v1/chat/completions.
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model       string        `json:"model"`
+	Messages    []ChatMessage `json:"messages"`
+	Stream      bool          `json:"stream"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	TopP        *float64      `json:"top_p,omitempty"`
+	MaxTokens   *int          `json:"max_tokens,omitempty"`
 }
 
 // StreamChoice represents a single choice in a streaming chunk.

@@ -7,6 +7,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -19,10 +20,11 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	socketPath   string // unix socket for Docker Model Runner
-	systemPrompt string // active system prompt
-	modelName    string // display name (e.g. "ai/mistral")
-	modelTag     string // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
+	socketPath   string            // unix socket for Docker Model Runner
+	systemPrompt string            // active system prompt
+	params       docker.ChatParams // model parameters
+	modelName    string            // display name (e.g. "ai/mistral")
+	modelTag     string            // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
 	messages     []docker.ChatMessage
 	history      []chatEntry // rendered conversation history
 	streaming    string      // current streaming text accumulator
@@ -46,12 +48,13 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, modelName, modelTag string) ChatModel {
+func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelName, modelTag string) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(modelName, modelTag)
 	return ChatModel{
 		socketPath:   socketPath,
 		systemPrompt: systemPrompt,
+		params:       params,
 		modelName:    modelName,
 		modelTag:     modelTag,
 		textarea:     ta,
@@ -60,7 +63,7 @@ func NewChat(socketPath, systemPrompt, modelName, modelTag string) ChatModel {
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt string, sess *session.Session) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParams, sess *session.Session) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -69,6 +72,7 @@ func NewChatFromSession(socketPath, systemPrompt string, sess *session.Session) 
 	return ChatModel{
 		socketPath:   socketPath,
 		systemPrompt: systemPrompt,
+		params:       params,
 		modelName:    sess.ModelName,
 		modelTag:     sess.ModelTag,
 		messages:     append([]docker.ChatMessage{}, sess.Messages...),
@@ -152,7 +156,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
-			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages())
+			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
 
 			m.updateViewport()
 			return m, waitForToken(m.tokenCh)
@@ -233,6 +237,14 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/params":
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: m.formatParams(),
+		})
+		m.updateViewport()
+		return m, nil
+
 	default:
 		if strings.HasPrefix(text, "/system ") {
 			m.systemPrompt = strings.TrimPrefix(text, "/system ")
@@ -244,9 +256,25 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if strings.HasPrefix(text, "/params ") {
+			if err := m.parseParams(strings.TrimPrefix(text, "/params ")); err != nil {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: fmt.Sprintf("Error: %v", err),
+				})
+			} else {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: "Parameters updated.\n" + m.formatParams(),
+				})
+			}
+			m.updateViewport()
+			return m, nil
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /system", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /system, /params", text),
 		})
 		m.updateViewport()
 		return m, nil
@@ -262,6 +290,54 @@ func (m *ChatModel) buildMessages() []docker.ChatMessage {
 	msgs = append(msgs, docker.ChatMessage{Role: "system", Content: m.systemPrompt})
 	msgs = append(msgs, m.messages...)
 	return msgs
+}
+
+func (m *ChatModel) formatParams() string {
+	temp := "(default)"
+	if m.params.Temperature != nil {
+		temp = strconv.FormatFloat(*m.params.Temperature, 'f', 2, 64)
+	}
+	topP := "(default)"
+	if m.params.TopP != nil {
+		topP = strconv.FormatFloat(*m.params.TopP, 'f', 2, 64)
+	}
+	maxTok := "(default)"
+	if m.params.MaxTokens != nil {
+		maxTok = strconv.Itoa(*m.params.MaxTokens)
+	}
+	return fmt.Sprintf("temperature: %s\ntop_p: %s\nmax_tokens: %s\n\nUsage: /params temperature=0.8 top_p=0.9 max_tokens=2048", temp, topP, maxTok)
+}
+
+func (m *ChatModel) parseParams(input string) error {
+	for _, part := range strings.Fields(input) {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return fmt.Errorf("invalid format %q, use key=value", part)
+		}
+		switch kv[0] {
+		case "temperature":
+			f, err := strconv.ParseFloat(kv[1], 64)
+			if err != nil {
+				return fmt.Errorf("invalid temperature: %v", err)
+			}
+			m.params.Temperature = &f
+		case "top_p":
+			f, err := strconv.ParseFloat(kv[1], 64)
+			if err != nil {
+				return fmt.Errorf("invalid top_p: %v", err)
+			}
+			m.params.TopP = &f
+		case "max_tokens":
+			n, err := strconv.Atoi(kv[1])
+			if err != nil {
+				return fmt.Errorf("invalid max_tokens: %v", err)
+			}
+			m.params.MaxTokens = &n
+		default:
+			return fmt.Errorf("unknown parameter %q (available: temperature, top_p, max_tokens)", kv[0])
+		}
+	}
+	return nil
 }
 
 func (m *ChatModel) saveSession() {

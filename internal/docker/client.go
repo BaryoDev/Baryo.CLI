@@ -29,16 +29,19 @@ func newHTTPClient(socketPath string) *http.Client {
 // StreamChat sends a chat request and streams tokens into the returned channel.
 // The channel is closed when streaming ends. Errors are sent as a single
 // token prefixed with "error:".
-func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage) <-chan string {
+func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams) <-chan string {
 	ch := make(chan string, 64)
 
 	go func() {
 		defer close(ch)
 
 		reqBody := ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   true,
+			Model:       model,
+			Messages:    messages,
+			Stream:      true,
+			Temperature: params.Temperature,
+			TopP:        params.TopP,
+			MaxTokens:   params.MaxTokens,
 		}
 
 		body, err := json.Marshal(reqBody)

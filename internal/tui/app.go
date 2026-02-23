@@ -27,6 +27,7 @@ type AppModel struct {
 	spinner      spinner.Model
 	socketPath   string
 	systemPrompt string
+	params       docker.ChatParams
 
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
@@ -69,6 +70,13 @@ func WithSession(sess *session.Session) AppOption {
 func WithSystemPrompt(prompt string) AppOption {
 	return func(a *AppModel) {
 		a.systemPrompt = prompt
+	}
+}
+
+// WithParams sets the model parameters for chat sessions.
+func WithParams(params docker.ChatParams) AppOption {
+	return func(a *AppModel) {
+		a.params = params
 	}
 }
 
@@ -129,7 +137,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, msg.Session)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.params, msg.Session)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -170,7 +178,7 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.preselectedModel != nil {
 			m.screen = screenChat
-			m.chat = NewChat(m.socketPath, m.systemPrompt, m.preselectedModel.Name, m.preselectedModel.Tag)
+			m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, m.preselectedModel.Name, m.preselectedModel.Tag)
 			var cmd tea.Cmd
 			m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 				Width:  m.width,
@@ -195,7 +203,7 @@ func (m AppModel) updateModelSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ModelSelectedMsg:
 		m.screen = screenChat
-		m.chat = NewChat(m.socketPath, m.systemPrompt, msg.Model.Name, msg.Model.Tag)
+		m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, msg.Model.Name, msg.Model.Tag)
 		// Forward the stored window size so the viewport initializes
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{

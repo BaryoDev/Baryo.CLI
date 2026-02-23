@@ -117,6 +117,31 @@ system_prompt: "You are a senior engineer. Be concise and precise."
 
 Or via environment variable: `BARYO_SYSTEM_PROMPT`.
 
+### Model parameters
+
+Control inference behavior with temperature, top-p, and max tokens.
+
+```bash
+# Set via CLI flags
+baryo --temperature 0.8 --top-p 0.9 --max-tokens 2048 -p "write a poem"
+
+# View current params in the TUI
+/params
+
+# Adjust mid-session
+/params temperature=1.2 max_tokens=4096
+```
+
+Set persistent defaults in your config file:
+
+```yaml
+# ~/.baryo/config.yaml
+params:
+  temperature: 0.7
+  top_p: 0.9
+  max_tokens: 2048
+```
+
 ### Flags
 
 | Flag | Description |
@@ -124,6 +149,9 @@ Or via environment variable: `BARYO_SYSTEM_PROMPT`.
 | `-p <prompt>` | Send a prompt in non-interactive (print) mode |
 | `--model <name>` | Select a model by name or substring |
 | `--system-prompt <s>` | Override the system prompt |
+| `--temperature <f>` | Sampling temperature (0.0-2.0) |
+| `--top-p <f>` | Nucleus sampling threshold (0.0-1.0) |
+| `--max-tokens <n>` | Maximum tokens to generate |
 | `-c`, `--continue` | Resume the most recent session in this directory |
 | `-r`, `--resume` | List and pick a saved session to resume |
 | `--resume-id <id>` | Resume a specific session by ID |

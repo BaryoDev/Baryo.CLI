@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
+	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,9 +19,10 @@ const DefaultSystemPrompt = "You are Baryo, a helpful AI assistant running local
 
 // Config holds merged configuration from all sources.
 type Config struct {
-	Model        string `yaml:"model"`
-	SocketPath   string `yaml:"socket_path"`
-	SystemPrompt string `yaml:"system_prompt"`
+	Model        string            `yaml:"model"`
+	SocketPath   string            `yaml:"socket_path"`
+	SystemPrompt string            `yaml:"system_prompt"`
+	Params       docker.ChatParams `yaml:"params"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -82,6 +85,15 @@ func loadFile(path string, cfg *Config) {
 	if file.SystemPrompt != "" {
 		cfg.SystemPrompt = file.SystemPrompt
 	}
+	if file.Params.Temperature != nil {
+		cfg.Params.Temperature = file.Params.Temperature
+	}
+	if file.Params.TopP != nil {
+		cfg.Params.TopP = file.Params.TopP
+	}
+	if file.Params.MaxTokens != nil {
+		cfg.Params.MaxTokens = file.Params.MaxTokens
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -95,15 +107,39 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_SYSTEM_PROMPT"); v != "" {
 		cfg.SystemPrompt = v
 	}
+	if v := os.Getenv("BARYO_TEMPERATURE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Params.Temperature = &f
+		}
+	}
+	if v := os.Getenv("BARYO_TOP_P"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Params.TopP = &f
+		}
+	}
+	if v := os.Getenv("BARYO_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Params.MaxTokens = &n
+		}
+	}
 }
 
 // ApplyCLI merges CLI flag values on top of config (highest precedence).
 // Only non-empty values are applied.
-func (c *Config) ApplyCLI(model, systemPrompt string) {
+func (c *Config) ApplyCLI(model, systemPrompt string, params docker.ChatParams) {
 	if model != "" {
 		c.Model = model
 	}
 	if systemPrompt != "" {
 		c.SystemPrompt = systemPrompt
+	}
+	if params.Temperature != nil {
+		c.Params.Temperature = params.Temperature
+	}
+	if params.TopP != nil {
+		c.Params.TopP = params.TopP
+	}
+	if params.MaxTokens != nil {
+		c.Params.MaxTokens = params.MaxTokens
 	}
 }

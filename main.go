@@ -30,7 +30,7 @@ func main() {
 
 	// Load config and apply CLI flag overrides
 	cfg := config.Load()
-	cfg.ApplyCLI(flags.Model, flags.SystemPrompt)
+	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Params)
 
 	switch flags.Mode() {
 	case cli.ModePrint:
@@ -39,7 +39,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if err := cli.RunPrint(cfg.SocketPath, cfg.SystemPrompt, model, flags.FullPrompt()); err != nil {
+		if err := cli.RunPrint(cfg.SocketPath, cfg.SystemPrompt, model, flags.FullPrompt(), cfg.Params); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -49,6 +49,7 @@ func main() {
 		opts := []tui.AppOption{
 			tui.WithSocketPath(cfg.SocketPath),
 			tui.WithSystemPrompt(cfg.SystemPrompt),
+			tui.WithParams(cfg.Params),
 		}
 
 		// Handle session resume flags

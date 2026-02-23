@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/docker"
 )
 
 // Version is set at build time via ldflags.
@@ -30,6 +32,7 @@ type Config struct {
 	Prompt       string
 	Model        string
 	SystemPrompt string
+	Params       docker.ChatParams
 	Continue     bool
 	Resume       bool
 	ResumeID     string
@@ -41,6 +44,8 @@ type Config struct {
 // Parse parses CLI arguments and reads piped stdin if present.
 func Parse() Config {
 	var cfg Config
+	var temperature, topP float64
+	var maxTokens int
 
 	fs := flag.NewFlagSet("baryo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // we handle errors ourselves
@@ -48,6 +53,9 @@ func Parse() Config {
 	fs.StringVar(&cfg.Prompt, "p", "", "prompt to send (non-interactive)")
 	fs.StringVar(&cfg.Model, "model", "", "model name or substring to match")
 	fs.StringVar(&cfg.SystemPrompt, "system-prompt", "", "override the system prompt")
+	fs.Float64Var(&temperature, "temperature", -1, "sampling temperature (0.0-2.0)")
+	fs.Float64Var(&topP, "top-p", -1, "nucleus sampling threshold (0.0-1.0)")
+	fs.IntVar(&maxTokens, "max-tokens", -1, "maximum tokens to generate")
 	fs.BoolVar(&cfg.Continue, "c", false, "resume most recent session")
 	fs.BoolVar(&cfg.Continue, "continue", false, "resume most recent session")
 	fs.BoolVar(&cfg.Resume, "r", false, "list and pick a saved session")
@@ -60,6 +68,17 @@ func Parse() Config {
 		// If parsing fails, show help
 		cfg.ShowHelp = true
 		return cfg
+	}
+
+	// Convert sentinel values to pointers (only set if explicitly provided)
+	if temperature >= 0 {
+		cfg.Params.Temperature = &temperature
+	}
+	if topP >= 0 {
+		cfg.Params.TopP = &topP
+	}
+	if maxTokens >= 0 {
+		cfg.Params.MaxTokens = &maxTokens
 	}
 
 	// Read piped stdin (non-TTY)
@@ -116,6 +135,9 @@ Flags:
   -p <prompt>           Send a prompt in non-interactive (print) mode
   --model <name>        Select a model by name or substring
   --system-prompt <s>   Override the system prompt
+  --temperature <f>     Sampling temperature (0.0-2.0)
+  --top-p <f>           Nucleus sampling threshold (0.0-1.0)
+  --max-tokens <n>      Maximum tokens to generate
   -c, --continue        Resume the most recent session in this directory
   -r, --resume          List and pick a saved session to resume
   --resume-id <id>      Resume a specific session by ID
@@ -126,15 +148,15 @@ TUI Commands:
   /clear            Start a fresh conversation
   /sessions         List and pick a saved session to resume
   /system           View or edit the active system prompt
+  /params           View or adjust model parameters
 
 Examples:
   baryo                          Launch interactive TUI
   baryo --model mistral          Launch TUI with a specific model
   baryo -p "what is 2+2"         Print mode: stream answer to stdout
-  baryo --model m -p "hello"     Print mode with specific model
+  baryo --temperature 0.8 -p "write a poem"  Custom temperature
   baryo -c                       Resume last session in this directory
   baryo -r                       Pick a session to resume
-  baryo --resume-id abc123       Resume session by ID
   cat file.go | baryo -p "explain this"  Pipe stdin as context
 `)
 }
