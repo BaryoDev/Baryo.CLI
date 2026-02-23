@@ -10,36 +10,44 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/arnelirobles/baryo-cli/internal/cli"
+	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
 )
 
 func main() {
-	cfg := cli.Parse()
+	flags := cli.Parse()
 
-	switch cfg.Mode() {
+	switch flags.Mode() {
 	case cli.ModeVersion:
 		cli.PrintVersion()
 		return
-
 	case cli.ModeHelp:
 		cli.PrintHelp()
 		return
+	}
 
+	// Load config and apply CLI flag overrides
+	cfg := config.Load()
+	cfg.ApplyCLI(flags.Model)
+
+	switch flags.Mode() {
 	case cli.ModePrint:
 		model, err := resolveModel(cfg.Model)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if err := cli.RunPrint(model, cfg.FullPrompt()); err != nil {
+		if err := cli.RunPrint(cfg.SocketPath, model, flags.FullPrompt()); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 
 	case cli.ModeInteractive:
-		var opts []tui.AppOption
+		opts := []tui.AppOption{
+			tui.WithSocketPath(cfg.SocketPath),
+		}
 		if cfg.Model != "" {
 			model, err := resolveModel(cfg.Model)
 			if err != nil {

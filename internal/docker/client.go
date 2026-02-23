@@ -12,25 +12,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 )
 
-// SocketPath returns the Docker Model Runner inference socket path.
-func SocketPath() string {
-	if p := os.Getenv("DOCKER_MODEL_SOCKET"); p != "" {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	return home + "/Library/Containers/com.docker.docker/Data/inference.sock"
-}
-
-// newHTTPClient creates an HTTP client that dials the unix socket.
-func newHTTPClient() *http.Client {
+// newHTTPClient creates an HTTP client that dials the given unix socket.
+func newHTTPClient(socketPath string) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", SocketPath())
+				return net.Dial("unix", socketPath)
 			},
 		},
 	}
@@ -39,7 +29,7 @@ func newHTTPClient() *http.Client {
 // StreamChat sends a chat request and streams tokens into the returned channel.
 // The channel is closed when streaming ends. Errors are sent as a single
 // token prefixed with "error:".
-func StreamChat(ctx context.Context, model string, messages []ChatMessage) <-chan string {
+func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage) <-chan string {
 	ch := make(chan string, 64)
 
 	go func() {
@@ -66,7 +56,7 @@ func StreamChat(ctx context.Context, model string, messages []ChatMessage) <-cha
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := newHTTPClient()
+		client := newHTTPClient(socketPath)
 		resp, err := client.Do(req)
 		if err != nil {
 			ch <- fmt.Sprintf("error: %v", err)

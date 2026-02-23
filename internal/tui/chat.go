@@ -18,12 +18,13 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	modelName string // display name (e.g. "ai/mistral")
-	modelTag  string // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
-	messages  []docker.ChatMessage
-	history   []chatEntry // rendered conversation history
-	streaming string      // current streaming text accumulator
-	isStream  bool        // whether we are currently streaming
+	socketPath string // unix socket for Docker Model Runner
+	modelName  string // display name (e.g. "ai/mistral")
+	modelTag   string // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
+	messages   []docker.ChatMessage
+	history    []chatEntry // rendered conversation history
+	streaming  string      // current streaming text accumulator
+	isStream   bool        // whether we are currently streaming
 
 	textarea textarea.Model
 	viewport viewport.Model
@@ -42,7 +43,7 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(modelName, modelTag string) ChatModel {
+func NewChat(socketPath, modelName, modelTag string) ChatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -52,9 +53,10 @@ func NewChat(modelName, modelTag string) ChatModel {
 	ta.CharLimit = 4096
 
 	return ChatModel{
-		modelName: modelName,
-		modelTag:  modelTag,
-		textarea:  ta,
+		socketPath: socketPath,
+		modelName:  modelName,
+		modelTag:   modelTag,
+		textarea:   ta,
 	}
 }
 
@@ -115,7 +117,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
-			m.tokenCh = docker.StreamChat(ctx, m.modelTag, m.messages)
+			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.messages)
 
 			m.updateViewport()
 			return m, waitForToken(m.tokenCh)

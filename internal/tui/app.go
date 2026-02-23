@@ -21,8 +21,9 @@ const (
 
 // AppModel is the top-level bubbletea model that drives screen transitions.
 type AppModel struct {
-	screen  screen
-	spinner spinner.Model
+	screen     screen
+	spinner    spinner.Model
+	socketPath string
 
 	preselectedModel *docker.DockerModel
 
@@ -36,6 +37,13 @@ type AppModel struct {
 
 // AppOption configures the AppModel before it starts.
 type AppOption func(*AppModel)
+
+// WithSocketPath sets the Docker Model Runner socket path.
+func WithSocketPath(path string) AppOption {
+	return func(a *AppModel) {
+		a.socketPath = path
+	}
+}
 
 // WithPreselectedModel skips the model picker and goes straight to chat.
 func WithPreselectedModel(model docker.DockerModel) AppOption {
@@ -97,7 +105,7 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.preselectedModel != nil {
 			m.screen = screenChat
-			m.chat = NewChat(m.preselectedModel.Name, m.preselectedModel.Tag)
+			m.chat = NewChat(m.socketPath, m.preselectedModel.Name, m.preselectedModel.Tag)
 			var cmd tea.Cmd
 			m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 				Width:  m.width,
@@ -122,7 +130,7 @@ func (m AppModel) updateModelSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ModelSelectedMsg:
 		m.screen = screenChat
-		m.chat = NewChat(msg.Model.Name, msg.Model.Tag)
+		m.chat = NewChat(m.socketPath, msg.Model.Name, msg.Model.Tag)
 		// Forward the stored window size so the viewport initializes
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
