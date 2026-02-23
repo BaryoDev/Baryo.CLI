@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/arnelirobles/baryo-cli/internal/cli"
 	"github.com/arnelirobles/baryo-cli/internal/config"
+	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
@@ -26,11 +27,33 @@ func main() {
 	case cli.ModeHelp:
 		cli.PrintHelp()
 		return
+	case cli.ModeDoctor:
+		cfg := config.Load()
+		fmt.Println("Baryo — diagnostic check\n")
+		results := doctor.RunChecks(cfg.SocketPath)
+		fmt.Print(doctor.FormatResults(results))
+		if doctor.AllPassed(results) {
+			fmt.Println("\nAll checks passed. You're ready to go!")
+		} else {
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Load config and apply CLI flag overrides
 	cfg := config.Load()
 	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Params)
+
+	// Run startup health checks unless skipped
+	if !flags.SkipChecks {
+		results := doctor.RunChecks(cfg.SocketPath)
+		if !doctor.AllPassed(results) {
+			fmt.Fprintf(os.Stderr, "Baryo — startup check failed\n\n")
+			fmt.Fprint(os.Stderr, doctor.FormatResults(results))
+			fmt.Fprintf(os.Stderr, "\nRun 'baryo doctor' for full diagnostics or use --skip-checks to bypass.\n")
+			os.Exit(1)
+		}
+	}
 
 	switch flags.Mode() {
 	case cli.ModePrint:

@@ -110,6 +110,26 @@ The model browser shows:
 - Select a downloaded model to start chatting with it
 - Select an available model to pull it with live progress
 
+### Startup diagnostics
+
+Baryo checks your Docker setup on every launch. If something is missing, it tells you exactly what's wrong and how to fix it.
+
+```bash
+# Run the full diagnostic manually
+baryo doctor
+
+# Skip checks for faster startup
+baryo --skip-checks
+```
+
+The checks run in order:
+1. Docker installed
+2. Docker running
+3. Model Runner enabled (inference socket exists)
+4. At least one model pulled
+
+If a check fails, you'll see what passed and step-by-step instructions to fix the issue.
+
 ### Markdown rendering
 
 Assistant responses are rendered with full markdown formatting by default, including syntax-highlighted code blocks. Toggle it on or off mid-session:
@@ -207,8 +227,10 @@ params:
 | `-c`, `--continue` | Resume the most recent session in this directory |
 | `-r`, `--resume` | List and pick a saved session to resume |
 | `--resume-id <id>` | Resume a specific session by ID |
+| `--skip-checks` | Skip startup health checks |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
+| `doctor` | Run full diagnostic check (subcommand) |
 
 ### Model matching
 

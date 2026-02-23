@@ -25,6 +25,7 @@ const (
 	ModePrint
 	ModeVersion
 	ModeHelp
+	ModeDoctor
 )
 
 // Config holds the parsed CLI flags and stdin data.
@@ -36,6 +37,8 @@ type Config struct {
 	Continue     bool
 	Resume       bool
 	ResumeID     string
+	SkipChecks   bool
+	Doctor       bool
 	ShowHelp     bool
 	ShowVer      bool
 	StdinData    string
@@ -61,8 +64,15 @@ func Parse() Config {
 	fs.BoolVar(&cfg.Resume, "r", false, "list and pick a saved session")
 	fs.BoolVar(&cfg.Resume, "resume", false, "list and pick a saved session")
 	fs.StringVar(&cfg.ResumeID, "resume-id", "", "resume a specific session by ID")
+	fs.BoolVar(&cfg.SkipChecks, "skip-checks", false, "skip startup health checks")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
+
+	// Check for "doctor" subcommand before flag parsing
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		cfg.Doctor = true
+		return cfg
+	}
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		// If parsing fails, show help
@@ -102,6 +112,9 @@ func (c Config) Mode() Mode {
 	if c.ShowHelp {
 		return ModeHelp
 	}
+	if c.Doctor {
+		return ModeDoctor
+	}
 	if c.Prompt != "" || c.StdinData != "" {
 		return ModePrint
 	}
@@ -128,6 +141,7 @@ func PrintVersion() {
 // PrintHelp prints usage information.
 func PrintHelp() {
 	fmt.Print(`Usage: baryo [flags]
+       baryo doctor
 
 A local AI chat CLI powered by Docker Model Runner.
 
@@ -141,8 +155,12 @@ Flags:
   -c, --continue        Resume the most recent session in this directory
   -r, --resume          List and pick a saved session to resume
   --resume-id <id>      Resume a specific session by ID
+  --skip-checks         Skip startup health checks
   --version             Print version and exit
   --help                Print this help message
+
+Subcommands:
+  doctor            Run full diagnostic check (Docker, Model Runner, models)
 
 TUI Commands:
   /clear            Start a fresh conversation
@@ -157,6 +175,7 @@ TUI Commands:
 
 Examples:
   baryo                          Launch interactive TUI
+  baryo doctor                   Run diagnostic checks
   baryo --model mistral          Launch TUI with a specific model
   baryo -p "what is 2+2"         Print mode: stream answer to stdout
   baryo --temperature 0.8 -p "write a poem"  Custom temperature
