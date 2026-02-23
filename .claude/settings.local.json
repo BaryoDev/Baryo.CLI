@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(ls:*)",
+      "WebFetch(domain:docs.docker.com)",
+      "Bash(docker model list:*)",
+      "Bash(curl:*)",
+      "Bash(docker model:*)",
+      "Bash(docker info:*)",
+      "Bash(python3 -m json.tool:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:charm.land)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(go version:*)",
+      "Bash(docker:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(go mod init:*)",
+      "Bash(brew install:*)",
+      "Bash(go get:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(find:*)",
+      "Bash(timeout:*)",
+      "Bash(gtimeout:*)",
+      "Bash(echo:*)"
+    ]
+  }
+}
