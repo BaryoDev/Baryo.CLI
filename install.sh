@@ -1,9 +1,9 @@
 #!/bin/sh
 # Baryo CLI installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/arnelirobles/baryo-cli/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/BaryoDev/Baryo.CLI/main/install.sh | sh
 set -e
 
-REPO="arnelirobles/baryo-cli"
+REPO="BaryoDev/Baryo.CLI"
 BINARY="baryo"
 INSTALL_DIR="/usr/local/bin"
 

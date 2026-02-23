@@ -42,10 +42,10 @@ changelog:
 
 brews:
   - repository:
-      owner: arnelirobles
-      name: baryo-cli
+      owner: BaryoDev
+      name: Baryo.CLI
     directory: HomebrewFormula
-    homepage: "https://github.com/arnelirobles/baryo-cli"
+    homepage: "https://github.com/BaryoDev/Baryo.CLI"
     description: "A local AI chat CLI powered by Docker Model Runner"
     license: "MPL-2.0"
     install: |
@@ -55,14 +55,14 @@ brews:
 
 scoops:
   - repository:
-      owner: arnelirobles
-      name: baryo-cli
+      owner: BaryoDev
+      name: Baryo.CLI
     directory: ScoopBucket
-    homepage: "https://github.com/arnelirobles/baryo-cli"
+    homepage: "https://github.com/BaryoDev/Baryo.CLI"
     description: "A local AI chat CLI powered by Docker Model Runner"
     license: "MPL-2.0"
 
 release:
   github:
-    owner: arnelirobles
-    name: baryo-cli
+    owner: BaryoDev
+    name: Baryo.CLI
