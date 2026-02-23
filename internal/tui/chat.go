@@ -19,14 +19,15 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	socketPath string // unix socket for Docker Model Runner
-	modelName  string // display name (e.g. "ai/mistral")
-	modelTag   string // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
-	messages   []docker.ChatMessage
-	history    []chatEntry // rendered conversation history
-	streaming  string      // current streaming text accumulator
-	isStream   bool        // whether we are currently streaming
-	session    *session.Session
+	socketPath   string // unix socket for Docker Model Runner
+	systemPrompt string // active system prompt
+	modelName    string // display name (e.g. "ai/mistral")
+	modelTag     string // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
+	messages     []docker.ChatMessage
+	history      []chatEntry // rendered conversation history
+	streaming    string      // current streaming text accumulator
+	isStream     bool        // whether we are currently streaming
+	session      *session.Session
 
 	textarea textarea.Model
 	viewport viewport.Model
@@ -45,33 +46,35 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, modelName, modelTag string) ChatModel {
+func NewChat(socketPath, systemPrompt, modelName, modelTag string) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(modelName, modelTag)
 	return ChatModel{
-		socketPath: socketPath,
-		modelName:  modelName,
-		modelTag:   modelTag,
-		textarea:   ta,
-		session:    sess,
+		socketPath:   socketPath,
+		systemPrompt: systemPrompt,
+		modelName:    modelName,
+		modelTag:     modelTag,
+		textarea:     ta,
+		session:      sess,
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath string, sess *session.Session) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt string, sess *session.Session) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
 		history[i] = chatEntry{role: m.Role, content: m.Content}
 	}
 	return ChatModel{
-		socketPath: socketPath,
-		modelName:  sess.ModelName,
-		modelTag:   sess.ModelTag,
-		messages:   append([]docker.ChatMessage{}, sess.Messages...),
-		history:    history,
-		textarea:   ta,
-		session:    sess,
+		socketPath:   socketPath,
+		systemPrompt: systemPrompt,
+		modelName:    sess.ModelName,
+		modelTag:     sess.ModelTag,
+		messages:     append([]docker.ChatMessage{}, sess.Messages...),
+		history:      history,
+		textarea:     ta,
+		session:      sess,
 	}
 }
 
@@ -149,7 +152,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
-			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.messages)
+			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages())
 
 			m.updateViewport()
 			return m, waitForToken(m.tokenCh)
@@ -218,14 +221,47 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return ShowSessionsMsg{Sessions: summaries}
 		}
 
-	default:
+	case "/system":
+		prompt := m.systemPrompt
+		if prompt == "" {
+			prompt = "(none)"
+		}
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions", text),
+			content: fmt.Sprintf("System prompt:\n%s\n\nTo change: /system <new prompt>", prompt),
+		})
+		m.updateViewport()
+		return m, nil
+
+	default:
+		if strings.HasPrefix(text, "/system ") {
+			m.systemPrompt = strings.TrimPrefix(text, "/system ")
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "System prompt updated.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /system", text),
 		})
 		m.updateViewport()
 		return m, nil
 	}
+}
+
+// buildMessages prepends the system prompt to the conversation messages.
+func (m *ChatModel) buildMessages() []docker.ChatMessage {
+	if m.systemPrompt == "" {
+		return m.messages
+	}
+	msgs := make([]docker.ChatMessage, 0, len(m.messages)+1)
+	msgs = append(msgs, docker.ChatMessage{Role: "system", Content: m.systemPrompt})
+	msgs = append(msgs, m.messages...)
+	return msgs
 }
 
 func (m *ChatModel) saveSession() {

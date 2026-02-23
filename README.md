@@ -93,12 +93,37 @@ Inside the TUI you can also use:
 - `/sessions` — list and pick a saved session to resume
 - `/clear` — start a fresh conversation
 
+### System prompts
+
+Baryo ships with a default system prompt. You can override it per-session, in config, or via environment variable.
+
+```bash
+# One-off override
+baryo --system-prompt "You are a Go expert. Be terse."
+
+# View the active system prompt in the TUI
+/system
+
+# Change it mid-session
+/system You are a Python expert.
+```
+
+Set a persistent system prompt in your config file:
+
+```yaml
+# ~/.baryo/config.yaml
+system_prompt: "You are a senior engineer. Be concise and precise."
+```
+
+Or via environment variable: `BARYO_SYSTEM_PROMPT`.
+
 ### Flags
 
 | Flag | Description |
 |------|-------------|
 | `-p <prompt>` | Send a prompt in non-interactive (print) mode |
 | `--model <name>` | Select a model by name or substring |
+| `--system-prompt <s>` | Override the system prompt |
 | `-c`, `--continue` | Resume the most recent session in this directory |
 | `-r`, `--resume` | List and pick a saved session to resume |
 | `--resume-id <id>` | Resume a specific session by ID |
@@ -130,6 +155,7 @@ Create a YAML config file at either location:
 # ~/.baryo/config.yaml
 model: ai/mistral
 socket_path: ~/Library/Containers/com.docker.docker/Data/inference.sock
+system_prompt: "You are a helpful assistant. Be concise."
 ```
 
 ### Environment variables
@@ -138,6 +164,7 @@ socket_path: ~/Library/Containers/com.docker.docker/Data/inference.sock
 |----------|-------------|
 | `BARYO_MODEL` | Default model |
 | `BARYO_SOCKET` | Docker Model Runner socket path |
+| `BARYO_SYSTEM_PROMPT` | Override the system prompt |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
 
 ### Precedence

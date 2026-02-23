@@ -12,10 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultSystemPrompt is the built-in system prompt shipped with the binary.
+const DefaultSystemPrompt = "You are Baryo, a helpful AI assistant running locally via Docker Model Runner. Be concise, accurate, and helpful. When showing code, use fenced code blocks with the language specified."
+
 // Config holds merged configuration from all sources.
 type Config struct {
-	Model      string `yaml:"model"`
-	SocketPath string `yaml:"socket_path"`
+	Model        string `yaml:"model"`
+	SocketPath   string `yaml:"socket_path"`
+	SystemPrompt string `yaml:"system_prompt"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -39,7 +43,8 @@ func defaultSocketPath() string {
 //	env vars > .baryo/config.yaml (project) > ~/.baryo/config.yaml (user) > defaults
 func Load() Config {
 	cfg := Config{
-		SocketPath: defaultSocketPath(),
+		SocketPath:   defaultSocketPath(),
+		SystemPrompt: DefaultSystemPrompt,
 	}
 
 	// User-level config: ~/.baryo/config.yaml
@@ -74,6 +79,9 @@ func loadFile(path string, cfg *Config) {
 	if file.SocketPath != "" {
 		cfg.SocketPath = file.SocketPath
 	}
+	if file.SystemPrompt != "" {
+		cfg.SystemPrompt = file.SystemPrompt
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -84,12 +92,18 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_SOCKET"); v != "" {
 		cfg.SocketPath = v
 	}
+	if v := os.Getenv("BARYO_SYSTEM_PROMPT"); v != "" {
+		cfg.SystemPrompt = v
+	}
 }
 
 // ApplyCLI merges CLI flag values on top of config (highest precedence).
 // Only non-empty values are applied.
-func (c *Config) ApplyCLI(model string) {
+func (c *Config) ApplyCLI(model, systemPrompt string) {
 	if model != "" {
 		c.Model = model
+	}
+	if systemPrompt != "" {
+		c.SystemPrompt = systemPrompt
 	}
 }

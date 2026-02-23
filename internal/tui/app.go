@@ -23,9 +23,10 @@ const (
 
 // AppModel is the top-level bubbletea model that drives screen transitions.
 type AppModel struct {
-	screen     screen
-	spinner    spinner.Model
-	socketPath string
+	screen       screen
+	spinner      spinner.Model
+	socketPath   string
+	systemPrompt string
 
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
@@ -61,6 +62,13 @@ func WithPreselectedModel(model docker.DockerModel) AppOption {
 func WithSession(sess *session.Session) AppOption {
 	return func(a *AppModel) {
 		a.resumeSession = sess
+	}
+}
+
+// WithSystemPrompt sets the system prompt for chat sessions.
+func WithSystemPrompt(prompt string) AppOption {
+	return func(a *AppModel) {
+		a.systemPrompt = prompt
 	}
 }
 
@@ -121,7 +129,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, msg.Session)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, msg.Session)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -162,7 +170,7 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.preselectedModel != nil {
 			m.screen = screenChat
-			m.chat = NewChat(m.socketPath, m.preselectedModel.Name, m.preselectedModel.Tag)
+			m.chat = NewChat(m.socketPath, m.systemPrompt, m.preselectedModel.Name, m.preselectedModel.Tag)
 			var cmd tea.Cmd
 			m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 				Width:  m.width,
@@ -187,7 +195,7 @@ func (m AppModel) updateModelSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ModelSelectedMsg:
 		m.screen = screenChat
-		m.chat = NewChat(m.socketPath, msg.Model.Name, msg.Model.Tag)
+		m.chat = NewChat(m.socketPath, m.systemPrompt, msg.Model.Name, msg.Model.Tag)
 		// Forward the stored window size so the viewport initializes
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{

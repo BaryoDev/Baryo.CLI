@@ -27,14 +27,15 @@ const (
 
 // Config holds the parsed CLI flags and stdin data.
 type Config struct {
-	Prompt    string
-	Model     string
-	Continue  bool
-	Resume    bool
-	ResumeID  string
-	ShowHelp  bool
-	ShowVer   bool
-	StdinData string
+	Prompt       string
+	Model        string
+	SystemPrompt string
+	Continue     bool
+	Resume       bool
+	ResumeID     string
+	ShowHelp     bool
+	ShowVer      bool
+	StdinData    string
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -46,6 +47,7 @@ func Parse() Config {
 
 	fs.StringVar(&cfg.Prompt, "p", "", "prompt to send (non-interactive)")
 	fs.StringVar(&cfg.Model, "model", "", "model name or substring to match")
+	fs.StringVar(&cfg.SystemPrompt, "system-prompt", "", "override the system prompt")
 	fs.BoolVar(&cfg.Continue, "c", false, "resume most recent session")
 	fs.BoolVar(&cfg.Continue, "continue", false, "resume most recent session")
 	fs.BoolVar(&cfg.Resume, "r", false, "list and pick a saved session")
@@ -111,17 +113,19 @@ func PrintHelp() {
 A local AI chat CLI powered by Docker Model Runner.
 
 Flags:
-  -p <prompt>       Send a prompt in non-interactive (print) mode
-  --model <name>    Select a model by name or substring
-  -c, --continue    Resume the most recent session in this directory
-  -r, --resume      List and pick a saved session to resume
-  --resume-id <id>  Resume a specific session by ID
-  --version         Print version and exit
-  --help            Print this help message
+  -p <prompt>           Send a prompt in non-interactive (print) mode
+  --model <name>        Select a model by name or substring
+  --system-prompt <s>   Override the system prompt
+  -c, --continue        Resume the most recent session in this directory
+  -r, --resume          List and pick a saved session to resume
+  --resume-id <id>      Resume a specific session by ID
+  --version             Print version and exit
+  --help                Print this help message
 
 TUI Commands:
   /clear            Start a fresh conversation
   /sessions         List and pick a saved session to resume
+  /system           View or edit the active system prompt
 
 Examples:
   baryo                          Launch interactive TUI
