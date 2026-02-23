@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 )
@@ -283,6 +284,32 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return ShowModelsMsg{Downloaded: downloaded, Available: available}
 		}
 
+	case "/doctor":
+		results := doctor.RunChecks(m.socketPath)
+		var b strings.Builder
+		pass := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("✓")
+		fail := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("✗")
+		for _, r := range results {
+			if r.Passed {
+				b.WriteString(fmt.Sprintf("  %s %s", pass, r.Name))
+				if r.Message != "" {
+					b.WriteString(fmt.Sprintf(" — %s", r.Message))
+				}
+				b.WriteString("\n")
+			} else {
+				b.WriteString(fmt.Sprintf("  %s %s\n\n%s\n", fail, r.Name, r.Message))
+			}
+		}
+		if doctor.AllPassed(results) {
+			b.WriteString("\nAll checks passed.")
+		}
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: b.String(),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case "/markdown":
 		m.markdown = !m.markdown
 		msg := "Markdown rendering enabled."
@@ -376,7 +403,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor", text),
 		})
 		m.updateViewport()
 		return m, nil

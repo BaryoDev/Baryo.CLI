@@ -172,6 +172,7 @@ TUI Commands:
   /export [file]    Export conversation to markdown or JSON
   /copy             Copy last assistant response to clipboard
   /markdown         Toggle markdown rendering on/off
+  /doctor           Run diagnostic checks inside the TUI
 
 Examples:
   baryo                          Launch interactive TUI
