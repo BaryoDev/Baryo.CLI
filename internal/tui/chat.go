@@ -22,6 +22,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
 
 // ChatModel is the chat conversation screen.
@@ -34,6 +35,7 @@ type ChatModel struct {
 	messages     []docker.ChatMessage
 	history      []chatEntry // rendered conversation history
 	streaming    string      // current streaming text accumulator
+	turnContent  string      // accumulates all assistant text for one turn (across tool rounds)
 	isStream     bool        // whether we are currently streaming
 	markdown     bool        // whether to render markdown in responses
 	inputHistory []string    // previous user inputs
@@ -46,8 +48,9 @@ type ChatModel struct {
 	width    int
 	height   int
 
-	tokenCh    <-chan string
+	eventCh    <-chan docker.StreamEvent
 	cancelFunc context.CancelFunc
+	toolStatus string // shown in status bar during tool execution
 }
 
 // chatEntry is a rendered message in the history.
@@ -78,7 +81,11 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
-		history[i] = chatEntry{role: m.Role, content: m.Content}
+		c := ""
+		if m.Content != nil {
+			c = *m.Content
+		}
+		history[i] = chatEntry{role: m.Role, content: c}
 	}
 	return ChatModel{
 		socketPath:   socketPath,
@@ -186,10 +193,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			// Add user message
-			m.messages = append(m.messages, docker.ChatMessage{
-				Role:    "user",
-				Content: text,
-			})
+			m.messages = append(m.messages, docker.NewChatMessage("user", text))
 			m.history = append(m.history, chatEntry{
 				role:    "user",
 				content: text,
@@ -198,39 +202,51 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Start streaming
 			m.isStream = true
 			m.streaming = ""
+			m.turnContent = ""
+			m.toolStatus = ""
 
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
-			m.tokenCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+
+			toolDefs := toDockerToolDefs(tools.AllDefinitions())
+			executor := func(ctx context.Context, name, argsJSON string) (string, bool) {
+				r := tools.Execute(ctx, name, argsJSON)
+				return r.Content, r.IsError
+			}
+			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
 			m.updateViewport()
-			return m, waitForToken(m.tokenCh)
+			return m, waitForEvent(m.eventCh)
 		}
 
 	case StreamTokenMsg:
-		if msg.Done {
+		evt := msg.Event
+
+		if evt.Done {
 			// Streaming complete — save to history and auto-save session
-			rendered := m.streaming
-			m.history = append(m.history, chatEntry{
-				role:    "assistant",
-				content: rendered,
-			})
-			m.messages = append(m.messages, docker.ChatMessage{
-				Role:    "assistant",
-				Content: m.streaming,
-			})
+			if m.streaming != "" {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: m.streaming,
+				})
+				m.turnContent += m.streaming
+			}
+			// Commit the full turn as one assistant message (avoids consecutive assistant roles).
+			if m.turnContent != "" {
+				m.messages = append(m.messages, docker.NewChatMessage("assistant", m.turnContent))
+			}
 			m.streaming = ""
+			m.turnContent = ""
 			m.isStream = false
 			m.cancelFunc = nil
-			m.tokenCh = nil
+			m.eventCh = nil
+			m.toolStatus = ""
 			m.saveSession()
 			m.updateViewport()
 			return m, nil
 		}
 
-		// Detect error tokens from StreamChat
-		if strings.HasPrefix(msg.Token, "error: ") {
-			errMsg := strings.TrimPrefix(msg.Token, "error: ")
+		if evt.Error != "" {
 			// If we had partial content, keep it in history
 			if m.streaming != "" {
 				m.history = append(m.history, chatEntry{
@@ -240,7 +256,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			m.history = append(m.history, chatEntry{
 				role:    "error",
-				content: errMsg,
+				content: evt.Error,
 			})
 			m.streaming = ""
 			m.isStream = false
@@ -248,7 +264,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.cancelFunc()
 			}
 			m.cancelFunc = nil
-			m.tokenCh = nil
+			m.eventCh = nil
+			m.toolStatus = ""
 			// Remove the user message from conversation so it can be retried
 			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "user" {
 				m.messages = m.messages[:len(m.messages)-1]
@@ -257,9 +274,47 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
-		m.streaming += msg.Token
-		m.updateViewport()
-		return m, waitForToken(m.tokenCh)
+		if evt.ContentReplace != nil {
+			m.streaming = *evt.ContentReplace
+			m.updateViewport()
+			return m, waitForEvent(m.eventCh)
+		}
+
+		if evt.ToolStart != nil {
+			// Flush any accumulated text before tool use.
+			if m.streaming != "" {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: m.streaming,
+				})
+				m.turnContent += m.streaming
+				m.streaming = ""
+			}
+			m.toolStatus = fmt.Sprintf("Running %s...", evt.ToolStart.Name)
+			m.history = append(m.history, chatEntry{
+				role:    "tool",
+				content: fmt.Sprintf("Tool: %s(%s)", evt.ToolStart.Name, evt.ToolStart.Args),
+			})
+			m.updateViewport()
+			return m, waitForEvent(m.eventCh)
+		}
+
+		if evt.ToolResult != nil {
+			status := summarizeToolResult(evt.ToolResult.Content, evt.ToolResult.IsError)
+			m.toolStatus = ""
+			m.history = append(m.history, chatEntry{
+				role:    "tool",
+				content: fmt.Sprintf("Result: %s", status),
+			})
+			m.updateViewport()
+			return m, waitForEvent(m.eventCh)
+		}
+
+		if evt.Token != "" {
+			m.streaming += evt.Token
+			m.updateViewport()
+		}
+		return m, waitForEvent(m.eventCh)
 	}
 
 	// Update sub-components
@@ -439,13 +494,29 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 	}
 }
 
+// toolSystemPrompt is injected to instruct the model to use available tools.
+const toolSystemPrompt = `You have access to tools. Always prefer using tools over explaining how to use them.
+
+Available tools:
+- read_file: Read the contents of a file. Use when the user asks to read, view, or show a file.
+- glob: Find files matching a pattern (supports **). Use when the user asks to find or list files.
+- grep: Search file contents by regex. Use when the user asks to search for text or patterns in code.
+
+When you receive tool results, always report the key findings to the user. Do not make unnecessary extra tool calls.
+
+If you cannot use the tool calling API directly, invoke tools by writing:
+<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>`
+
 // buildMessages prepends the system prompt to the conversation messages.
 func (m *ChatModel) buildMessages() []docker.ChatMessage {
-	if m.systemPrompt == "" {
-		return m.messages
+	msgs := make([]docker.ChatMessage, 0, len(m.messages)+2)
+
+	// Combine user system prompt with tool instructions.
+	sysPrompt := toolSystemPrompt
+	if m.systemPrompt != "" {
+		sysPrompt = m.systemPrompt + "\n\n" + toolSystemPrompt
 	}
-	msgs := make([]docker.ChatMessage, 0, len(m.messages)+1)
-	msgs = append(msgs, docker.ChatMessage{Role: "system", Content: m.systemPrompt})
+	msgs = append(msgs, docker.NewChatMessage("system", sysPrompt))
 	msgs = append(msgs, m.messages...)
 	return msgs
 }
@@ -529,7 +600,9 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 			default:
 				b.WriteString(fmt.Sprintf("### %s\n\n", msg.Role))
 			}
-			b.WriteString(msg.Content)
+			if msg.Content != nil {
+				b.WriteString(*msg.Content)
+			}
 			b.WriteString("\n\n")
 		}
 		data = []byte(b.String())
@@ -564,6 +637,8 @@ func (m *ChatModel) updateViewport() {
 			b.WriteString(entry.content)
 		case "error":
 			b.WriteString(ErrorStyle.Render("Error: " + entry.content))
+		case "tool":
+			b.WriteString(ToolLabelStyle.Render(entry.content))
 		case "assistant":
 			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
 			if m.markdown {
@@ -600,7 +675,9 @@ func (m ChatModel) View() string {
 		fmt.Sprintf("🐳 Baryo — chatting with %s", m.modelName))
 
 	var status string
-	if m.isStream {
+	if m.toolStatus != "" {
+		status = ToolLabelStyle.Render(m.toolStatus)
+	} else if m.isStream {
 		status = HelpStyle.Render("streaming...")
 	} else {
 		status = HelpStyle.Render("enter send • ↑↓ history • ctrl+c quit")
@@ -614,13 +691,46 @@ func (m ChatModel) View() string {
 	)
 }
 
-// waitForToken returns a Cmd that waits for the next token from the channel.
-func waitForToken(ch <-chan string) tea.Cmd {
+// waitForEvent returns a Cmd that waits for the next event from the channel.
+func waitForEvent(ch <-chan docker.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
-		token, ok := <-ch
+		evt, ok := <-ch
 		if !ok {
-			return StreamTokenMsg{Done: true}
+			return StreamTokenMsg{Event: docker.StreamEvent{Done: true}}
 		}
-		return StreamTokenMsg{Token: token}
+		return StreamTokenMsg{Event: evt}
 	}
+}
+
+// summarizeToolResult returns a short preview of a tool result for the TUI.
+func summarizeToolResult(content string, isError bool) string {
+	if isError {
+		return "error: " + content
+	}
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) == 0 {
+		return "done (empty)"
+	}
+	const maxPreviewLines = 6
+	if len(lines) <= maxPreviewLines {
+		return strings.TrimSpace(content)
+	}
+	preview := strings.Join(lines[:maxPreviewLines], "\n")
+	return fmt.Sprintf("%s\n... (%d more lines)", preview, len(lines)-maxPreviewLines)
+}
+
+// toDockerToolDefs converts tools.Definition slice to docker.ToolDefinition slice.
+func toDockerToolDefs(defs []tools.Definition) []docker.ToolDefinition {
+	out := make([]docker.ToolDefinition, len(defs))
+	for i, d := range defs {
+		out[i] = docker.ToolDefinition{
+			Type: d.Type,
+			Function: docker.FunctionDefinition{
+				Name:        d.Function.Name,
+				Description: d.Function.Description,
+				Parameters:  d.Function.Parameters,
+			},
+		}
+	}
+	return out
 }

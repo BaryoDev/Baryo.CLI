@@ -48,4 +48,8 @@ var (
 				Bold(true).
 				Foreground(lipgloss.Color("69")).
 				MarginBottom(0)
+
+	ToolLabelStyle = lipgloss.NewStyle().
+			Italic(true).
+			Foreground(lipgloss.Color("214"))
 )

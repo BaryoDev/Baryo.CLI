@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -43,14 +44,21 @@ func parseSocketAddr(socketPath string) (network, addr string) {
 	return "unix", socketPath
 }
 
-// StreamChat sends a chat request and streams tokens into the returned channel.
-// The channel is closed when streaming ends. Errors are sent as a single
-// token prefixed with "error:".
-func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams) <-chan string {
-	ch := make(chan string, 64)
+// streamResult holds the final state after a raw streaming call completes.
+type streamResult struct {
+	ToolCalls []ToolCall // accumulated tool calls (if any)
+}
+
+// streamChatRaw sends a chat request and streams events into the returned channel.
+// The channel is closed when streaming ends. On completion the streamResult is
+// sent via the result channel so callers can inspect accumulated tool calls.
+func streamChatRaw(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
+	ch := make(chan StreamEvent, 64)
+	resCh := make(chan streamResult, 1)
 
 	go func() {
 		defer close(ch)
+		defer close(resCh)
 
 		reqBody := ChatRequest{
 			Model:       model,
@@ -59,11 +67,15 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 			Temperature: params.Temperature,
 			TopP:        params.TopP,
 			MaxTokens:   params.MaxTokens,
+			Tools:       tools,
+		}
+		if len(tools) > 0 {
+			reqBody.ToolChoice = "auto"
 		}
 
 		body, err := json.Marshal(reqBody)
 		if err != nil {
-			ch <- fmt.Sprintf("error: %v", err)
+			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
 		}
 
@@ -71,7 +83,7 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 			"http://localhost/v1/chat/completions",
 			bytes.NewReader(body))
 		if err != nil {
-			ch <- fmt.Sprintf("error: %v", err)
+			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -79,15 +91,29 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 		client := newHTTPClient(socketPath)
 		resp, err := client.Do(req)
 		if err != nil {
-			ch <- fmt.Sprintf("error: %v", err)
+			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			ch <- fmt.Sprintf("error: server returned %d", resp.StatusCode)
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			detail := strings.TrimSpace(string(errBody))
+			if detail != "" {
+				ch <- StreamEvent{Error: fmt.Sprintf("server returned %d: %s", resp.StatusCode, detail)}
+			} else {
+				ch <- StreamEvent{Error: fmt.Sprintf("server returned %d", resp.StatusCode)}
+			}
 			return
 		}
+
+		// Accumulate tool call fragments by index.
+		type toolCallAcc struct {
+			id       string
+			funcName string
+			args     strings.Builder
+		}
+		var toolAccs []toolCallAcc
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -99,7 +125,7 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 			data := strings.TrimPrefix(line, "data: ")
 
 			if data == "[DONE]" {
-				return
+				break
 			}
 
 			var chunk StreamChunk
@@ -108,16 +134,67 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 			}
 
 			for _, choice := range chunk.Choices {
+				// Text content
 				if choice.Delta.Content != "" {
 					select {
-					case ch <- choice.Delta.Content:
+					case ch <- StreamEvent{Token: choice.Delta.Content}:
 					case <-ctx.Done():
 						return
 					}
 				}
+
+				// Tool call fragments
+				for _, dtc := range choice.Delta.ToolCalls {
+					// Grow accumulator slice if needed
+					for dtc.Index >= len(toolAccs) {
+						toolAccs = append(toolAccs, toolCallAcc{})
+					}
+					if dtc.ID != "" {
+						toolAccs[dtc.Index].id = dtc.ID
+					}
+					if dtc.Function != nil {
+						if dtc.Function.Name != "" {
+							toolAccs[dtc.Index].funcName = dtc.Function.Name
+						}
+						toolAccs[dtc.Index].args.WriteString(dtc.Function.Arguments)
+					}
+				}
 			}
 		}
+
+		// Build completed tool calls.
+		var calls []ToolCall
+		for _, acc := range toolAccs {
+			calls = append(calls, ToolCall{
+				ID:   acc.id,
+				Type: "function",
+				Function: FunctionCall{
+					Name:      acc.funcName,
+					Arguments: acc.args.String(),
+				},
+			})
+		}
+
+		resCh <- streamResult{ToolCalls: calls}
 	}()
 
-	return ch
+	return ch, resCh
+}
+
+// StreamChat sends a chat request and streams events. No tools are provided.
+func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams) <-chan StreamEvent {
+	ch, _ := streamChatRaw(ctx, socketPath, model, messages, params, nil)
+	out := make(chan StreamEvent, 64)
+	go func() {
+		defer close(out)
+		for evt := range ch {
+			select {
+			case out <- evt:
+			case <-ctx.Done():
+				return
+			}
+		}
+		out <- StreamEvent{Done: true}
+	}()
+	return out
 }

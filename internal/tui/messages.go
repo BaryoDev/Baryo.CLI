@@ -15,10 +15,9 @@ type ModelsLoadedMsg struct {
 	Err    error
 }
 
-// StreamTokenMsg carries a single token from the streaming response.
+// StreamTokenMsg carries a streaming event from the model.
 type StreamTokenMsg struct {
-	Token string
-	Done  bool
+	Event docker.StreamEvent
 }
 
 // ModelSelectedMsg is sent when the user picks a model.

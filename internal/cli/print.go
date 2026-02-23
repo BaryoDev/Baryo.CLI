@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/arnelirobles/baryo-cli/internal/docker"
@@ -21,17 +20,20 @@ func RunPrint(socketPath, systemPrompt string, model docker.DockerModel, prompt 
 
 	var messages []docker.ChatMessage
 	if systemPrompt != "" {
-		messages = append(messages, docker.ChatMessage{Role: "system", Content: systemPrompt})
+		messages = append(messages, docker.NewChatMessage("system", systemPrompt))
 	}
-	messages = append(messages, docker.ChatMessage{Role: "user", Content: prompt})
+	messages = append(messages, docker.NewChatMessage("user", prompt))
 
 	ch := docker.StreamChat(ctx, socketPath, model.Tag, messages, params)
 
-	for token := range ch {
-		if strings.HasPrefix(token, "error:") {
-			return fmt.Errorf("%s", strings.TrimPrefix(token, "error: "))
+	for evt := range ch {
+		if evt.Error != "" {
+			return fmt.Errorf("%s", evt.Error)
 		}
-		fmt.Print(token)
+		if evt.Token != "" {
+			fmt.Print(evt.Token)
+		}
+		// Ignore tool events and Done in print mode.
 	}
 
 	fmt.Println()
