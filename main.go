@@ -44,6 +44,11 @@ func main() {
 	cfg := config.Load()
 	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Params)
 
+	// Load BARYO.md and skills.md project instructions
+	if instructions := config.LoadProjectInstructions(); instructions != "" {
+		cfg.SystemPrompt = instructions + "\n\n" + cfg.SystemPrompt
+	}
+
 	// Run startup health checks unless skipped
 	if !flags.SkipChecks {
 		results := doctor.RunChecks(cfg.SocketPath)

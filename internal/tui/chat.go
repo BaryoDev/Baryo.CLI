@@ -442,6 +442,9 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/init":
+		return m.handleInit()
+
 	case "/copy":
 		var lastAssistant string
 		for i := len(m.history) - 1; i >= 0; i-- {
@@ -522,7 +525,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init", text),
 		})
 		m.updateViewport()
 		return m, nil
@@ -602,6 +605,100 @@ func (m *ChatModel) saveSession() {
 	}
 	m.session.Messages = m.messages
 	_ = m.session.Save() // best-effort, don't interrupt chat on save error
+}
+
+func (m ChatModel) handleInit() (ChatModel, tea.Cmd) {
+	const filename = "BARYO.md"
+
+	// Check if BARYO.md already exists
+	if _, err := os.Stat(filename); err == nil {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "BARYO.md already exists. Edit it directly to update your project instructions.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	content := generateBaryoMD()
+	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Failed to create BARYO.md: %v", err),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: "Created BARYO.md with starter instructions.\nEdit it to customize how Baryo behaves in this project.",
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+// generateBaryoMD scans the project and builds a starter BARYO.md.
+func generateBaryoMD() string {
+	var b strings.Builder
+
+	b.WriteString("# Project Instructions\n\n")
+	b.WriteString("<!-- Baryo loads this file into the system prompt. -->\n")
+	b.WriteString("<!-- Edit it to customize how the AI assistant behaves in this project. -->\n\n")
+
+	// Detect project language/type from common files
+	var hints []string
+	langFiles := map[string]string{
+		"go.mod":         "Go",
+		"package.json":   "Node.js / JavaScript",
+		"Cargo.toml":     "Rust",
+		"pyproject.toml": "Python",
+		"requirements.txt": "Python",
+		"Gemfile":        "Ruby",
+		"pom.xml":        "Java (Maven)",
+		"build.gradle":   "Java (Gradle)",
+		"CMakeLists.txt": "C/C++ (CMake)",
+		"Makefile":       "Make",
+		"Dockerfile":     "Docker",
+		"docker-compose.yml": "Docker Compose",
+	}
+
+	for file, lang := range langFiles {
+		if _, err := os.Stat(file); err == nil {
+			hints = append(hints, lang)
+		}
+	}
+
+	if len(hints) > 0 {
+		b.WriteString("## Stack\n\n")
+		b.WriteString("This project uses: " + strings.Join(hints, ", ") + "\n\n")
+	}
+
+	b.WriteString("## Guidelines\n\n")
+	b.WriteString("- Follow the existing code style and conventions\n")
+	b.WriteString("- Prefer editing existing files over creating new ones\n")
+	b.WriteString("- Keep changes focused and minimal\n")
+
+	// Add build/test hints if we can detect them
+	if _, err := os.Stat("go.mod"); err == nil {
+		b.WriteString("- Run `go vet ./...` to check for issues\n")
+		b.WriteString("- Run `go build ./...` to verify compilation\n")
+	}
+	if _, err := os.Stat("package.json"); err == nil {
+		b.WriteString("- Run `npm test` to verify changes\n")
+	}
+	if _, err := os.Stat("Cargo.toml"); err == nil {
+		b.WriteString("- Run `cargo check` to verify compilation\n")
+	}
+
+	b.WriteString("\n## Skills\n\n")
+	b.WriteString("<!-- Define reusable prompt snippets here, or create a separate skills.md file. -->\n")
+	b.WriteString("<!-- Example:\n")
+	b.WriteString("### /review\n")
+	b.WriteString("Review the code changes for bugs, style issues, and potential improvements.\n")
+	b.WriteString("-->\n")
+
+	return b.String()
 }
 
 func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
