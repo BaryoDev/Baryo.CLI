@@ -151,6 +151,9 @@ TUI Commands:
   /models           Browse downloaded and available models
   /system           View or edit the active system prompt
   /params           View or adjust model parameters
+  /export [file]    Export conversation to markdown or JSON
+  /copy             Copy last assistant response to clipboard
+  /markdown         Toggle markdown rendering on/off
 
 Examples:
   baryo                          Launch interactive TUI

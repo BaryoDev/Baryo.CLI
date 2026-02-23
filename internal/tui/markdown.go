@@ -12,7 +12,7 @@ import (
 // Falls back to the raw string if glamour fails.
 func RenderMarkdown(s string, width int) string {
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {

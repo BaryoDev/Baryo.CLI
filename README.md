@@ -52,6 +52,7 @@ baryo --model mistral
 The interactive mode gives you:
 - A model picker with parameter and size info
 - A streaming chat interface
+- Input history — press `↑`/`↓` to cycle through previous messages
 - Keyboard navigation (`enter` to send, `ctrl+c` to quit)
 
 ### Print mode
@@ -108,6 +109,41 @@ The model browser shows:
 - **Available** models from Docker Hub with an `[available]` tag
 - Select a downloaded model to start chatting with it
 - Select an available model to pull it with live progress
+
+### Markdown rendering
+
+Assistant responses are rendered with full markdown formatting by default, including syntax-highlighted code blocks. Toggle it on or off mid-session:
+
+```bash
+# Inside the TUI
+/markdown
+```
+
+When enabled, code blocks display with syntax highlighting and text is formatted with headings, lists, and emphasis. Disable it with `/markdown` again to see raw plain text.
+
+### Conversation export
+
+Export your conversation to a file or copy the last response to the clipboard.
+
+```bash
+# Inside the TUI
+
+# Export as markdown (default)
+/export
+
+# Export with a custom filename
+/export my-chat.md
+
+# Export as JSON (array of messages)
+/export chat.json
+
+# Copy last assistant response to clipboard
+/copy
+```
+
+- `/export` with no argument creates `baryo-export-<timestamp>.md` in the current directory
+- Filenames ending in `.json` produce a JSON array of `{role, content}` objects
+- All other filenames produce a markdown document with `### User` / `### Assistant` sections
 
 ### System prompts
 
