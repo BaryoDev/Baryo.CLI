@@ -15,26 +15,41 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Installation
 
-```bash
-# Clone and build
-git clone https://github.com/arnelirobles/baryo-cli.git
-cd baryo-cli
-go build -o baryo .
+### macOS / Linux (Homebrew)
 
-# Move to your PATH
-sudo mv baryo /usr/local/bin/
+```bash
+brew install arnelirobles/tap/baryo
 ```
 
-Or install directly with Go:
+### macOS / Linux (shell script)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arnelirobles/baryo-cli/main/install.sh | sh
+```
+
+### Windows (Scoop)
+
+```powershell
+scoop bucket add baryo https://github.com/arnelirobles/scoop-baryo
+scoop install baryo
+```
+
+### Go install
 
 ```bash
 go install github.com/arnelirobles/baryo-cli@latest
 ```
 
-### Build with version info
+### Pre-built binaries
+
+Download from [GitHub Releases](https://github.com/arnelirobles/baryo-cli/releases) for macOS, Linux, and Windows (amd64 + arm64).
+
+### Build from source
 
 ```bash
-go build -ldflags "-X github.com/arnelirobles/baryo-cli/internal/cli.Version=0.1.0" -o baryo .
+git clone https://github.com/arnelirobles/baryo-cli.git
+cd baryo-cli
+go build -o baryo .
 ```
 
 ## Usage
