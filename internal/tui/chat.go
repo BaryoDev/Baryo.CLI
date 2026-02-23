@@ -216,13 +216,27 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
-	case "/sessions":
+	case "/sessions", "/resume":
 		return m, func() tea.Msg {
 			summaries, err := session.List()
 			if err != nil {
 				return ShowSessionsMsg{}
 			}
 			return ShowSessionsMsg{Sessions: summaries}
+		}
+
+	case "/models":
+		return m, func() tea.Msg {
+			downloaded, dlErr := docker.ListModels()
+			available, srErr := docker.SearchModels()
+			if dlErr != nil {
+				return ShowModelsMsg{Err: dlErr}
+			}
+			if srErr != nil {
+				// Non-fatal: show downloaded models even if search fails
+				return ShowModelsMsg{Downloaded: downloaded}
+			}
+			return ShowModelsMsg{Downloaded: downloaded, Available: available}
 		}
 
 	case "/system":
@@ -274,7 +288,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /system, /params", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params", text),
 		})
 		m.updateViewport()
 		return m, nil

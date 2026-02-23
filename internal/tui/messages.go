@@ -39,3 +39,19 @@ type SessionLoadedMsg struct {
 
 // SessionCancelledMsg is sent when the user presses esc on the session picker.
 type SessionCancelledMsg struct{}
+
+// ShowModelsMsg requests transition to the model browser screen.
+type ShowModelsMsg struct {
+	Downloaded []docker.DockerModel
+	Available  []docker.SearchModel
+	Err        error
+}
+
+// PullStatusMsg carries a progress line from docker model pull.
+type PullStatusMsg struct {
+	Status string
+	Done   bool
+}
+
+// ModelBrowserCancelMsg is sent when the user presses esc on the model browser.
+type ModelBrowserCancelMsg struct{}

@@ -147,6 +147,8 @@ Flags:
 TUI Commands:
   /clear            Start a fresh conversation
   /sessions         List and pick a saved session to resume
+  /resume           Alias for /sessions
+  /models           Browse downloaded and available models
   /system           View or edit the active system prompt
   /params           View or adjust model parameters
 

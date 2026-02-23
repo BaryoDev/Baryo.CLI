@@ -91,7 +91,23 @@ baryo --resume-id abc123
 
 Inside the TUI you can also use:
 - `/sessions` — list and pick a saved session to resume
+- `/resume` — alias for `/sessions`
 - `/clear` — start a fresh conversation
+
+### Model browser
+
+Browse downloaded and available models from Docker Hub without leaving the TUI.
+
+```bash
+# Inside the TUI
+/models
+```
+
+The model browser shows:
+- **Downloaded** models with size/memory info and an `[installed]` tag
+- **Available** models from Docker Hub with an `[available]` tag
+- Select a downloaded model to start chatting with it
+- Select an available model to pull it with live progress
 
 ### System prompts
 

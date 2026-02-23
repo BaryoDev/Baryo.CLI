@@ -19,6 +19,7 @@ const (
 	screenModelSelect
 	screenChat
 	screenSessionSelect
+	screenModelBrowser
 )
 
 // AppModel is the top-level bubbletea model that drives screen transitions.
@@ -35,6 +36,7 @@ type AppModel struct {
 
 	modelSelect   ModelSelectModel
 	sessionSelect SessionSelectModel
+	modelBrowser  ModelBrowserModel
 	chat          ChatModel
 
 	err    error
@@ -153,6 +155,19 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionCancelledMsg:
 		m.screen = screenChat
 		return m, nil
+
+	case ShowModelsMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		m.screen = screenModelBrowser
+		m.modelBrowser = NewModelBrowser(msg.Downloaded, msg.Available)
+		return m, nil
+
+	case ModelBrowserCancelMsg:
+		m.screen = screenChat
+		return m, nil
 	}
 
 	switch m.screen {
@@ -164,6 +179,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateChat(msg)
 	case screenSessionSelect:
 		return m.updateSessionSelect(msg)
+	case screenModelBrowser:
+		return m.updateModelBrowser(msg)
 	}
 
 	return m, nil
@@ -230,6 +247,24 @@ func (m AppModel) updateSessionSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m AppModel) updateModelBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case ModelSelectedMsg:
+		m.screen = screenChat
+		m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, msg.Model.Name, msg.Model.Tag)
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
+			Width:  m.width,
+			Height: m.height,
+		})
+		return m, cmd
+	default:
+		var cmd tea.Cmd
+		m.modelBrowser, cmd = m.modelBrowser.Update(msg)
+		return m, cmd
+	}
+}
+
 func (m AppModel) View() string {
 	switch m.screen {
 	case screenLoading:
@@ -247,6 +282,9 @@ func (m AppModel) View() string {
 
 	case screenSessionSelect:
 		return m.sessionSelect.View()
+
+	case screenModelBrowser:
+		return m.modelBrowser.View()
 	}
 
 	return ""

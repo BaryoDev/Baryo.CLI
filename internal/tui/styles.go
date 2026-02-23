@@ -43,4 +43,9 @@ var (
 
 	HelpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
+
+	SectionHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("69")).
+				MarginBottom(0)
 )
