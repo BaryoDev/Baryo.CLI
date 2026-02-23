@@ -325,17 +325,56 @@ Or via environment variable: `DOCKER_MODEL_SOCKET=tcp://localhost:12434`.
 
 ### Tool use
 
-Baryo gives the model access to local tools so it can read files, search code, and explore your project when asked.
+Baryo gives the model access to local tools so it can read files, search code, explore your project, and check git state.
 
 Available tools:
-- **read_file** — read the contents of a file
-- **glob** — find files matching a pattern (supports `**`)
-- **grep** — search file contents by regex
-- **list_directory** — list directory contents as a tree
 
-Tools are called automatically when the model decides they're needed. Results are shown inline in the chat. The `.git` directory is excluded from file listings, and `.gitignore` rules are respected.
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read the contents of a file |
+| `glob` | Find files matching a pattern (supports `**`) |
+| `grep` | Search file contents by regex |
+| `list_directory` | List directory contents as a tree |
+| `git_status` | Show modified, staged, and untracked files |
+| `git_diff` | Show file diffs (staged or unstaged) |
+| `git_log` | Show recent commit history |
+| `gh` | Run read-only GitHub CLI commands (PRs, issues, releases) |
+
+Tools are called automatically when the model decides they're needed. Results are shown inline in the chat with an animated spinner while executing. The `.git` directory is excluded from file listings, and `.gitignore` rules are respected.
+
+The `gh` tool requires the [GitHub CLI](https://cli.github.com/) to be installed and is restricted to read-only operations (list, view, diff, checks, status).
 
 Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
+
+### Project instructions
+
+Baryo loads project-specific instructions from `BARYO.md` files and injects them into the system prompt. This lets you customize the model's behavior per-project.
+
+Baryo checks these locations (all are optional, all found are combined):
+
+| File | Scope |
+|------|-------|
+| `BARYO.md` | Project root — project-specific instructions |
+| `.baryo/BARYO.md` | Project config directory — alternative location |
+| `~/.baryo/BARYO.md` | User home — global instructions for all projects |
+| `skills.md` | Project root — reusable prompt snippets and skills |
+| `.baryo/skills.md` | Project config directory — alternative location |
+| `~/.baryo/skills.md` | User home — global skills for all projects |
+
+Use the `/init` command inside the TUI to generate a starter `BARYO.md` from your project structure.
+
+Example `BARYO.md`:
+
+```markdown
+# Project Instructions
+
+This is a Go CLI application using Bubble Tea for the TUI.
+
+- Use Go 1.25+ idioms
+- Follow the existing code style in internal/
+- Run `go vet ./...` before suggesting changes
+- Prefer editing existing files over creating new ones
+```
 
 ## How it works
 

@@ -43,11 +43,12 @@ type ChatModel struct {
 	historyIdx   int         // current position in input history (-1 = not browsing)
 	session      *session.Session
 
-	textarea textarea.Model
-	viewport viewport.Model
-	ready    bool
-	width    int
-	height   int
+	textarea    textarea.Model
+	viewport    viewport.Model
+	ready       bool
+	width       int
+	height      int
+	spinFrame   int // current spinner animation frame
 
 	eventCh    <-chan docker.StreamEvent
 	cancelFunc context.CancelFunc
@@ -101,6 +102,19 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 		historyIdx:   -1,
 		session:      sess,
 	}
+}
+
+// spinnerFrames are the animation frames for the inline spinner.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// spinTickMsg drives the spinner animation during streaming.
+type spinTickMsg struct{}
+
+// doSpinTick returns a Cmd that sends a spinTickMsg after a short delay.
+func doSpinTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return spinTickMsg{}
+	})
 }
 
 func newTextarea() textarea.Model {
@@ -229,8 +243,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
 			m.updateViewport()
-			return m, waitForEvent(m.eventCh)
+			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 		}
+
+	case spinTickMsg:
+		if m.isStream {
+			m.spinFrame = (m.spinFrame + 1) % len(spinnerFrames)
+			m.updateViewport()
+			return m, doSpinTick()
+		}
+		return m, nil
 
 	case StreamTokenMsg:
 		evt := msg.Event
@@ -309,7 +331,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				content: fmt.Sprintf("Tool: %s(%s)", evt.ToolStart.Name, evt.ToolStart.Args),
 			})
 			m.updateViewport()
-			return m, waitForEvent(m.eventCh)
+			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 		}
 
 		if evt.ToolResult != nil {
@@ -655,6 +677,12 @@ func (m *ChatModel) updateViewport() {
 		b.WriteString("\n\n")
 	}
 
+	// Show spinner while a tool is running
+	if m.toolStatus != "" {
+		frame := spinnerFrames[m.spinFrame]
+		b.WriteString(ToolLabelStyle.Render(frame+" "+m.toolStatus) + "\n")
+	}
+
 	// Show streaming text
 	if m.isStream && m.streaming != "" {
 		b.WriteString(AssistantLabelStyle.Render("Assistant: "))
@@ -679,11 +707,12 @@ func (m ChatModel) View() string {
 	header := TitleStyle.Render(
 		fmt.Sprintf("🐳 Baryo — chatting with %s", m.modelName))
 
+	frame := spinnerFrames[m.spinFrame]
 	var status string
 	if m.toolStatus != "" {
-		status = ToolLabelStyle.Render(m.toolStatus)
+		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
 	} else if m.isStream {
-		status = HelpStyle.Render("streaming...")
+		status = HelpStyle.Render(frame + " thinking...")
 	} else {
 		status = HelpStyle.Render("enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit")
 	}
