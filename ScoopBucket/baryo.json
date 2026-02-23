@@ -1,0 +1,22 @@
+{
+    "version": "0.1.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.1.0/baryo_0.1.0_windows_amd64.zip",
+            "bin": [
+                "baryo.exe"
+            ],
+            "hash": "5648036660daede7c1f4dde618a468a98c23196c46ba0cd2a41947259664c526"
+        },
+        "arm64": {
+            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.1.0/baryo_0.1.0_windows_arm64.zip",
+            "bin": [
+                "baryo.exe"
+            ],
+            "hash": "3c847da758c2e2609cb18e99211fa4f1a162486ab2f93e2338916f23039bb73b"
+        }
+    },
+    "homepage": "https://github.com/BaryoDev/Baryo.CLI",
+    "license": "MPL-2.0",
+    "description": "A local AI chat CLI powered by Docker Model Runner"
+}
