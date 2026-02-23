@@ -24,6 +24,8 @@ type AppModel struct {
 	screen  screen
 	spinner spinner.Model
 
+	preselectedModel *docker.DockerModel
+
 	modelSelect ModelSelectModel
 	chat        ChatModel
 
@@ -32,16 +34,30 @@ type AppModel struct {
 	height int
 }
 
+// AppOption configures the AppModel before it starts.
+type AppOption func(*AppModel)
+
+// WithPreselectedModel skips the model picker and goes straight to chat.
+func WithPreselectedModel(model docker.DockerModel) AppOption {
+	return func(a *AppModel) {
+		a.preselectedModel = &model
+	}
+}
+
 // NewApp creates the initial application model.
-func NewApp() AppModel {
+func NewApp(opts ...AppOption) AppModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
 	)
-	return AppModel{
+	m := AppModel{
 		screen:  screenLoading,
 		spinner: s,
 	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
 }
 
 func (m AppModel) Init() tea.Cmd {
@@ -78,6 +94,16 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.err = msg.Err
 			return m, nil
+		}
+		if m.preselectedModel != nil {
+			m.screen = screenChat
+			m.chat = NewChat(m.preselectedModel.Name, m.preselectedModel.Tag)
+			var cmd tea.Cmd
+			m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
+				Width:  m.width,
+				Height: m.height,
+			})
+			return m, cmd
 		}
 		m.screen = screenModelSelect
 		m.modelSelect = NewModelSelect(msg.Models)
