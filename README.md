@@ -128,7 +128,7 @@ The checks run in order:
 3. Model Runner enabled (inference socket exists)
 4. At least one model pulled
 
-If a check fails, you'll see what passed and step-by-step instructions to fix the issue.
+If a check fails, you'll see what passed and step-by-step instructions to fix the issue. You can also run `/doctor` inside the TUI to check diagnostics mid-session.
 
 ### Markdown rendering
 
