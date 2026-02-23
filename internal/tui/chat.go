@@ -228,6 +228,35 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		// Detect error tokens from StreamChat
+		if strings.HasPrefix(msg.Token, "error: ") {
+			errMsg := strings.TrimPrefix(msg.Token, "error: ")
+			// If we had partial content, keep it in history
+			if m.streaming != "" {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: m.streaming,
+				})
+			}
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: errMsg,
+			})
+			m.streaming = ""
+			m.isStream = false
+			if m.cancelFunc != nil {
+				m.cancelFunc()
+			}
+			m.cancelFunc = nil
+			m.tokenCh = nil
+			// Remove the user message from conversation so it can be retried
+			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "user" {
+				m.messages = m.messages[:len(m.messages)-1]
+			}
+			m.updateViewport()
+			return m, nil
+		}
+
 		m.streaming += msg.Token
 		m.updateViewport()
 		return m, waitForToken(m.tokenCh)
@@ -533,6 +562,8 @@ func (m *ChatModel) updateViewport() {
 		case "user":
 			b.WriteString(UserLabelStyle.Render("You: "))
 			b.WriteString(entry.content)
+		case "error":
+			b.WriteString(ErrorStyle.Render("Error: " + entry.content))
 		case "assistant":
 			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
 			if m.markdown {

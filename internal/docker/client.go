@@ -13,17 +13,34 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
-// newHTTPClient creates an HTTP client that dials the given unix socket.
+// newHTTPClient creates an HTTP client that connects via unix socket or TCP.
+// TCP paths are detected by "tcp://" prefix or "host:port" format.
 func newHTTPClient(socketPath string) *http.Client {
+	dial := func(_ context.Context, _, _ string) (net.Conn, error) {
+		network, addr := parseSocketAddr(socketPath)
+		return net.DialTimeout(network, addr, 30*time.Second)
+	}
 	return &http.Client{
 		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
-			},
+			DialContext:           dial,
+			ResponseHeaderTimeout: 30 * time.Second,
 		},
 	}
+}
+
+// parseSocketAddr determines the network type and address from a socket path.
+func parseSocketAddr(socketPath string) (network, addr string) {
+	if strings.HasPrefix(socketPath, "tcp://") {
+		return "tcp", strings.TrimPrefix(socketPath, "tcp://")
+	}
+	// Bare host:port (e.g. "localhost:12434")
+	if host, port, err := net.SplitHostPort(socketPath); err == nil && host != "" && port != "" {
+		return "tcp", socketPath
+	}
+	return "unix", socketPath
 }
 
 // StreamChat sends a chat request and streams tokens into the returned channel.

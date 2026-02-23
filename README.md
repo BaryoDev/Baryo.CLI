@@ -282,11 +282,23 @@ CLI flags > Environment variables > Project config > User config > Defaults
 | Platform | Path |
 |----------|------|
 | macOS | `~/Library/Containers/com.docker.docker/Data/inference.sock` |
-| Linux | `~/.docker/desktop/inference.sock` |
+| Linux | `~/.docker/desktop/inference.sock` (probes multiple paths) |
+| Windows | `//./pipe/docker_model_runner` |
+
+On Linux, Baryo probes `~/.docker/desktop/inference.sock`, `~/.docker/inference.sock`, and `/var/run/docker/inference.sock`, using the first that exists.
+
+TCP connections are also supported for cross-platform use:
+
+```yaml
+# ~/.baryo/config.yaml
+socket_path: "tcp://localhost:12434"
+```
+
+Or via environment variable: `DOCKER_MODEL_SOCKET=tcp://localhost:12434`.
 
 ## How it works
 
-Baryo communicates with Docker Model Runner through its Unix socket, using the OpenAI-compatible `/v1/chat/completions` API. Responses are streamed token-by-token using Server-Sent Events (SSE).
+Baryo communicates with Docker Model Runner through its Unix socket (or TCP endpoint), using the OpenAI-compatible `/v1/chat/completions` API. Responses are streamed token-by-token using Server-Sent Events (SSE).
 
 Models are discovered via `docker model list --json` and the full conversation context is maintained across turns.
 

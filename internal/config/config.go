@@ -26,6 +26,7 @@ type Config struct {
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
+// It checks environment variables first, then probes known locations.
 func defaultSocketPath() string {
 	if p := os.Getenv("DOCKER_MODEL_SOCKET"); p != "" {
 		return p
@@ -35,10 +36,28 @@ func defaultSocketPath() string {
 	case "darwin":
 		return filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data", "inference.sock")
 	case "linux":
-		return filepath.Join(home, ".docker", "desktop", "inference.sock")
+		return probeLinuxSocket(home)
+	case "windows":
+		return `//./pipe/docker_model_runner`
 	default:
 		return filepath.Join(home, ".docker", "desktop", "inference.sock")
 	}
+}
+
+// probeLinuxSocket checks known Linux socket paths and returns the first that exists.
+func probeLinuxSocket(home string) string {
+	candidates := []string{
+		filepath.Join(home, ".docker", "desktop", "inference.sock"),
+		filepath.Join(home, ".docker", "inference.sock"),
+		"/var/run/docker/inference.sock",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Fallback to the most common path even if it doesn't exist yet
+	return candidates[0]
 }
 
 // Load reads configuration with the following precedence (highest wins):
