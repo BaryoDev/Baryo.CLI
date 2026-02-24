@@ -1368,10 +1368,9 @@ func formatTokenCount(n int) string {
 // startCompaction initiates context compaction by summarizing older messages.
 func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
 	if len(m.messages) <= 8 {
-		convTokens := estimateTokens(m.messages)
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Nothing to compact — conversation is only ~%s tokens (%d messages).", formatTokenCount(convTokens), len(m.messages)),
+			content: fmt.Sprintf("Nothing to compact — conversation is only ~%s tokens (%d messages).", formatTokenCount(m.contextTokens), len(m.messages)),
 		})
 		m.updateViewport()
 		return m, nil
