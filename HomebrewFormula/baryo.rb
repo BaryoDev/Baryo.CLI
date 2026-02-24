@@ -11,7 +11,7 @@ class Baryo < Formula
   on_macos do
     if Hardware::CPU.intel?
       url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.2.0/baryo_0.2.0_darwin_amd64.tar.gz"
-      sha256 "112f64ae0af77929737ccc4508bc62443a58b290aa88189529e5ed0ecefa9832"
+      sha256 "ee56c0602f0f3ee8e63697d63eeaccf6e20d6dd1aa10f3013ddb94c75c5d879f"
 
       define_method(:install) do
         bin.install "baryo"
@@ -19,7 +19,7 @@ class Baryo < Formula
     end
     if Hardware::CPU.arm?
       url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.2.0/baryo_0.2.0_darwin_arm64.tar.gz"
-      sha256 "9219a5e53b63828d6378cd76382b5e229075ded2026f1be3b7cd14d184cee8d8"
+      sha256 "4bbfb50a145ef676bae605bdb80ba1a05b91225d27c8d3a5b3bc944ea7303afa"
 
       define_method(:install) do
         bin.install "baryo"
@@ -30,14 +30,14 @@ class Baryo < Formula
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
       url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.2.0/baryo_0.2.0_linux_amd64.tar.gz"
-      sha256 "e03115cfee1079be58595da0970e2a349e570e3099c4eb8b2424780a9e9be974"
+      sha256 "faea0585b4dad1b7cc5d5607c3c79cc9707af5985e30bb8d245ef0b81dff31c9"
       define_method(:install) do
         bin.install "baryo"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
       url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.2.0/baryo_0.2.0_linux_arm64.tar.gz"
-      sha256 "da98b7ce47cab45693743feb27dc32dbe1ef39201e32fa5ff4ba8f46fea859ad"
+      sha256 "b56d42c57d2e80b68f49355cc959385ce1bf7f31472e551d4305fe4db8ff05bc"
       define_method(:install) do
         bin.install "baryo"
       end
