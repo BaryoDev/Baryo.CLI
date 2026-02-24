@@ -34,6 +34,7 @@ type Config struct {
 	Model        string
 	SystemPrompt string
 	Params       docker.ChatParams
+	Tunnel       string // user@host for dynamic SSH tunnel
 	Continue     bool
 	Resume       bool
 	ResumeID     string
@@ -64,17 +65,23 @@ func Parse() Config {
 	fs.BoolVar(&cfg.Resume, "r", false, "list and pick a saved session")
 	fs.BoolVar(&cfg.Resume, "resume", false, "list and pick a saved session")
 	fs.StringVar(&cfg.ResumeID, "resume-id", "", "resume a specific session by ID")
+	fs.StringVar(&cfg.Tunnel, "tunnel", "", "SSH tunnel as user@host (ports default to 11434)")
 	fs.BoolVar(&cfg.SkipChecks, "skip-checks", false, "skip startup health checks")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
-	// Check for "doctor" subcommand before flag parsing
-	if len(os.Args) > 1 && os.Args[1] == "doctor" {
-		cfg.Doctor = true
-		return cfg
+	// Check for "doctor" subcommand — can appear as first arg or after flags.
+	// Filter it out before parsing so flag.Parse doesn't choke on it.
+	args := os.Args[1:]
+	for i, a := range args {
+		if a == "doctor" {
+			cfg.Doctor = true
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
 	}
 
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		// If parsing fails, show help
 		cfg.ShowHelp = true
 		return cfg
@@ -155,6 +162,7 @@ Flags:
   -c, --continue        Resume the most recent session in this directory
   -r, --resume          List and pick a saved session to resume
   --resume-id <id>      Resume a specific session by ID
+  --tunnel <user@host>  Auto-start SSH tunnel to remote Ollama server
   --skip-checks         Skip startup health checks
   --version             Print version and exit
   --help                Print this help message

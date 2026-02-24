@@ -27,7 +27,7 @@ func init() {
 					"properties": map[string]interface{}{
 						"path": map[string]interface{}{
 							"type":        "string",
-							"description": "Directory to list, relative to project root. Defaults to project root.",
+							"description": "Directory to list, relative to project root. Use \".\" for current directory. Defaults to \".\" if omitted.",
 						},
 						"depth": map[string]interface{}{
 							"type":        "integer",
@@ -58,7 +58,7 @@ func executeListDir(ctx context.Context, argsJSON string) Result {
 	}
 
 	root := cwd
-	if args.Path != "" {
+	if args.Path != "" && args.Path != "." {
 		root = args.Path
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(cwd, root)
@@ -72,7 +72,12 @@ func executeListDir(ctx context.Context, argsJSON string) Result {
 
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
-		return Result{Content: fmt.Sprintf("directory not found: %s", args.Path), IsError: true}
+		// Fall back to project root for unrecognized paths.
+		root = cwd
+		info, err = os.Stat(root)
+		if err != nil || !info.IsDir() {
+			return Result{Content: fmt.Sprintf("directory not found: %s", args.Path), IsError: true}
+		}
 	}
 
 	maxDepth := 3
@@ -99,7 +104,7 @@ func executeListDir(ctx context.Context, argsJSON string) Result {
 	if out == "" {
 		return Result{Content: "(empty directory)"}
 	}
-	return Result{Content: out}
+	return Result{Content: fmt.Sprintf("%d entries\n\n%s", count+overflow, out)}
 }
 
 // walkDir recursively lists directory contents with indentation.

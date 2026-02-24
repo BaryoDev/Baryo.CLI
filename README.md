@@ -9,7 +9,7 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Model Runner enabled
 - At least one AI model pulled:
   ```bash
-  docker model pull ai/mistral
+  docker model pull ai/gemma3
   ```
 - [Go 1.25+](https://go.dev/dl/) (to build from source)
 
@@ -73,7 +73,7 @@ This automatically builds binaries for all platforms, creates a GitHub Release, 
 baryo
 
 # Skip the model picker
-baryo --model mistral
+baryo --model gemma3
 ```
 
 The interactive mode gives you:
@@ -91,7 +91,7 @@ Send a prompt and get the response streamed to stdout. Useful for scripts and pi
 baryo -p "what is 2+2"
 
 # Use a specific model
-baryo --model mistral -p "explain docker networking"
+baryo --model gemma3 -p "explain docker networking"
 
 # Pipe file contents as context
 cat main.go | baryo -p "review this code"
@@ -167,6 +167,25 @@ Assistant responses are rendered with full markdown formatting by default, inclu
 ```
 
 When enabled, code blocks display with syntax highlighting and text is formatted with headings, lists, and emphasis. Disable it with `/markdown` again to see raw plain text.
+
+### Context management
+
+Baryo tracks estimated token usage and shows it in the status bar.
+
+```
+enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit          ~3.2k / 8k
+```
+
+The token count is color-coded: dim when under 60%, amber at 60-85%, and red above 85%.
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/context` | Show a detailed breakdown of token usage (system prompt, conversation, total) |
+| `/compact` | Summarize older messages to free context space, keeping the last 4 exchanges |
+
+**Auto-compaction** triggers automatically when token usage exceeds 85% of the context limit and there are enough messages to compact. Older messages are replaced with a summary while recent exchanges are kept verbatim.
 
 ### Conversation export
 
@@ -254,6 +273,7 @@ params:
 | `-c`, `--continue` | Resume the most recent session in this directory |
 | `-r`, `--resume` | List and pick a saved session to resume |
 | `--resume-id <id>` | Resume a specific session by ID |
+| `--tunnel <user@host>` | Auto-start SSH tunnel to remote server |
 | `--skip-checks` | Skip startup health checks |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
@@ -263,9 +283,9 @@ params:
 
 The `--model` flag uses smart matching:
 
-1. **Exact match** — `--model ai/mistral`
-2. **Short name** — `--model mistral` (matches `ai/mistral`)
-3. **Substring** — `--model mis` (matches `ai/mistral`)
+1. **Exact match** — `--model ai/gemma3`
+2. **Short name** — `--model gemma3` (matches `ai/gemma3`)
+3. **Substring** — `--model gem` (matches `ai/gemma3`)
 
 If the query is ambiguous, you'll see the list of matching models. If nothing matches, you'll see all available models.
 
@@ -282,7 +302,7 @@ Create a YAML config file at either location:
 
 ```yaml
 # ~/.baryo/config.yaml
-model: ai/mistral
+model: ai/gemma3
 socket_path: ~/Library/Containers/com.docker.docker/Data/inference.sock
 system_prompt: "You are a helpful assistant. Be concise."
 ```
@@ -322,6 +342,50 @@ socket_path: "tcp://localhost:12434"
 ```
 
 Or via environment variable: `DOCKER_MODEL_SOCKET=tcp://localhost:12434`.
+
+### Remote servers (SSH tunnel)
+
+Connect to a remote server running Ollama or any OpenAI-compatible API. Baryo auto-launches an SSH tunnel and tears it down on exit.
+
+**Quick start (CLI flag):**
+
+```bash
+# Connect to a remote Ollama server (defaults: SSH port 22, Ollama port 11434)
+baryo --tunnel user@your.server.ip --model qwen3-coder:latest
+
+# Custom SSH port
+baryo --tunnel user@myserver.com:2222 --model llama3.2
+```
+
+**Persistent config (YAML):**
+
+```yaml
+# ~/.baryo/config.yaml
+model: "qwen3-coder:latest"
+
+ssh_tunnel:
+  host: "your.server.ip"
+  user: "your-user"
+  remote_port: 11434   # port on the remote server
+  local_port: 11434    # local port to forward to
+  # ssh_port: 22       # SSH port (default: 22)
+```
+
+When `ssh_tunnel` is present (or `--tunnel` is used), Baryo will:
+
+1. Check if the local port is already open (skip spawning if so)
+2. Run `ssh -N -L local:localhost:remote user@host`
+3. Wait up to 15 seconds for the port to become reachable
+4. Set the socket path to `tcp://localhost:<local_port>`
+5. Kill the SSH process on exit (Ctrl+C or normal quit)
+
+The `--model` flag is required when using a remote connection since Baryo can't run `docker model list` on the remote server.
+
+Run diagnostics on a remote connection:
+
+```bash
+baryo --tunnel user@your.server.ip doctor
+```
 
 ### Tool use
 
@@ -368,6 +432,66 @@ Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads
 Baryo communicates with Docker Model Runner through its Unix socket (or TCP endpoint), using the OpenAI-compatible `/v1/chat/completions` API. Responses are streamed token-by-token using Server-Sent Events (SSE).
 
 Models are discovered via `docker model list --json` and the full conversation context is maintained across turns. When tools are provided, the model can make function calls that Baryo executes locally and feeds back into the conversation.
+
+## Architecture
+
+### SSH tunnel auto-launch
+
+Baryo can automatically manage an SSH tunnel to a remote server running Ollama or any OpenAI-compatible API. This is useful when your GPU-powered inference server is on a different machine (e.g. an Oracle Cloud instance).
+
+**How it works:**
+
+1. On startup, Baryo checks if an SSH tunnel is configured (via `--tunnel` flag or `ssh_tunnel` in YAML config)
+2. If the local port is already open (manual tunnel), it skips spawning and connects directly
+3. Otherwise, it spawns `ssh -N -L local:localhost:remote user@host` as a child process
+4. Waits up to 15 seconds for the forwarded port to become reachable
+5. Overrides the socket path to `tcp://localhost:<local_port>` so all API calls route through the tunnel
+6. On exit (Ctrl+C or normal quit), the SSH process is terminated (SIGINT, then force-kill after 2s)
+
+**For TCP/remote connections, the doctor checks adapt automatically:**
+
+- Skips Docker installed/running/Model Runner checks (irrelevant for remote)
+- Runs a `net.DialTimeout` connectivity check against the TCP endpoint instead
+- `resolveModel()` constructs the model directly from the `--model` flag (can't run `docker model list` on a remote server)
+
+**Files involved:**
+
+| File | Role |
+|------|------|
+| `internal/tunnel/tunnel.go` | SSH tunnel lifecycle — `Config`, `Start()`, `Close()`, port helpers |
+| `internal/config/config.go` | `SSHTunnel` field on `Config`, YAML parsing, `--tunnel` flag parsing |
+| `internal/doctor/doctor.go` | TCP-aware diagnostics (`runTCPChecks` vs `runLocalChecks`) |
+| `main.go` | Tunnel startup/teardown, TCP-aware `resolveModel()` |
+
+**Dynamic setup (no config file needed):**
+
+```bash
+# One-liner — connect to remote Ollama
+baryo --tunnel user@your.server.ip --model qwen3-coder:latest
+
+# Custom SSH port
+baryo --tunnel user@myserver.com:2222 --model llama3.2
+
+# Print mode with tunnel
+cat main.go | baryo --tunnel user@your.server.ip --model qwen3-coder:latest -p "review this"
+
+# Diagnostics on a remote endpoint
+baryo --tunnel user@your.server.ip doctor
+```
+
+**Persistent setup (YAML config):**
+
+```yaml
+# ~/.baryo/config.yaml
+model: "qwen3-coder:latest"
+
+ssh_tunnel:
+  host: "your.server.ip"
+  user: "your-user"
+  remote_port: 11434
+  local_port: 11434
+  # ssh_port: 22
+```
 
 ## License
 

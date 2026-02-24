@@ -51,10 +51,18 @@ type ChatModel struct {
 	height      int
 	spinFrame   int // current spinner animation frame
 
-	eventCh     <-chan docker.StreamEvent
-	cancelFunc  context.CancelFunc
-	toolStatus  string // shown in status bar during tool execution
-	initPending bool   // when true, write streaming result to BARYO.md on completion
+	eventCh      <-chan docker.StreamEvent
+	cancelFunc   context.CancelFunc
+	toolStatus   string    // shown in status bar during tool execution
+	initPending  bool      // when true, write streaming result to BARYO.md on completion
+	thinking     bool      // true while model is inside a <think> block
+	streamStart  time.Time // when streaming began (for elapsed time display)
+
+	// Context window management
+	contextTokens  int  // estimated token count after last turn
+	contextLimit   int  // max context window (default 8192)
+	compactPending bool // true during compaction streaming
+	compactKeep    int  // number of messages to keep during compaction
 }
 
 // chatEntry is a rendered message in the history.
@@ -77,6 +85,7 @@ func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelNam
 		markdown:     true,
 		historyIdx:   -1,
 		session:      sess,
+		contextLimit: 8192,
 	}
 }
 
@@ -91,19 +100,23 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 		}
 		history[i] = chatEntry{role: m.Role, content: c}
 	}
-	return ChatModel{
+	msgs := append([]docker.ChatMessage{}, sess.Messages...)
+	cm := ChatModel{
 		socketPath:   socketPath,
 		systemPrompt: systemPrompt,
 		params:       params,
 		modelName:    sess.ModelName,
 		modelTag:     sess.ModelTag,
-		messages:     append([]docker.ChatMessage{}, sess.Messages...),
+		messages:     msgs,
 		history:      history,
 		textarea:     ta,
 		markdown:     true,
 		historyIdx:   -1,
 		session:      sess,
+		contextLimit: 8192,
 	}
+	cm.contextTokens = estimateTokens(cm.buildMessages())
+	return cm
 }
 
 // spinnerFrames are the animation frames for the inline spinner.
@@ -233,14 +246,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.streaming = ""
 			m.turnContent = ""
 			m.toolStatus = ""
+			m.streamStart = time.Now()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFunc = cancel
 
-			toolDefs := toDockerToolDefs(tools.AllDefinitions())
+			var toolDefs []docker.ToolDefinition
 			executor := func(ctx context.Context, name, argsJSON string) (string, bool) {
 				r := tools.Execute(ctx, name, argsJSON)
 				return r.Content, r.IsError
+			}
+			if needsTools(text) {
+				toolDefs = toDockerToolDefs(tools.AllDefinitions())
 			}
 			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
@@ -260,14 +277,51 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		evt := msg.Event
 
 		if evt.Done {
-			// Streaming complete — save to history and auto-save session
-			if m.streaming != "" {
+			// Compaction complete — replace old messages with summary + recent
+			if m.compactPending {
+				summary := m.streaming
+				if summary == "" {
+					summary = m.turnContent
+				}
+				m.compactPending = false
+				m.streaming = ""
+				m.turnContent = ""
+				m.isStream = false
+				m.cancelFunc = nil
+				m.eventCh = nil
+				m.toolStatus = ""
+
+				if summary != "" {
+					m.messages = append(
+						[]docker.ChatMessage{
+							docker.NewChatMessage("user", "[Conversation summary]\n\n"+summary),
+							docker.NewChatMessage("assistant", "Understood, I have the context from our earlier conversation."),
+						},
+						m.messages[m.compactKeep:]...,
+					)
+				}
+				m.contextTokens = estimateTokens(m.buildMessages())
 				m.history = append(m.history, chatEntry{
 					role:    "assistant",
-					content: m.streaming,
+					content: fmt.Sprintf("Context compacted. ~%s / %s tokens", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit)),
 				})
-				m.turnContent += m.streaming
+				m.saveSession()
+				m.updateViewport()
+				return m, nil
 			}
+
+			// Streaming complete — save to history and auto-save session
+			if m.streaming != "" {
+				cleaned, _ := stripThinkBlock(m.streaming)
+				if cleaned != "" {
+					m.history = append(m.history, chatEntry{
+						role:    "assistant",
+						content: cleaned,
+					})
+				}
+				m.turnContent += cleaned
+			}
+			m.thinking = false
 			// Commit the full turn as one assistant message (avoids consecutive assistant roles).
 			if m.turnContent != "" {
 				m.messages = append(m.messages, docker.NewChatMessage("assistant", m.turnContent))
@@ -295,18 +349,28 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.cancelFunc = nil
 			m.eventCh = nil
 			m.toolStatus = ""
+			m.contextTokens = estimateTokens(m.buildMessages())
 			m.saveSession()
 			m.updateViewport()
+
+			// Auto-compaction: trigger if over 85% of context limit
+			if m.contextTokens > int(float64(m.contextLimit)*0.85) && len(m.messages) > 8 {
+				return m.startCompaction()
+			}
+
 			return m, nil
 		}
 
 		if evt.Error != "" {
 			// If we had partial content, keep it in history
 			if m.streaming != "" {
-				m.history = append(m.history, chatEntry{
-					role:    "assistant",
-					content: m.streaming,
-				})
+				cleaned, _ := stripThinkBlock(m.streaming)
+				if cleaned != "" {
+					m.history = append(m.history, chatEntry{
+						role:    "assistant",
+						content: cleaned,
+					})
+				}
 			}
 			m.history = append(m.history, chatEntry{
 				role:    "error",
@@ -337,12 +401,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if evt.ToolStart != nil {
 			// Flush any accumulated text before tool use.
 			if m.streaming != "" {
-				m.history = append(m.history, chatEntry{
-					role:    "assistant",
-					content: m.streaming,
-				})
-				m.turnContent += m.streaming
+				cleaned, _ := stripThinkBlock(m.streaming)
+				if cleaned != "" {
+					m.history = append(m.history, chatEntry{
+						role:    "assistant",
+						content: cleaned,
+					})
+					m.turnContent += cleaned
+				}
 				m.streaming = ""
+				m.thinking = false
 			}
 			m.toolStatus = fmt.Sprintf("Running %s...", evt.ToolStart.Name)
 			m.history = append(m.history, chatEntry{
@@ -366,6 +434,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		if evt.Token != "" {
 			m.streaming += evt.Token
+			_, m.thinking = stripThinkBlock(m.streaming)
 			m.updateViewport()
 		}
 		return m, waitForEvent(m.eventCh)
@@ -392,6 +461,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.messages = nil
 		m.history = nil
 		m.session = sess
+		m.contextTokens = estimateTokens(m.buildMessages())
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
 			content: "Session cleared. Starting fresh.",
@@ -409,14 +479,24 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		}
 
 	case "/models":
+		socketPath := m.socketPath
 		return m, func() tea.Msg {
-			downloaded, dlErr := docker.ListModels()
-			available, srErr := docker.SearchModels()
+			var downloaded []docker.DockerModel
+			var dlErr error
+			if isRemoteSocket(socketPath) {
+				downloaded, dlErr = docker.ListRemoteModels(socketPath)
+			} else {
+				downloaded, dlErr = docker.ListModels()
+			}
 			if dlErr != nil {
 				return ShowModelsMsg{Err: dlErr}
 			}
+			if isRemoteSocket(socketPath) {
+				// No Docker Hub search for remote servers
+				return ShowModelsMsg{Downloaded: downloaded}
+			}
+			available, srErr := docker.SearchModels()
 			if srErr != nil {
-				// Non-fatal: show downloaded models even if search fails
 				return ShowModelsMsg{Downloaded: downloaded}
 			}
 			return ShowModelsMsg{Downloaded: downloaded, Available: available}
@@ -463,6 +543,33 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 	case "/init":
 		return m.handleInit()
+
+	case "/context":
+		sysMsgs := m.buildMessages()[:1] // system prompt only
+		sysTokens := estimateTokens(sysMsgs)
+		convTokens := estimateTokens(m.messages)
+		total := sysTokens + convTokens
+		pct := 0
+		if m.contextLimit > 0 {
+			pct = total * 100 / m.contextLimit
+		}
+		m.contextTokens = total
+		m.history = append(m.history, chatEntry{
+			role: "assistant",
+			content: fmt.Sprintf("System prompt:   ~%s tokens\nConversation:    ~%s tokens (%d messages)\nTotal estimated: ~%s / %s (%d%%)",
+				formatTokenCount(sysTokens),
+				formatTokenCount(convTokens),
+				len(m.messages),
+				formatTokenCount(total),
+				formatTokenCount(m.contextLimit),
+				pct,
+			),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/compact":
+		return m.startCompaction()
 
 	case "/copy":
 		var lastAssistant string
@@ -544,7 +651,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init, /context, /compact", text),
 		})
 		m.updateViewport()
 		return m, nil
@@ -556,14 +663,33 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 //go:embed prompts/tools.md
 var toolSystemPrompt string
 
+// compactPromptTemplate is the prompt used to summarize older messages.
+//
+//go:embed prompts/compact.md
+var compactPromptTemplate string
+
+// estimateTokens returns a rough token count for a set of messages.
+// Uses the chars/4 heuristic plus per-message overhead.
+func estimateTokens(messages []docker.ChatMessage) int {
+	total := 0
+	for _, m := range messages {
+		if m.Content != nil {
+			total += len(*m.Content)/4 + 4
+		} else {
+			total += 4 // per-message overhead even without content
+		}
+	}
+	return total
+}
+
 // buildMessages prepends the system prompt to the conversation messages.
 func (m *ChatModel) buildMessages() []docker.ChatMessage {
 	msgs := make([]docker.ChatMessage, 0, len(m.messages)+2)
 
-	// Combine user system prompt with tool instructions.
+	// Directives first (short, high-priority), then user/project context.
 	sysPrompt := toolSystemPrompt
 	if m.systemPrompt != "" {
-		sysPrompt = m.systemPrompt + "\n\n" + toolSystemPrompt
+		sysPrompt = toolSystemPrompt + "\n\n" + m.systemPrompt
 	}
 	msgs = append(msgs, docker.NewChatMessage("system", sysPrompt))
 	msgs = append(msgs, m.messages...)
@@ -807,6 +933,116 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 	return m, nil
 }
 
+// needsTools returns true if the user's message likely requires tool access.
+// This prevents local models from calling tools for general questions.
+func needsTools(text string) bool {
+	lower := strings.ToLower(text)
+	keywords := []string{
+		"file", "folder", "directory", "dir", "path",
+		"code", "read", "show", "open", "cat", "list",
+		"find", "search", "grep", "glob",
+		"git", "commit", "diff", "branch", "log", "status",
+		"pr", "issue", "release",
+		"project", "struct", "func ", "import", "package",
+		"error", "bug", "fix", "test",
+		"what's in", "what is in", "how many",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripThinkBlock removes <think>...</think> content from streamed text.
+// Returns the cleaned text and whether we're currently inside a think block.
+func stripThinkBlock(s string) (cleaned string, isThinking bool) {
+	// Fast path: no think tag at all.
+	if !strings.Contains(s, "<think>") {
+		return s, false
+	}
+
+	result := s
+	for {
+		start := strings.Index(result, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(result[start:], "</think>")
+		if end == -1 {
+			// Still inside a think block — strip from <think> onward.
+			return strings.TrimSpace(result[:start]), true
+		}
+		// Remove the complete think block.
+		endPos := start + end + len("</think>")
+		result = result[:start] + result[endPos:]
+	}
+	return strings.TrimSpace(result), false
+}
+
+// formatTokenCount formats a token count for display (e.g. 3160 → "3.2k").
+func formatTokenCount(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// startCompaction initiates context compaction by summarizing older messages.
+func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
+	if len(m.messages) <= 8 {
+		convTokens := estimateTokens(m.messages)
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Nothing to compact — conversation is only ~%s tokens (%d messages).", formatTokenCount(convTokens), len(m.messages)),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Keep last 4 user/assistant pairs (up to 8 messages).
+	keep := 8
+	compactKeep := len(m.messages) - keep
+
+	// Format older messages as text for summarization.
+	var convo strings.Builder
+	for _, msg := range m.messages[:compactKeep] {
+		role := msg.Role
+		content := ""
+		if msg.Content != nil {
+			content = *msg.Content
+		}
+		convo.WriteString(fmt.Sprintf("%s: %s\n\n", role, content))
+	}
+
+	prompt := fmt.Sprintf(compactPromptTemplate, convo.String())
+
+	m.compactPending = true
+	m.compactKeep = compactKeep
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: "Compacting context...",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	compactMsgs := []docker.ChatMessage{
+		docker.NewChatMessage("user", prompt),
+	}
+	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, compactMsgs, m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
 func (m *ChatModel) updateViewport() {
 	var b strings.Builder
 
@@ -836,15 +1072,18 @@ func (m *ChatModel) updateViewport() {
 		b.WriteString(ToolLabelStyle.Render(frame+" "+m.toolStatus) + "\n")
 	}
 
-	// Show streaming text
+	// Show streaming text (with think blocks stripped)
 	if m.isStream && m.streaming != "" {
-		b.WriteString(AssistantLabelStyle.Render("Assistant: "))
-		if m.markdown {
-			b.WriteString(RenderMarkdown(m.streaming, m.width))
-		} else {
-			b.WriteString(StreamingStyle.Render(m.streaming))
+		displayText, _ := stripThinkBlock(m.streaming)
+		if displayText != "" {
+			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
+			if m.markdown {
+				b.WriteString(RenderMarkdown(displayText, m.width))
+			} else {
+				b.WriteString(StreamingStyle.Render(displayText))
+			}
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 
 	wrapped := lipgloss.NewStyle().Width(m.width).Render(b.String())
@@ -864,10 +1103,36 @@ func (m ChatModel) View() string {
 	var status string
 	if m.toolStatus != "" {
 		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
+	} else if m.isStream && m.thinking {
+		elapsed := time.Since(m.streamStart).Truncate(time.Second)
+		status = HelpStyle.Render(fmt.Sprintf("%s reasoning... (%s)", frame, elapsed))
 	} else if m.isStream {
-		status = HelpStyle.Render(frame + " thinking...")
+		elapsed := time.Since(m.streamStart).Truncate(time.Second)
+		status = HelpStyle.Render(fmt.Sprintf("%s thinking... (%s)", frame, elapsed))
 	} else {
-		status = HelpStyle.Render("enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit")
+		help := "enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit"
+		tokenInfo := fmt.Sprintf("~%s / %s", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit))
+
+		// Color-code based on usage ratio.
+		ratio := float64(m.contextTokens) / float64(m.contextLimit)
+		var tokenStyled string
+		switch {
+		case ratio > 0.85:
+			tokenStyled = TokenCritStyle.Render(tokenInfo)
+		case ratio > 0.60:
+			tokenStyled = TokenWarnStyle.Render(tokenInfo)
+		default:
+			tokenStyled = TokenDimStyle.Render(tokenInfo)
+		}
+
+		// Right-align the token count.
+		helpWidth := lipgloss.Width(help)
+		tokenWidth := lipgloss.Width(tokenInfo)
+		gap := m.width - helpWidth - tokenWidth
+		if gap < 2 {
+			gap = 2
+		}
+		status = HelpStyle.Render(help) + strings.Repeat(" ", gap) + tokenStyled
 	}
 
 	return fmt.Sprintf("%s\n%s\n%s\n%s",
@@ -900,10 +1165,10 @@ func summarizeToolResult(content string, isError bool) string {
 	}
 	const maxPreviewLines = 6
 	if len(lines) <= maxPreviewLines {
-		return strings.TrimSpace(content)
+		return fmt.Sprintf("(%d lines)\n%s", len(lines), strings.TrimSpace(content))
 	}
 	preview := strings.Join(lines[:maxPreviewLines], "\n")
-	return fmt.Sprintf("%s\n... (%d more lines)", preview, len(lines)-maxPreviewLines)
+	return fmt.Sprintf("(%d lines total)\n%s\n... (%d more lines)", len(lines), preview, len(lines)-maxPreviewLines)
 }
 
 // toDockerToolDefs converts tools.Definition slice to docker.ToolDefinition slice.

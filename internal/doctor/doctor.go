@@ -6,9 +6,11 @@ package doctor
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 )
@@ -20,9 +22,56 @@ type CheckResult struct {
 	Message string // guidance shown on failure
 }
 
+// isTCP returns true if the socket path points to a TCP endpoint.
+func isTCP(socketPath string) bool {
+	if strings.HasPrefix(socketPath, "tcp://") {
+		return true
+	}
+	if _, _, err := net.SplitHostPort(socketPath); err == nil {
+		return true
+	}
+	return false
+}
+
 // RunChecks performs the startup diagnostic sequence, stopping at the first failure.
 // socketPath is the resolved inference socket path.
 func RunChecks(socketPath string) []CheckResult {
+	if isTCP(socketPath) {
+		return runTCPChecks(socketPath)
+	}
+	return runLocalChecks(socketPath)
+}
+
+// runTCPChecks validates a TCP endpoint (remote Ollama / Model Runner).
+func runTCPChecks(socketPath string) []CheckResult {
+	var results []CheckResult
+
+	addr := strings.TrimPrefix(socketPath, "tcp://")
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		results = append(results, CheckResult{
+			Name:   "Endpoint reachable",
+			Passed: false,
+			Message: fmt.Sprintf(`Cannot connect to %s
+
+  • Check that the remote server is running
+  • Verify your SSH tunnel or network connection
+  • Try: curl http://%s/v1/models`, addr, addr),
+		})
+		return results
+	}
+	conn.Close()
+	results = append(results, CheckResult{
+		Name:    "Endpoint reachable",
+		Passed:  true,
+		Message: addr,
+	})
+
+	return results
+}
+
+// runLocalChecks validates the local Docker Model Runner setup.
+func runLocalChecks(socketPath string) []CheckResult {
 	var results []CheckResult
 
 	// 1. Is Docker installed?

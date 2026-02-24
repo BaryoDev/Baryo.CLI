@@ -5,6 +5,10 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,6 +21,7 @@ type screen int
 const (
 	screenLoading screen = iota
 	screenModelSelect
+	screenModelLoading // waiting for remote model to load into memory
 	screenChat
 	screenSessionSelect
 	screenModelBrowser
@@ -38,6 +43,9 @@ type AppModel struct {
 	sessionSelect SessionSelectModel
 	modelBrowser  ModelBrowserModel
 	chat          ChatModel
+
+	pendingModel *docker.DockerModel // model waiting to be loaded
+	loadStart    time.Time           // when model loading began
 
 	err    error
 	width  int
@@ -118,7 +126,7 @@ func (m AppModel) Init() tea.Cmd {
 			return ShowSessionsMsg{Sessions: m.sessionList}
 		}
 	}
-	return tea.Batch(m.spinner.Tick, loadModels)
+	return tea.Batch(m.spinner.Tick, m.loadModels())
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -175,6 +183,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLoading(msg)
 	case screenModelSelect:
 		return m.updateModelSelect(msg)
+	case screenModelLoading:
+		return m.updateModelLoading(msg)
 	case screenChat:
 		return m.updateChat(msg)
 	case screenSessionSelect:
@@ -194,14 +204,7 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.preselectedModel != nil {
-			m.screen = screenChat
-			m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, m.preselectedModel.Name, m.preselectedModel.Tag)
-			var cmd tea.Cmd
-			m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
-				Width:  m.width,
-				Height: m.height,
-			})
-			return m, cmd
+			return m.startModelLoading(*m.preselectedModel)
 		}
 		m.screen = screenModelSelect
 		m.modelSelect = NewModelSelect(msg.Models)
@@ -219,20 +222,29 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m AppModel) updateModelSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ModelSelectedMsg:
-		m.screen = screenChat
-		m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, msg.Model.Name, msg.Model.Tag)
-		// Forward the stored window size so the viewport initializes
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
-			Width:  m.width,
-			Height: m.height,
-		})
-		return m, cmd
+		return m.startModelLoading(msg.Model)
 	default:
 		var cmd tea.Cmd
 		m.modelSelect, cmd = m.modelSelect.Update(msg)
 		return m, cmd
 	}
+}
+
+func (m AppModel) updateModelLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case ModelPreloadedMsg:
+		if msg.Err != nil {
+			// Non-fatal: proceed to chat anyway, model may still work.
+		}
+		cmd := m.transitionToChat(*m.pendingModel)
+		m.pendingModel = nil
+		return m, cmd
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m AppModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -250,14 +262,7 @@ func (m AppModel) updateSessionSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m AppModel) updateModelBrowser(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ModelSelectedMsg:
-		m.screen = screenChat
-		m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, msg.Model.Name, msg.Model.Tag)
-		var cmd tea.Cmd
-		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
-			Width:  m.width,
-			Height: m.height,
-		})
-		return m, cmd
+		return m.startModelLoading(msg.Model)
 	default:
 		var cmd tea.Cmd
 		m.modelBrowser, cmd = m.modelBrowser.Update(msg)
@@ -277,6 +282,16 @@ func (m AppModel) View() string {
 	case screenModelSelect:
 		return m.modelSelect.View()
 
+	case screenModelLoading:
+		elapsed := time.Since(m.loadStart).Truncate(time.Second)
+		name := ""
+		if m.pendingModel != nil {
+			name = m.pendingModel.Name
+		}
+		return fmt.Sprintf("\n  %s Loading %s into memory... (%s)\n\n  %s",
+			m.spinner.View(), name, elapsed,
+			HelpStyle.Render("This may take a few minutes for large models"))
+
 	case screenChat:
 		return m.chat.View()
 
@@ -290,8 +305,59 @@ func (m AppModel) View() string {
 	return ""
 }
 
-// loadModels is a Cmd that fetches the docker model list.
-func loadModels() tea.Msg {
-	models, err := docker.ListModels()
-	return ModelsLoadedMsg{Models: models, Err: err}
+// loadModels returns a Cmd that fetches the model list.
+// For TCP/remote connections, it queries the server API instead of docker CLI.
+func (m AppModel) loadModels() tea.Cmd {
+	socketPath := m.socketPath
+	return func() tea.Msg {
+		if isRemoteSocket(socketPath) {
+			models, err := docker.ListRemoteModels(socketPath)
+			return ModelsLoadedMsg{Models: models, Err: err}
+		}
+		models, err := docker.ListModels()
+		return ModelsLoadedMsg{Models: models, Err: err}
+	}
+}
+
+// ModelPreloadedMsg signals that the remote model has been loaded.
+type ModelPreloadedMsg struct {
+	Err error
+}
+
+// preloadModel returns a Cmd that loads a model on a remote Ollama server.
+func preloadModel(socketPath, modelTag string) tea.Cmd {
+	return func() tea.Msg {
+		err := docker.PreloadModel(socketPath, modelTag)
+		return ModelPreloadedMsg{Err: err}
+	}
+}
+
+// transitionToChat sets up the chat screen for the given model.
+func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
+	m.screen = screenChat
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, model.Name, model.Tag)
+	var cmd tea.Cmd
+	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
+		Width:  m.width,
+		Height: m.height,
+	})
+	return cmd
+}
+
+// startModelLoading transitions to the loading screen for remote models,
+// or directly to chat for local models.
+func (m *AppModel) startModelLoading(model docker.DockerModel) (tea.Model, tea.Cmd) {
+	if isRemoteSocket(m.socketPath) {
+		m.screen = screenModelLoading
+		m.pendingModel = &model
+		m.loadStart = time.Now()
+		return *m, tea.Batch(m.spinner.Tick, preloadModel(m.socketPath, model.Tag))
+	}
+	cmd := m.transitionToChat(model)
+	return *m, cmd
+}
+
+// isRemoteSocket returns true if the socket path is a TCP endpoint.
+func isRemoteSocket(socketPath string) bool {
+	return strings.HasPrefix(socketPath, "tcp://")
 }

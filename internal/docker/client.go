@@ -19,15 +19,23 @@ import (
 
 // newHTTPClient creates an HTTP client that connects via unix socket or TCP.
 // TCP paths are detected by "tcp://" prefix or "host:port" format.
+// Remote servers (TCP) get a longer header timeout to allow for model loading.
 func newHTTPClient(socketPath string) *http.Client {
+	network, addr := parseSocketAddr(socketPath)
 	dial := func(_ context.Context, _, _ string) (net.Conn, error) {
-		network, addr := parseSocketAddr(socketPath)
 		return net.DialTimeout(network, addr, 30*time.Second)
 	}
+
+	// Remote Ollama servers may need minutes to load large models on first request.
+	headerTimeout := 120 * time.Second
+	if network == "tcp" {
+		headerTimeout = 10 * time.Minute
+	}
+
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext:           dial,
-			ResponseHeaderTimeout: 120 * time.Second,
+			ResponseHeaderTimeout: headerTimeout,
 		},
 	}
 }
@@ -46,7 +54,8 @@ func parseSocketAddr(socketPath string) (network, addr string) {
 
 // streamResult holds the final state after a raw streaming call completes.
 type streamResult struct {
-	ToolCalls []ToolCall // accumulated tool calls (if any)
+	ToolCalls []ToolCall  // accumulated tool calls (if any)
+	Usage     *UsageStats // token usage from the final SSE frame (if reported)
 }
 
 // streamChatRaw sends a chat request and streams events into the returned channel.
@@ -114,6 +123,7 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 			args     strings.Builder
 		}
 		var toolAccs []toolCallAcc
+		var lastUsage *UsageStats
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -131,6 +141,11 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 			var chunk StreamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue
+			}
+
+			// Capture usage stats if present (typically in the final frame).
+			if chunk.Usage != nil {
+				lastUsage = chunk.Usage
 			}
 
 			for _, choice := range chunk.Choices {
@@ -175,7 +190,7 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 			})
 		}
 
-		resCh <- streamResult{ToolCalls: calls}
+		resCh <- streamResult{ToolCalls: calls, Usage: lastUsage}
 	}()
 
 	return ch, resCh
@@ -183,7 +198,7 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 
 // StreamChat sends a chat request and streams events. No tools are provided.
 func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams) <-chan StreamEvent {
-	ch, _ := streamChatRaw(ctx, socketPath, model, messages, params, nil)
+	ch, resCh := streamChatRaw(ctx, socketPath, model, messages, params, nil)
 	out := make(chan StreamEvent, 64)
 	go func() {
 		defer close(out)
@@ -194,7 +209,11 @@ func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMe
 				return
 			}
 		}
-		out <- StreamEvent{Done: true}
+		var usage *UsageStats
+		if res, ok := <-resCh; ok {
+			usage = res.Usage
+		}
+		out <- StreamEvent{Done: true, Usage: usage}
 	}()
 	return out
 }

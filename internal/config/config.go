@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/tunnel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +28,7 @@ type Config struct {
 	SocketPath   string            `yaml:"socket_path"`
 	SystemPrompt string            `yaml:"system_prompt"`
 	Params       docker.ChatParams `yaml:"params"`
+	SSHTunnel    *tunnel.Config    `yaml:"ssh_tunnel"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -116,6 +119,9 @@ func loadFile(path string, cfg *Config) {
 	if file.Params.MaxTokens != nil {
 		cfg.Params.MaxTokens = file.Params.MaxTokens
 	}
+	if file.SSHTunnel != nil && file.SSHTunnel.IsConfigured() {
+		cfg.SSHTunnel = file.SSHTunnel
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -148,7 +154,7 @@ func applyEnv(cfg *Config) {
 
 // ApplyCLI merges CLI flag values on top of config (highest precedence).
 // Only non-empty values are applied.
-func (c *Config) ApplyCLI(model, systemPrompt string, params docker.ChatParams) {
+func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params docker.ChatParams) {
 	if model != "" {
 		c.Model = model
 	}
@@ -164,4 +170,36 @@ func (c *Config) ApplyCLI(model, systemPrompt string, params docker.ChatParams) 
 	if params.MaxTokens != nil {
 		c.Params.MaxTokens = params.MaxTokens
 	}
+	if tunnelFlag != "" {
+		c.SSHTunnel = parseTunnelFlag(tunnelFlag)
+	}
+}
+
+// parseTunnelFlag parses a --tunnel flag value like "user@host" or "user@host:ssh_port"
+// into a tunnel.Config with sensible defaults.
+func parseTunnelFlag(val string) *tunnel.Config {
+	cfg := &tunnel.Config{
+		RemotePort: 11434,
+		LocalPort:  11434,
+		SSHPort:    22,
+	}
+
+	// Split user@host:port
+	parts := strings.SplitN(val, "@", 2)
+	if len(parts) == 2 {
+		cfg.User = parts[0]
+		cfg.Host = parts[1]
+	} else {
+		cfg.Host = val
+	}
+
+	// Check for :port suffix on host (SSH port override)
+	if h, p, found := strings.Cut(cfg.Host, ":"); found {
+		if port, err := strconv.Atoi(p); err == nil {
+			cfg.Host = h
+			cfg.SSHPort = port
+		}
+	}
+
+	return cfg
 }

@@ -6,7 +6,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/arnelirobles/baryo-cli/internal/cli"
@@ -15,6 +17,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
+	"github.com/arnelirobles/baryo-cli/internal/tunnel"
 )
 
 func main() {
@@ -29,7 +32,12 @@ func main() {
 		return
 	case cli.ModeDoctor:
 		cfg := config.Load()
-		fmt.Println("Baryo — diagnostic check\n")
+		cfg.ApplyCLI("", "", flags.Tunnel, docker.ChatParams{})
+		tun := startTunnel(&cfg)
+		if tun != nil {
+			defer tun.Close()
+		}
+		fmt.Println("Baryo — diagnostic check")
 		results := doctor.RunChecks(cfg.SocketPath)
 		fmt.Print(doctor.FormatResults(results))
 		if doctor.AllPassed(results) {
@@ -42,11 +50,17 @@ func main() {
 
 	// Load config and apply CLI flag overrides
 	cfg := config.Load()
-	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Params)
+	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Tunnel, flags.Params)
+
+	// Start SSH tunnel if configured
+	tun := startTunnel(&cfg)
+	if tun != nil {
+		defer tun.Close()
+	}
 
 	// Load BARYO.md and skills.md project instructions
 	if instructions := config.LoadProjectInstructions(); instructions != "" {
-		cfg.SystemPrompt = instructions + "\n\n" + cfg.SystemPrompt
+		cfg.SystemPrompt = cfg.SystemPrompt + "\n\n<project-context>\n" + instructions + "\n</project-context>"
 	}
 
 	// Run startup health checks unless skipped
@@ -62,7 +76,7 @@ func main() {
 
 	switch flags.Mode() {
 	case cli.ModePrint:
-		model, err := resolveModel(cfg.Model)
+		model, err := resolveModel(&cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -104,7 +118,7 @@ func main() {
 			}
 			opts = append(opts, tui.WithSession(sess))
 		} else if cfg.Model != "" {
-			model, err := resolveModel(cfg.Model)
+			model, err := resolveModel(&cfg)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -120,9 +134,48 @@ func main() {
 	}
 }
 
+// startTunnel starts an SSH tunnel if configured and overrides SocketPath.
+// Returns nil if no tunnel is configured or the port is already open.
+func startTunnel(cfg *config.Config) *tunnel.Tunnel {
+	if !cfg.SSHTunnel.IsConfigured() {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "Starting SSH tunnel to %s@%s...\n", cfg.SSHTunnel.User, cfg.SSHTunnel.Host)
+	tun, err := tunnel.Start(cfg.SSHTunnel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.SocketPath = cfg.SSHTunnel.LocalAddr()
+	if tun != nil {
+		fmt.Fprintf(os.Stderr, "SSH tunnel active → %s\n", cfg.SocketPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "Port already open → %s\n", cfg.SocketPath)
+	}
+	return tun
+}
+
 // resolveModel lists available models and matches the query.
-// If query is empty, the first available model is returned.
-func resolveModel(query string) (docker.DockerModel, error) {
+// For TCP connections, it queries the remote server's API for available models.
+func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
+	if isRemoteSocket(cfg.SocketPath) {
+		models, err := docker.ListRemoteModels(cfg.SocketPath)
+		if err != nil {
+			// Fallback: if we can't list models but have a model name, use it directly.
+			if cfg.Model != "" {
+				return docker.DockerModel{Name: cfg.Model, Tag: cfg.Model}, nil
+			}
+			return docker.DockerModel{}, fmt.Errorf("cannot list remote models: %w", err)
+		}
+		if len(models) == 0 {
+			return docker.DockerModel{}, fmt.Errorf("no models available on the remote server")
+		}
+		if cfg.Model == "" {
+			return models[0], nil
+		}
+		return cli.MatchModel(cfg.Model, models)
+	}
+
 	models, err := docker.ListModels()
 	if err != nil {
 		return docker.DockerModel{}, err
@@ -130,8 +183,17 @@ func resolveModel(query string) (docker.DockerModel, error) {
 	if len(models) == 0 {
 		return docker.DockerModel{}, fmt.Errorf("no models available — pull a model with: docker model pull <name>")
 	}
-	if query == "" {
+	if cfg.Model == "" {
 		return models[0], nil
 	}
-	return cli.MatchModel(query, models)
+	return cli.MatchModel(cfg.Model, models)
+}
+
+func isRemoteSocket(socketPath string) bool {
+	if strings.HasPrefix(socketPath, "tcp://") {
+		return true
+	}
+	// Bare host:port like "localhost:11434"
+	_, _, err := net.SplitHostPort(socketPath)
+	return err == nil
 }

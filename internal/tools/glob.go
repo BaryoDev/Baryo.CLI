@@ -130,6 +130,7 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 	}
 
 	var b strings.Builder
+	fmt.Fprintf(&b, "%d file(s) matched\n\n", total)
 	for _, f := range filtered {
 		b.WriteString(f)
 		b.WriteByte('\n')
