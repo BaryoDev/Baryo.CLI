@@ -361,20 +361,7 @@ Baryo checks these locations (all are optional, all found are combined):
 | `.baryo/skills.md` | Project config directory — alternative location |
 | `~/.baryo/skills.md` | User home — global skills for all projects |
 
-Use the `/init` command inside the TUI to generate a starter `BARYO.md` from your project structure.
-
-Example `BARYO.md`:
-
-```markdown
-# Project Instructions
-
-This is a Go CLI application using Bubble Tea for the TUI.
-
-- Use Go 1.25+ idioms
-- Follow the existing code style in internal/
-- Run `go vet ./...` before suggesting changes
-- Prefer editing existing files over creating new ones
-```
+Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads your project files (README, config files, directory structure, recent commits) and writes tailored instructions automatically.
 
 ## How it works
 
