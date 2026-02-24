@@ -6,14 +6,14 @@
             "bin": [
                 "baryo.exe"
             ],
-            "hash": "27680fb8026c6cf9b478ea4a6c9549a3dbf4f4634703e2873d74447e33f87b55"
+            "hash": "d176336daccd1f7907382fd015b96c17cf90254fc526f2b65d11ad907174c5db"
         },
         "arm64": {
             "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.2.0/baryo_0.2.0_windows_arm64.zip",
             "bin": [
                 "baryo.exe"
             ],
-            "hash": "2c6d1351a0c4cb30be16f0daec90eb5d12aa9e09886e067d16c8861e4c2cf131"
+            "hash": "1cd0ba5bef9a426d53c324ac0239e937975f39b4963d3eb5ee927e30b4116a75"
         }
     },
     "homepage": "https://github.com/BaryoDev/Baryo.CLI",
