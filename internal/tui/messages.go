@@ -54,3 +54,24 @@ type PullStatusMsg struct {
 
 // ModelBrowserCancelMsg is sent when the user presses esc on the model browser.
 type ModelBrowserCancelMsg struct{}
+
+// SearchResultMsg carries web search results back to the chat.
+type SearchResultMsg struct {
+	Query   string
+	Results string
+	Err     error
+}
+
+// FetchResultMsg carries fetched URL content back to the chat.
+type FetchResultMsg struct {
+	URL     string
+	Content string
+	Err     error
+}
+
+// MentionCandidatesMsg carries async glob results for @-mention completion.
+type MentionCandidatesMsg struct {
+	Prefix     string   // the partial text that was globbed
+	StartPos   int      // byte position of @ in the text
+	Candidates []string // matched file paths
+}

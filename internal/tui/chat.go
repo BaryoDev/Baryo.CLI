@@ -529,6 +529,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.saveSession()
 		m.updateViewport()
 		return m, nil
+
+	case MentionCandidatesMsg:
+		m.handleMentionCandidates(msg)
+		return m, nil
 	}
 
 	// Update sub-components
@@ -537,8 +541,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	if !m.isStream {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
-		// Live @-mention preview: update candidates as user types
-		m.updateMentionPreview()
+		// Live @-mention preview: kick off async glob as user types
+		if mentionCmd := m.updateMentionPreview(); mentionCmd != nil {
+			cmds = append(cmds, mentionCmd)
+		}
 	}
 
 	m.viewport, cmd = m.viewport.Update(msg)

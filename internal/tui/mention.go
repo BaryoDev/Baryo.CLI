@@ -9,9 +9,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
@@ -27,7 +30,8 @@ type mentionCompletion struct {
 	prefix     string   // the partial text after @
 	candidates []string // matched file paths
 	index      int      // current selection in candidates
-	startPos   int      // position of @ in the text
+	startPos   int      // byte position of @ in the text
+	pending    string   // prefix currently being globbed (empty if none in flight)
 }
 
 // fileContext holds the content of an @-mentioned file.
@@ -37,19 +41,28 @@ type fileContext struct {
 	lines   int
 }
 
-// textareaCursorPos returns the absolute cursor position in the textarea value.
-func textareaCursorPos(value string, line int, col int) int {
+// textareaCursorPos returns the absolute byte position of the cursor in the
+// textarea value. It takes the line number and the rune offset within that line
+// (from LineInfo().CharOffset) and converts to a byte position.
+func textareaCursorPos(value string, line int, charOffset int) int {
 	lines := strings.Split(value, "\n")
 	pos := 0
 	for i := 0; i < line && i < len(lines); i++ {
 		pos += len(lines[i]) + 1 // +1 for newline
 	}
-	pos += col
+	// Convert rune offset to byte offset within the current line
+	if line < len(lines) {
+		runes := []rune(lines[line])
+		if charOffset > len(runes) {
+			charOffset = len(runes)
+		}
+		pos += len(string(runes[:charOffset]))
+	}
 	return pos
 }
 
 // findMentionAtCursor scans backward from cursor to find an @ preceded by
-// whitespace or start-of-string. Returns the start position, the partial
+// whitespace or start-of-string. Returns the start byte position, the partial
 // text after @, and whether a mention was found.
 func findMentionAtCursor(text string, cursorPos int) (start int, partial string, found bool) {
 	if cursorPos > len(text) {
@@ -77,8 +90,35 @@ func findMentionAtCursor(text string, cursorPos int) (start int, partial string,
 	return 0, "", false
 }
 
+// batchGitIgnored checks multiple paths against .gitignore in a single
+// git subprocess call. Returns a set of ignored paths.
+func batchGitIgnored(paths []string) map[string]bool {
+	ignored := make(map[string]bool)
+	if len(paths) == 0 {
+		return ignored
+	}
+
+	cmd := exec.Command("git", "check-ignore", "--stdin", "-z")
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n"))
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit code 1 = none ignored, other = git not available (allow all)
+		return ignored
+	}
+
+	// -z produces null-separated output
+	for _, p := range bytes.Split(out, []byte{0}) {
+		s := string(p)
+		if s != "" {
+			ignored[s] = true
+		}
+	}
+	return ignored
+}
+
 // globCompletions returns file paths matching the partial prefix.
 // Directories get a trailing /, .git/ and gitignored files are filtered out.
+// Uses a single batched git check-ignore call instead of per-file subprocess.
 //
 // When partial has no slash (e.g. "ma"), it matches both top-level ("ma*")
 // and recursively ("**/ma*") so deeper files like internal/match.go appear.
@@ -91,14 +131,19 @@ func globCompletions(partial string) []string {
 		patterns = append(patterns, "**/"+partial+"*")
 	}
 
-	ctx := context.Background()
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil
 	}
 
+	// Collect all glob matches first
 	seen := make(map[string]bool)
-	var results []string
+	type matchInfo struct {
+		relPath string
+		absPath string
+		isDir   bool
+	}
+	var allMatches []matchInfo
 
 	for _, pattern := range patterns {
 		matches, err := doublestar.Glob(os.DirFS("."), pattern)
@@ -118,66 +163,109 @@ func globCompletions(partial string) []string {
 			}
 
 			absPath := filepath.Join(cwd, m)
-
-			if tools.IsGitIgnored(ctx, absPath) {
-				continue
-			}
-
 			fi, err := os.Stat(absPath)
 			if err != nil {
 				continue
 			}
-			if fi.IsDir() {
-				results = append(results, m+"/")
-			} else {
-				results = append(results, m)
-			}
 
-			if len(results) >= maxCompletions {
-				return results
-			}
+			allMatches = append(allMatches, matchInfo{
+				relPath: m,
+				absPath: absPath,
+				isDir:   fi.IsDir(),
+			})
+		}
+	}
+
+	// Batch gitignore check — one subprocess for all paths
+	absPaths := make([]string, len(allMatches))
+	for i, m := range allMatches {
+		absPaths[i] = m.absPath
+	}
+	ignored := batchGitIgnored(absPaths)
+
+	// Build results, filtering ignored
+	var results []string
+	for _, m := range allMatches {
+		if ignored[m.absPath] {
+			continue
+		}
+		if m.isDir {
+			results = append(results, m.relPath+"/")
+		} else {
+			results = append(results, m.relPath)
+		}
+		if len(results) >= maxCompletions {
+			break
 		}
 	}
 	return results
 }
 
 // updateMentionPreview checks if the cursor is inside an @mention and
-// populates the candidate list for live display. Called after every keystroke.
-func (m *ChatModel) updateMentionPreview() {
+// kicks off async globbing if the prefix changed. Returns a tea.Cmd if
+// globbing needs to run, nil otherwise.
+func (m *ChatModel) updateMentionPreview() tea.Cmd {
 	text := m.textarea.Value()
-	cursorPos := textareaCursorPos(text, m.textarea.Line(), m.textarea.LineInfo().ColumnOffset)
+	cursorPos := textareaCursorPos(text, m.textarea.Line(), m.textarea.LineInfo().CharOffset)
 
 	start, partial, found := findMentionAtCursor(text, cursorPos)
 	if !found {
 		m.mention = mentionCompletion{}
-		return
+		return nil
 	}
 
-	// Only re-glob if the prefix changed
+	// Skip if prefix hasn't changed (already showing or already pending)
 	if m.mention.active && m.mention.prefix == partial {
+		return nil
+	}
+	if m.mention.pending == partial {
+		return nil
+	}
+
+	// Mark as pending and launch async glob
+	m.mention.pending = partial
+	capturedStart := start
+	capturedPartial := partial
+	return func() tea.Msg {
+		candidates := globCompletions(capturedPartial)
+		return MentionCandidatesMsg{
+			Prefix:     capturedPartial,
+			StartPos:   capturedStart,
+			Candidates: candidates,
+		}
+	}
+}
+
+// handleMentionCandidates processes the result of an async glob.
+func (m *ChatModel) handleMentionCandidates(msg MentionCandidatesMsg) {
+	m.mention.pending = ""
+
+	// Stale result — user typed more since we started globbing
+	text := m.textarea.Value()
+	cursorPos := textareaCursorPos(text, m.textarea.Line(), m.textarea.LineInfo().CharOffset)
+	_, currentPartial, found := findMentionAtCursor(text, cursorPos)
+	if !found || currentPartial != msg.Prefix {
 		return
 	}
 
-	candidates := globCompletions(partial)
-	if len(candidates) == 0 {
+	if len(msg.Candidates) == 0 {
 		m.mention = mentionCompletion{}
 		return
 	}
 
 	m.mention = mentionCompletion{
 		active:     true,
-		prefix:     partial,
-		candidates: candidates,
+		prefix:     msg.Prefix,
+		candidates: msg.Candidates,
 		index:      0,
-		startPos:   start,
+		startPos:   msg.StartPos,
 	}
 }
 
 // handleMentionTab processes a Tab keypress for @-mention completion.
-// Returns true if the tab was consumed (mention completion is active).
-func (m *ChatModel) handleMentionTab(forward bool) bool {
+func (m *ChatModel) handleMentionTab(forward bool) {
 	if !m.mention.active || len(m.mention.candidates) == 0 {
-		return false
+		return
 	}
 
 	if forward {
@@ -185,7 +273,6 @@ func (m *ChatModel) handleMentionTab(forward bool) bool {
 	} else {
 		m.mention.index = (m.mention.index - 1 + len(m.mention.candidates)) % len(m.mention.candidates)
 	}
-	return true
 }
 
 // handleMentionSelect applies the currently selected candidate to the textarea.
@@ -199,6 +286,8 @@ func (m *ChatModel) handleMentionSelect() {
 }
 
 // applyCompletion replaces the @partial with @candidate in the textarea.
+// Appends a trailing space after file completions (not directories) to prevent
+// the live preview from immediately re-triggering.
 func (m *ChatModel) applyCompletion() {
 	text := m.textarea.Value()
 	candidate := m.mention.candidates[m.mention.index]
@@ -207,18 +296,21 @@ func (m *ChatModel) applyCompletion() {
 	before := text[:m.mention.startPos]
 
 	// Find the end of the current mention text (from startPos)
-	cursorPos := textareaCursorPos(text, m.textarea.Line(), m.textarea.LineInfo().ColumnOffset)
+	cursorPos := textareaCursorPos(text, m.textarea.Line(), m.textarea.LineInfo().CharOffset)
 	after := text[cursorPos:]
 
-	newText := before + "@" + candidate + after
-	m.textarea.SetValue(newText)
+	// Append space after file selections so the preview doesn't re-trigger
+	suffix := ""
+	if !strings.HasSuffix(candidate, "/") {
+		suffix = " "
+	}
 
-	// SetValue places cursor at end; for the common case (mention at end) this is fine.
-	// If there's text after, we accept this tradeoff for v1.
+	newText := before + "@" + candidate + suffix + after
+	m.textarea.SetValue(newText)
 }
 
 // processAtMentions finds all @path tokens in the text, reads each file,
-// and returns the cleaned text, file contexts, and any errors.
+// and returns the original text, file contexts, and any errors.
 func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []string) {
 	fields := strings.Fields(text)
 	var contexts []fileContext
@@ -229,13 +321,17 @@ func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []str
 		if !strings.HasPrefix(field, "@") {
 			continue
 		}
-		// Check it's a real mention: field must start with @ and have content after
 		path := strings.TrimPrefix(field, "@")
 		if path == "" {
 			continue
 		}
-		// Ensure the @ was preceded by whitespace or is at start — since we split on
-		// fields, each field starting with @ is valid (not user@email.com which is one field)
+
+		// Strip trailing punctuation (e.g. @main.go, or @main.go.)
+		path = strings.TrimRight(path, ".,;:!?)")
+
+		if path == "" {
+			continue
+		}
 
 		// Deduplicate
 		if seen[path] {
@@ -255,7 +351,8 @@ func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []str
 }
 
 // readFileForMention reads a file for @-mention injection.
-// Enforces: must exist, within cwd, not a directory, not binary, not gitignored, not too large.
+// Enforces: must exist, within cwd, not a directory, not binary, not gitignored,
+// not too large, and resolves symlinks to prevent escaping the project directory.
 func readFileForMention(path string) (*fileContext, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -268,12 +365,27 @@ func readFileForMention(path string) (*fileContext, error) {
 	}
 	absPath = filepath.Clean(absPath)
 
-	// Must be within cwd
-	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
+	// Resolve symlinks to prevent escaping cwd via symlink
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("file not found")
+		}
+		return nil, fmt.Errorf("cannot access file: %v", err)
+	}
+
+	// Also resolve cwd symlinks for a correct prefix check
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine working directory")
+	}
+
+	// Must be within cwd (after symlink resolution)
+	if !strings.HasPrefix(resolved, resolvedCwd+string(filepath.Separator)) && resolved != resolvedCwd {
 		return nil, fmt.Errorf("path is outside the project directory")
 	}
 
-	fi, err := os.Stat(absPath)
+	fi, err := os.Stat(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("file not found")
@@ -291,11 +403,11 @@ func readFileForMention(path string) (*fileContext, error) {
 
 	// Check gitignore
 	ctx := context.Background()
-	if tools.IsGitIgnored(ctx, absPath) {
+	if tools.IsGitIgnored(ctx, resolved) {
 		return nil, fmt.Errorf("file is ignored by .gitignore")
 	}
 
-	data, err := os.ReadFile(absPath)
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read file: %v", err)
 	}
@@ -309,6 +421,11 @@ func readFileForMention(path string) (*fileContext, error) {
 	lines := strings.Count(content, "\n")
 	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
 		lines++ // count last line without trailing newline
+	}
+
+	// Ensure valid UTF-8 (extra safety check)
+	if !utf8.ValidString(content) {
+		return nil, fmt.Errorf("file appears to be binary")
 	}
 
 	return &fileContext{
