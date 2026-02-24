@@ -288,13 +288,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		// Viewport scrolling — up/down arrows scroll the conversation.
 		if msg.String() == "up" && !m.isStream {
-			m.viewport.ScrollUp(1)
-			m.updateViewport()
+			m.viewport.ScrollUp(3)
 			return m, nil
 		}
 		if msg.String() == "down" && !m.isStream {
-			m.viewport.ScrollDown(1)
-			m.updateViewport()
+			m.viewport.ScrollDown(3)
 			return m, nil
 		}
 
