@@ -63,8 +63,10 @@ type ChatModel struct {
 	mention mentionCompletion
 
 	// Web search
-	searchProvider string // duckduckgo, brave, tavily
-	searchAPIKey   string // API key for brave/tavily
+	searchProvider  string // duckduckgo, brave, tavily
+	searchAPIKey    string // API key for brave/tavily
+	searchPending   bool   // true while awaiting search summary; used to trim context after
+	searchCompactAt int    // index in m.messages of the raw search context to compact
 
 	// Context window management
 	contextTokens  int  // estimated token count after last turn
@@ -133,6 +135,101 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 
 // spinnerFrames are the animation frames for the inline spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// thinkingPhrases escalate from normal to increasingly awkward as time goes on.
+// Grouped into phases: professional (0-6s), casual (6-15s), awkward (15-30s), unhinged (30s+).
+var thinkingPhrases = []string{
+	// Phase 1: Professional (0-8s) — normal stuff
+	"thinking",
+	"pondering",
+	"cooking up ideas",
+	// Phase 2: Casual (9-17s) — getting chatty
+	"still working on it, hang tight",
+	"almost there... probably",
+	"crunching some serious thoughts",
+	// Phase 3: Awkward presenter (18-32s) — filling dead air
+	"so... nice weather today huh",
+	"fun fact: octopuses have three hearts",
+	"anyway... still thinking",
+	"*taps microphone* is this thing on",
+	"did you know honey never spoils?",
+	// Phase 4: Losing it (33-50s) — the presenter is sweating
+	"haha so this is taking a while",
+	"*shuffles papers nervously*",
+	"i swear this usually works faster",
+	"maybe i should've studied harder",
+	"please hold, brain is buffering",
+	"*elevator music intensifies*",
+	// Phase 5: Full meltdown (51s+) — embrace the chaos
+	"ok don't panic but i might be lost",
+	"plot twist: i forgot the question",
+	"*stares into the void*",
+	"sending thoughts and prayers to my GPU",
+	"is it too late to call a friend?",
+	"i'm not stuck, i'm just exploring options",
+	"*pretends to look busy*",
+	"this is fine. everything is fine.",
+}
+
+// reasoningPhrases for when the model is in a <think> block.
+var reasoningPhrases = []string{
+	// Phase 1: Normal
+	"reasoning",
+	"deep thinking",
+	"analyzing carefully",
+	// Phase 2: Getting into it
+	"going down the rabbit hole",
+	"considering all angles",
+	"running mental simulations",
+	// Phase 3: Awkward
+	"this is a juicy one, hold on",
+	"my brain cells are having a meeting",
+	"*scribbles on whiteboard furiously*",
+	"debating with myself... i'm winning",
+	"the council of neurons is deliberating",
+	// Phase 4: Deep end
+	"we're in uncharted territory now",
+	"*squints at problem*",
+	"i've seen things you wouldn't believe",
+	"asking my rubber duck for advice",
+	"hold my coffee, going deeper",
+	"ok this is actually fascinating tho",
+	"*montage of me staring at ceiling*",
+}
+
+// thinkingColors cycle through during streaming for visual variety.
+var thinkingColors = []string{
+	"141", // purple
+	"170", // pink
+	"214", // orange
+	"82",  // green
+	"69",  // blue
+	"205", // magenta
+	"228", // yellow
+	"117", // cyan
+}
+
+// thinkingStatus returns a rotating phrase and color based on elapsed time.
+func thinkingStatus(elapsed time.Duration, isReasoning bool) (string, lipgloss.Style) {
+	secs := int(elapsed.Seconds())
+
+	phrases := thinkingPhrases
+	if isReasoning {
+		phrases = reasoningPhrases
+	}
+
+	// Change phrase every 3 seconds, but cap at last phrase (don't loop back to "thinking")
+	idx := secs / 3
+	if idx >= len(phrases) {
+		idx = len(phrases) - 1
+	}
+
+	colorIdx := secs / 3
+	color := thinkingColors[colorIdx%len(thinkingColors)]
+
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	return phrases[idx], style
+}
 
 // spinTickMsg drives the spinner animation during streaming.
 type spinTickMsg struct{}
@@ -261,6 +358,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				return m.handleCommand(text)
 			}
 
+			// Auto-search: if user agrees after model suggested searching
+			if m.isSearchAgreement(text) {
+				query := m.extractSearchTopic()
+				if query != "" {
+					m.history = append(m.history, chatEntry{
+						role:    "user",
+						content: text,
+					})
+					return m.handleSearch(query)
+				}
+			}
+
 			// Process @mentions — inject file contents as context
 			_, fileContexts, mentionErrors := m.processAtMentions(text)
 			for _, fc := range fileContexts {
@@ -387,6 +496,25 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
+			// After search summary, compact: replace bulky raw content + remove summarize prompt
+			if m.searchPending {
+				m.searchPending = false
+				idx := m.searchCompactAt
+				if idx >= 0 && idx < len(m.messages) && m.messages[idx].Role == "user" && m.messages[idx].Content != nil {
+					// Keep only the search listing header (first ~500 chars) as context
+					content := *m.messages[idx].Content
+					if len(content) > 500 {
+						content = content[:500] + "\n... (full content summarized by assistant above)"
+					}
+					m.messages[idx] = docker.NewChatMessage("user", content)
+				}
+				// Remove the summarize instruction (idx+1) — it was a one-shot prompt
+				promptIdx := idx + 1
+				if promptIdx < len(m.messages) && m.messages[promptIdx].Role == "user" {
+					m.messages = append(m.messages[:promptIdx], m.messages[promptIdx+1:]...)
+				}
+			}
+
 			m.streaming = ""
 			m.turnContent = ""
 			m.isStream = false
@@ -492,18 +620,34 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		// Inject into model context as a user message
+		// Inject raw search content as context (not shown to user)
 		contextMsg := fmt.Sprintf("[Web search results for %q]\n\n%s", msg.Query, msg.Results)
+		m.searchCompactAt = len(m.messages) // remember where to compact later
 		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
-		// Display results with tool styling
+
+		// Instruct model to summarize the results
+		summarizePrompt := fmt.Sprintf(searchPromptTemplate, msg.Query)
+		m.messages = append(m.messages, docker.NewChatMessage("user", summarizePrompt))
+
 		m.history = append(m.history, chatEntry{
 			role:    "tool",
-			content: fmt.Sprintf("Search: %s\n\n%s", msg.Query, msg.Results),
+			content: fmt.Sprintf("Search: %s — summarizing results...", msg.Query),
 		})
-		m.contextTokens = estimateTokens(m.buildMessages())
-		m.saveSession()
+
+		// Auto-stream the model's summary
+		m.searchPending = true
+		m.isStream = true
+		m.streaming = ""
+		m.turnContent = ""
+		m.toolStatus = ""
+		m.streamStart = time.Now()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancelFunc = cancel
+		m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+
 		m.updateViewport()
-		return m, nil
+		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 
 	case FetchResultMsg:
 		if msg.Err != nil {
@@ -774,6 +918,11 @@ var toolSystemPrompt string
 //
 //go:embed prompts/compact.md
 var compactPromptTemplate string
+
+// searchPromptTemplate instructs the model to summarize search results.
+//
+//go:embed prompts/search.md
+var searchPromptTemplate string
 
 // estimateTokens returns a rough token count for a set of messages.
 // Uses the chars/4 heuristic plus per-message overhead.
@@ -1053,16 +1202,71 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 
 	m.history = append(m.history, chatEntry{
 		role:    "tool",
-		content: fmt.Sprintf("Searching: %s...", query),
+		content: fmt.Sprintf("Searching and reading pages: %s...", query),
 	})
 	m.updateViewport()
 
 	provider := m.searchProvider
 	apiKey := m.searchAPIKey
 	return m, func() tea.Msg {
-		results, err := search.Query(provider, apiKey, query)
+		results, err := search.DeepQuery(provider, apiKey, query)
 		return SearchResultMsg{Query: query, Results: results, Err: err}
 	}
+}
+
+// isSearchAgreement returns true if the user's input is a short affirmative
+// and the last assistant message suggested searching.
+func (m *ChatModel) isSearchAgreement(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	affirmatives := []string{
+		"yes", "yeah", "yep", "sure", "ok", "okay",
+		"go ahead", "search", "search it", "please",
+		"do it", "go for it", "yes please", "y",
+	}
+	isAffirmative := false
+	for _, a := range affirmatives {
+		if lower == a {
+			isAffirmative = true
+			break
+		}
+	}
+	if !isAffirmative {
+		return false
+	}
+	// Check if last assistant message suggested searching
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i].role == "assistant" {
+			content := strings.ToLower(m.history[i].content)
+			return strings.Contains(content, "search for") ||
+				strings.Contains(content, "search the") ||
+				strings.Contains(content, "look that up") ||
+				strings.Contains(content, "look it up") ||
+				strings.Contains(content, "would you like me to search")
+		}
+	}
+	return false
+}
+
+// extractSearchTopic finds the user's original question to use as a search query.
+// Looks for the last real user question before the assistant's search suggestion.
+func (m *ChatModel) extractSearchTopic() string {
+	// Walk history backwards: skip the search suggestion, find the user's question
+	foundAssistant := false
+	for i := len(m.history) - 1; i >= 0; i-- {
+		entry := m.history[i]
+		if entry.role == "assistant" {
+			foundAssistant = true
+			continue
+		}
+		if foundAssistant && entry.role == "user" {
+			q := strings.TrimSpace(entry.content)
+			// Skip very short or command-like inputs
+			if len(q) > 2 && !strings.HasPrefix(q, "/") {
+				return q
+			}
+		}
+	}
+	return ""
 }
 
 func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
@@ -1260,10 +1464,12 @@ func (m ChatModel) View() string {
 		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
 	} else if m.isStream && m.thinking {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
-		status = HelpStyle.Render(fmt.Sprintf("%s reasoning... (%s)", frame, elapsed))
+		verb, style := thinkingStatus(elapsed, true)
+		status = style.Render(fmt.Sprintf("%s %s... (%s)", frame, verb, elapsed))
 	} else if m.isStream {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
-		status = HelpStyle.Render(fmt.Sprintf("%s thinking... (%s)", frame, elapsed))
+		verb, style := thinkingStatus(elapsed, false)
+		status = style.Render(fmt.Sprintf("%s %s... (%s)", frame, verb, elapsed))
 	} else if m.mention.active && len(m.mention.candidates) > 0 {
 		status = m.renderCompletionStatus()
 	} else {

@@ -413,6 +413,46 @@ explain @main.go @go.mod
 
 Files must be under 100KB, non-binary, and not gitignored. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
 
+### Web search
+
+Search the web and get AI-summarized results — no API key needed (DuckDuckGo is the default).
+
+```bash
+# Inside the TUI
+/search latest news philippines
+/search golang error handling best practices
+```
+
+**How it works:**
+
+1. Searches via DuckDuckGo (or Brave/Tavily if configured)
+2. Auto-fetches the top result pages for actual article content
+3. The model summarizes everything into a clean paragraph with inline source citations
+4. Ends with "Want me to search for more or dive deeper?"
+
+The model is instructed to be honest about uncertainty. If you ask something it doesn't know, it will offer to search instead of guessing:
+
+```
+You: What happened in the Senate hearing today?
+Assistant: I don't have current information about that. Would you like me to search for it?
+You: yes
+→ automatically triggers a search using your original question
+```
+
+**Fetch a specific page:**
+
+```bash
+/fetch https://example.com/article
+```
+
+**Configure a different provider:**
+
+```yaml
+# ~/.baryo/config.yaml
+search_provider: brave    # or tavily
+search_api_key: your-key
+```
+
 ### Tool use
 
 Baryo gives the model access to local tools so it can read files, search code, explore your project, and check git state.
