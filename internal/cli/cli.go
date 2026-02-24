@@ -181,6 +181,12 @@ TUI Commands:
   /copy             Copy last assistant response to clipboard
   /markdown         Toggle markdown rendering on/off
   /doctor           Run diagnostic checks inside the TUI
+  /search <query>   Search the web (DuckDuckGo, Brave, or Tavily)
+  /fetch <url>      Fetch a URL and inject its content into the conversation
+
+Mentions:
+  @filepath         Attach a file's contents as context (tab to complete)
+                    Example: explain @main.go    compare @go.mod @go.sum
 
 Examples:
   baryo                          Launch interactive TUI

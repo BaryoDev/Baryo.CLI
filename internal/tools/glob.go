@@ -105,7 +105,7 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 			continue
 		}
 
-		if isGitIgnored(ctx, absPath) {
+		if IsGitIgnored(ctx, absPath) {
 			continue
 		}
 		// Return paths relative to cwd.

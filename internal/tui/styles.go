@@ -52,4 +52,20 @@ var (
 	ToolLabelStyle = lipgloss.NewStyle().
 			Italic(true).
 			Foreground(lipgloss.Color("214"))
+
+	// Token display styles (context window usage)
+	TokenDimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+
+	TokenWarnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214"))
+
+	TokenCritStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true)
+
+	// Mention completion style
+	MentionSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("170")).
+				Bold(true)
 )

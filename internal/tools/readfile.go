@@ -82,7 +82,7 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 	}
 
 	// Check .gitignore via git check-ignore.
-	if isGitIgnored(ctx, absPath) {
+	if IsGitIgnored(ctx, absPath) {
 		return Result{Content: fmt.Sprintf("file is ignored by .gitignore: %s", args.Path), IsError: true}
 	}
 
@@ -150,8 +150,8 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 	return Result{Content: content}
 }
 
-// isGitIgnored returns true if the file is ignored by git.
-func isGitIgnored(ctx context.Context, absPath string) bool {
+// IsGitIgnored returns true if the file is ignored by git.
+func IsGitIgnored(ctx context.Context, absPath string) bool {
 	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-q", absPath)
 	cmd.Dir = filepath.Dir(absPath)
 	err := cmd.Run()

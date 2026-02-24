@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
@@ -58,6 +59,13 @@ type ChatModel struct {
 	thinking     bool      // true while model is inside a <think> block
 	streamStart  time.Time // when streaming began (for elapsed time display)
 
+	// @ mention completion
+	mention mentionCompletion
+
+	// Web search
+	searchProvider string // duckduckgo, brave, tavily
+	searchAPIKey   string // API key for brave/tavily
+
 	// Context window management
 	contextTokens  int  // estimated token count after last turn
 	contextLimit   int  // max context window (default 8192)
@@ -72,25 +80,27 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelName, modelTag string) ChatModel {
+func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey string) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(modelName, modelTag)
 	return ChatModel{
-		socketPath:   socketPath,
-		systemPrompt: systemPrompt,
-		params:       params,
-		modelName:    modelName,
-		modelTag:     modelTag,
-		textarea:     ta,
-		markdown:     true,
-		historyIdx:   -1,
-		session:      sess,
-		contextLimit: 8192,
+		socketPath:     socketPath,
+		systemPrompt:   systemPrompt,
+		params:         params,
+		modelName:      modelName,
+		modelTag:       modelTag,
+		textarea:       ta,
+		markdown:       true,
+		historyIdx:     -1,
+		session:        sess,
+		contextLimit:   8192,
+		searchProvider: searchProvider,
+		searchAPIKey:   searchAPIKey,
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParams, sess *session.Session) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey string) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -102,18 +112,20 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 	}
 	msgs := append([]docker.ChatMessage{}, sess.Messages...)
 	cm := ChatModel{
-		socketPath:   socketPath,
-		systemPrompt: systemPrompt,
-		params:       params,
-		modelName:    sess.ModelName,
-		modelTag:     sess.ModelTag,
-		messages:     msgs,
-		history:      history,
-		textarea:     ta,
-		markdown:     true,
-		historyIdx:   -1,
-		session:      sess,
-		contextLimit: 8192,
+		socketPath:     socketPath,
+		systemPrompt:   systemPrompt,
+		params:         params,
+		modelName:      sess.ModelName,
+		modelTag:       sess.ModelTag,
+		messages:       msgs,
+		history:        history,
+		textarea:       ta,
+		markdown:       true,
+		historyIdx:     -1,
+		session:        sess,
+		contextLimit:   8192,
+		searchProvider: searchProvider,
+		searchAPIKey:   searchAPIKey,
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -219,6 +231,21 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		// @-mention completion: Tab/Shift+Tab cycle, Enter selects, Esc cancels
+		if m.mention.active && !m.isStream {
+			switch msg.String() {
+			case "tab", "shift+tab":
+				m.handleMentionTab(msg.String() == "tab")
+				return m, nil
+			case "enter":
+				m.handleMentionSelect()
+				return m, nil
+			case "escape":
+				m.mention = mentionCompletion{}
+				return m, nil
+			}
+		}
+
 		if msg.String() == "enter" && !m.isStream {
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
@@ -232,6 +259,23 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Handle slash commands
 			if strings.HasPrefix(text, "/") {
 				return m.handleCommand(text)
+			}
+
+			// Process @mentions — inject file contents as context
+			_, fileContexts, mentionErrors := m.processAtMentions(text)
+			for _, fc := range fileContexts {
+				contextMsg := fmt.Sprintf("[File: %s]\n\n%s", fc.path, fc.content)
+				m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+				m.history = append(m.history, chatEntry{
+					role:    "tool",
+					content: fmt.Sprintf("Attached: %s (%d lines)", fc.path, fc.lines),
+				})
+			}
+			for _, errMsg := range mentionErrors {
+				m.history = append(m.history, chatEntry{
+					role:    "error",
+					content: errMsg,
+				})
 			}
 
 			// Add user message
@@ -438,6 +482,53 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.updateViewport()
 		}
 		return m, waitForEvent(m.eventCh)
+
+	case SearchResultMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Search error: %v", msg.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// Inject into model context as a user message
+		contextMsg := fmt.Sprintf("[Web search results for %q]\n\n%s", msg.Query, msg.Results)
+		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+		// Display results with tool styling
+		m.history = append(m.history, chatEntry{
+			role:    "tool",
+			content: fmt.Sprintf("Search: %s\n\n%s", msg.Query, msg.Results),
+		})
+		m.contextTokens = estimateTokens(m.buildMessages())
+		m.saveSession()
+		m.updateViewport()
+		return m, nil
+
+	case FetchResultMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Fetch error: %v", msg.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// Inject into model context as a user message
+		m.messages = append(m.messages, docker.NewChatMessage("user", msg.Content))
+		// Display results with tool styling
+		preview := msg.Content
+		if len(preview) > 2000 {
+			preview = preview[:2000] + "\n... (truncated in display)"
+		}
+		m.history = append(m.history, chatEntry{
+			role:    "tool",
+			content: preview,
+		})
+		m.contextTokens = estimateTokens(m.buildMessages())
+		m.saveSession()
+		m.updateViewport()
+		return m, nil
 	}
 
 	// Update sub-components
@@ -446,6 +537,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	if !m.isStream {
 		m.textarea, cmd = m.textarea.Update(msg)
 		cmds = append(cmds, cmd)
+		// Live @-mention preview: update candidates as user types
+		m.updateMentionPreview()
 	}
 
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -649,9 +742,17 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if strings.HasPrefix(text, "/search ") {
+			return m.handleSearch(strings.TrimPrefix(text, "/search "))
+		}
+
+		if strings.HasPrefix(text, "/fetch ") {
+			return m.handleFetch(strings.TrimPrefix(text, "/fetch "))
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init, /context, /compact", text),
+			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init, /context, /compact, /search, /fetch", text),
 		})
 		m.updateViewport()
 		return m, nil
@@ -933,6 +1034,54 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /search <query>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: fmt.Sprintf("Searching: %s...", query),
+	})
+	m.updateViewport()
+
+	provider := m.searchProvider
+	apiKey := m.searchAPIKey
+	return m, func() tea.Msg {
+		results, err := search.Query(provider, apiKey, query)
+		return SearchResultMsg{Query: query, Results: results, Err: err}
+	}
+}
+
+func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /fetch <url>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: fmt.Sprintf("Fetching: %s...", rawURL),
+	})
+	m.updateViewport()
+
+	return m, func() tea.Msg {
+		content, err := search.Fetch(rawURL)
+		return FetchResultMsg{URL: rawURL, Content: content, Err: err}
+	}
+}
+
 // needsTools returns true if the user's message likely requires tool access.
 // This prevents local models from calling tools for general questions.
 func needsTools(text string) bool {
@@ -1109,6 +1258,8 @@ func (m ChatModel) View() string {
 	} else if m.isStream {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
 		status = HelpStyle.Render(fmt.Sprintf("%s thinking... (%s)", frame, elapsed))
+	} else if m.mention.active && len(m.mention.candidates) > 0 {
+		status = m.renderCompletionStatus()
 	} else {
 		help := "enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit"
 		tokenInfo := fmt.Sprintf("~%s / %s", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit))

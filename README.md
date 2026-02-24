@@ -387,6 +387,32 @@ Run diagnostics on a remote connection:
 baryo --tunnel user@your.server.ip doctor
 ```
 
+### @ Mentions
+
+Attach file contents as context by typing `@filepath` in your message. Tab completion helps you find files quickly.
+
+```bash
+# Type @ then Tab to autocomplete
+@main.go           # attach a single file
+@internal/tui/     # Tab to browse subdirectory contents
+
+# Multiple files in one message
+explain @main.go @go.mod
+
+# Recursive matching — typing @cha finds internal/tui/chat.go
+@cha               # shows matches across all subdirectories
+```
+
+**How it works:**
+
+- As you type after `@`, matching files appear in the status bar
+- **Tab** / **Shift+Tab** — cycle through candidates
+- **Enter** — select the highlighted file (inserts it into your input)
+- **Esc** — dismiss suggestions
+- Press **Enter** again to send — file contents are injected as context for the model
+
+Files must be under 100KB, non-binary, and not gitignored. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
+
 ### Tool use
 
 Baryo gives the model access to local tools so it can read files, search code, explore your project, and check git state.

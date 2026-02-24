@@ -127,7 +127,7 @@ func walkDir(ctx context.Context, dir, indent string, depth, maxDepth int, b *st
 
 		absPath := filepath.Join(dir, e.Name())
 
-		if isGitIgnored(ctx, absPath) {
+		if IsGitIgnored(ctx, absPath) {
 			continue
 		}
 
