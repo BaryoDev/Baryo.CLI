@@ -642,53 +642,105 @@ func (m ChatModel) handleInit() (ChatModel, tea.Cmd) {
 func generateBaryoMD() string {
 	var b strings.Builder
 
-	b.WriteString("# Project Instructions\n\n")
+	// Try to extract project name
+	projectName := detectProjectName()
+	if projectName != "" {
+		b.WriteString(fmt.Sprintf("# %s\n\n", projectName))
+	} else {
+		b.WriteString("# Project Instructions\n\n")
+	}
+
 	b.WriteString("<!-- Baryo loads this file into the system prompt. -->\n")
 	b.WriteString("<!-- Edit it to customize how the AI assistant behaves in this project. -->\n\n")
 
-	// Detect project language/type from common files
-	var hints []string
-	langFiles := map[string]string{
-		"go.mod":         "Go",
-		"package.json":   "Node.js / JavaScript",
-		"Cargo.toml":     "Rust",
-		"pyproject.toml": "Python",
-		"requirements.txt": "Python",
-		"Gemfile":        "Ruby",
-		"pom.xml":        "Java (Maven)",
-		"build.gradle":   "Java (Gradle)",
-		"CMakeLists.txt": "C/C++ (CMake)",
-		"Makefile":       "Make",
-		"Dockerfile":     "Docker",
-		"docker-compose.yml": "Docker Compose",
+	// Extract description from README if available
+	if desc := extractREADMEDescription(); desc != "" {
+		b.WriteString(desc + "\n\n")
 	}
 
-	for file, lang := range langFiles {
-		if _, err := os.Stat(file); err == nil {
-			hints = append(hints, lang)
+	// Detect stack — ordered checks so output is deterministic
+	type stackCheck struct {
+		file string
+		name string
+	}
+	checks := []stackCheck{
+		{"go.mod", "Go"},
+		{"package.json", "Node.js"},
+		{"tsconfig.json", "TypeScript"},
+		{"Cargo.toml", "Rust"},
+		{"pyproject.toml", "Python"},
+		{"requirements.txt", "Python"},
+		{"setup.py", "Python"},
+		{"Gemfile", "Ruby"},
+		{"pom.xml", "Java (Maven)"},
+		{"build.gradle", "Java (Gradle)"},
+		{"CMakeLists.txt", "C/C++ (CMake)"},
+		{"Makefile", "Make"},
+		{"Dockerfile", "Docker"},
+		{"docker-compose.yml", "Docker Compose"},
+		{"compose.yaml", "Docker Compose"},
+		{".goreleaser.yml", "GoReleaser"},
+		{".goreleaser.yaml", "GoReleaser"},
+		{".github/workflows", "GitHub Actions"},
+	}
+
+	seen := map[string]bool{}
+	var stack []string
+	for _, c := range checks {
+		if _, err := os.Stat(c.file); err == nil && !seen[c.name] {
+			seen[c.name] = true
+			stack = append(stack, c.name)
 		}
 	}
 
-	if len(hints) > 0 {
+	if len(stack) > 0 {
 		b.WriteString("## Stack\n\n")
-		b.WriteString("This project uses: " + strings.Join(hints, ", ") + "\n\n")
+		for _, s := range stack {
+			b.WriteString("- " + s + "\n")
+		}
+		b.WriteString("\n")
 	}
 
+	// Project structure — list key top-level directories
+	if dirs := listTopDirs(); len(dirs) > 0 {
+		b.WriteString("## Structure\n\n")
+		b.WriteString("Key directories:\n\n")
+		for _, d := range dirs {
+			b.WriteString("- `" + d + "/`\n")
+		}
+		b.WriteString("\n")
+	}
+
+	// Guidelines
 	b.WriteString("## Guidelines\n\n")
 	b.WriteString("- Follow the existing code style and conventions\n")
 	b.WriteString("- Prefer editing existing files over creating new ones\n")
 	b.WriteString("- Keep changes focused and minimal\n")
 
-	// Add build/test hints if we can detect them
-	if _, err := os.Stat("go.mod"); err == nil {
+	// Build/test/lint commands per detected stack
+	if seen["Go"] {
 		b.WriteString("- Run `go vet ./...` to check for issues\n")
 		b.WriteString("- Run `go build ./...` to verify compilation\n")
 	}
-	if _, err := os.Stat("package.json"); err == nil {
+	if seen["Node.js"] {
 		b.WriteString("- Run `npm test` to verify changes\n")
+		b.WriteString("- Run `npm run lint` to check style\n")
 	}
-	if _, err := os.Stat("Cargo.toml"); err == nil {
+	if seen["Rust"] {
 		b.WriteString("- Run `cargo check` to verify compilation\n")
+		b.WriteString("- Run `cargo test` to run tests\n")
+	}
+	if seen["Python"] {
+		b.WriteString("- Run `pytest` to run tests\n")
+	}
+	if seen["Ruby"] {
+		b.WriteString("- Run `bundle exec rake` to run tests\n")
+	}
+	if seen["Java (Maven)"] {
+		b.WriteString("- Run `mvn compile` to verify compilation\n")
+	}
+	if seen["Java (Gradle)"] {
+		b.WriteString("- Run `gradle build` to verify compilation\n")
 	}
 
 	b.WriteString("\n## Skills\n\n")
@@ -699,6 +751,119 @@ func generateBaryoMD() string {
 	b.WriteString("-->\n")
 
 	return b.String()
+}
+
+// detectProjectName tries to extract the project name from go.mod or package.json.
+func detectProjectName() string {
+	// Try go.mod
+	if data, err := os.ReadFile("go.mod"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "module ") {
+				mod := strings.TrimPrefix(line, "module ")
+				mod = strings.TrimSpace(mod)
+				// Use the last path segment as the name
+				parts := strings.Split(mod, "/")
+				return parts[len(parts)-1]
+			}
+		}
+	}
+
+	// Try package.json
+	if data, err := os.ReadFile("package.json"); err == nil {
+		var pkg struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(data, &pkg) == nil && pkg.Name != "" {
+			return pkg.Name
+		}
+	}
+
+	// Try Cargo.toml (simple parse)
+	if data, err := os.ReadFile("Cargo.toml"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "name") && strings.Contains(line, "=") {
+				parts := strings.SplitN(line, "=", 2)
+				name := strings.TrimSpace(parts[1])
+				name = strings.Trim(name, `"'`)
+				if name != "" {
+					return name
+				}
+			}
+		}
+	}
+
+	// Fall back to directory name
+	if cwd, err := os.Getwd(); err == nil {
+		return filepath.Base(cwd)
+	}
+	return ""
+}
+
+// extractREADMEDescription reads the first paragraph after the title from README.md.
+func extractREADMEDescription() string {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var desc []string
+	pastTitle := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip the title line
+		if !pastTitle {
+			if strings.HasPrefix(trimmed, "# ") {
+				pastTitle = true
+				continue
+			}
+			continue
+		}
+		// Skip empty lines right after title
+		if len(desc) == 0 && trimmed == "" {
+			continue
+		}
+		// Stop at the next heading or empty line after collecting text
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		desc = append(desc, trimmed)
+	}
+
+	if len(desc) == 0 {
+		return ""
+	}
+	return strings.Join(desc, " ")
+}
+
+// listTopDirs returns notable top-level directories (skips hidden dirs, vendor, node_modules).
+func listTopDirs() []string {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		return nil
+	}
+
+	skip := map[string]bool{
+		".git": true, ".github": true, ".baryo": true, ".claude": true,
+		".vscode": true, ".idea": true,
+		"node_modules": true, "vendor": true, "dist": true, "build": true,
+		"__pycache__": true, ".mypy_cache": true, "target": true,
+	}
+
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || skip[name] {
+			continue
+		}
+		dirs = append(dirs, name)
+	}
+	return dirs
 }
 
 func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
