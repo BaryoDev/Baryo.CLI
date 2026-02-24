@@ -35,6 +35,9 @@ type AppModel struct {
 	systemPrompt string
 	params       docker.ChatParams
 
+	searchProvider string
+	searchAPIKey   string
+
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
 	sessionList      []session.Summary
@@ -87,6 +90,14 @@ func WithSystemPrompt(prompt string) AppOption {
 func WithParams(params docker.ChatParams) AppOption {
 	return func(a *AppModel) {
 		a.params = params
+	}
+}
+
+// WithSearchConfig sets the web search provider and API key.
+func WithSearchConfig(provider, apiKey string) AppOption {
+	return func(a *AppModel) {
+		a.searchProvider = provider
+		a.searchAPIKey = apiKey
 	}
 }
 
@@ -147,7 +158,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.params, msg.Session)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -335,7 +346,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, model.Name, model.Tag)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

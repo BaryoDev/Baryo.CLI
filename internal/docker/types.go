@@ -73,6 +73,7 @@ type StreamEvent struct {
 	ToolResult     *ToolResultEvent // tool execution completed
 	Done           bool             // stream finished
 	ContentReplace *string          // replaces accumulated streaming text (strips tool-call syntax)
+	Usage          *UsageStats      // token usage from the API (present on Done)
 }
 
 // ToolStartEvent signals the beginning of a tool execution.
@@ -132,7 +133,15 @@ type StreamChoice struct {
 	FinishReason *string `json:"finish_reason"`
 }
 
+// UsageStats holds token usage reported by the API.
+type UsageStats struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // StreamChunk is one SSE frame from the streaming response.
 type StreamChunk struct {
 	Choices []StreamChoice `json:"choices"`
+	Usage   *UsageStats    `json:"usage,omitempty"`
 }

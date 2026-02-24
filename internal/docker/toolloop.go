@@ -8,8 +8,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"fmt"
 	"regexp"
+	"strings"
 )
 
 const maxToolRounds = 5
@@ -43,8 +44,17 @@ func StreamChatWithTools(ctx context.Context, socketPath, model string, messages
 		msgs := make([]ChatMessage, len(messages))
 		copy(msgs, messages)
 
+		var lastUsage *UsageStats
+
 		for round := 0; round < maxToolRounds; round++ {
-			evtCh, resCh := streamChatRaw(ctx, socketPath, model, msgs, params, toolDefs)
+			// Only pass tool definitions on the first round. Continuation
+			// rounds use user-role results which don't require the "tool" role
+			// that many local models (Gemma, etc.) reject.
+			var roundTools []ToolDefinition
+			if round == 0 {
+				roundTools = toolDefs
+			}
+			evtCh, resCh := streamChatRaw(ctx, socketPath, model, msgs, params, roundTools)
 
 			// Forward all streaming events (tokens, errors).
 			var contentBuf string
@@ -64,23 +74,28 @@ func StreamChatWithTools(ctx context.Context, socketPath, model string, messages
 			}
 
 			if hadError {
-				out <- StreamEvent{Done: true}
+				out <- StreamEvent{Done: true, Usage: lastUsage}
 				return
 			}
 
 			// Get the accumulated result.
 			res, ok := <-resCh
 			if !ok {
-				out <- StreamEvent{Done: true}
+				out <- StreamEvent{Done: true, Usage: lastUsage}
 				return
 			}
 
-			// No structured tool calls — try text-based fallback.
+			// Track usage from each round.
+			if res.Usage != nil {
+				lastUsage = res.Usage
+			}
+
+			// Check for text-based tool calls if no native ones were returned.
 			if len(res.ToolCalls) == 0 {
 				validNames := buildValidToolNames(toolDefs)
 				textCalls := parseTextToolCalls(contentBuf, validNames)
 				if len(textCalls) == 0 {
-					out <- StreamEvent{Done: true}
+					out <- StreamEvent{Done: true, Usage: lastUsage}
 					return
 				}
 
@@ -106,17 +121,14 @@ func StreamChatWithTools(ctx context.Context, socketPath, model string, messages
 				}
 			}
 
-			// Sanitize tool call IDs to meet model template requirements.
-			for i := range res.ToolCalls {
-				res.ToolCalls[i].ID = sanitizeToolCallID(res.ToolCalls[i].ID)
+			// Execute each tool call and collect results.
+			type toolResult struct {
+				tc      ToolCall
+				content string
+				isError bool
 			}
+			var results []toolResult
 
-			// Append the assistant message with tool calls.
-			assistantMsg := NewChatMessage("assistant", contentBuf)
-			assistantMsg.ToolCalls = res.ToolCalls
-			msgs = append(msgs, assistantMsg)
-
-			// Execute each tool call and append results.
 			for _, tc := range res.ToolCalls {
 				select {
 				case out <- StreamEvent{ToolStart: &ToolStartEvent{
@@ -141,24 +153,28 @@ func StreamChatWithTools(ctx context.Context, socketPath, model string, messages
 					return
 				}
 
-				// Build the tool result message for the conversation.
-				resultContent := content
-				if isError {
-					errResp := map[string]string{"error": content}
-					if b, err := json.Marshal(errResp); err == nil {
-						resultContent = string(b)
-					}
-				}
-				toolMsg := NewChatMessage("tool", resultContent)
-				toolMsg.ToolCallID = tc.ID
-				toolMsg.Name = tc.Function.Name
-				msgs = append(msgs, toolMsg)
+				results = append(results, toolResult{tc: tc, content: content, isError: isError})
 			}
+
+			// Always use user-role for tool results to maintain role alternation.
+			// Many local models (Gemma, Mistral) don't support the "tool" role
+			// in their chat templates.
+			msgs = append(msgs, NewChatMessage("assistant", contentBuf))
+
+			var resultBuf strings.Builder
+			for _, r := range results {
+				status := "OK"
+				if r.isError {
+					status = "ERROR"
+				}
+				fmt.Fprintf(&resultBuf, "[%s result (%s)]\n%s\n\n", r.tc.Function.Name, status, r.content)
+			}
+			msgs = append(msgs, NewChatMessage("user", strings.TrimSpace(resultBuf.String())))
 			// Loop back for the next round.
 		}
 
 		// Max rounds exceeded — emit done.
-		out <- StreamEvent{Done: true}
+		out <- StreamEvent{Done: true, Usage: lastUsage}
 	}()
 
 	return out

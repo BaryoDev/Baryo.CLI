@@ -71,6 +71,9 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 			continue
 		}
 		args := string(tc.Arguments)
+		if args == "" || args == "null" {
+			args = "{}"
+		}
 		if !json.Valid([]byte(args)) {
 			continue
 		}

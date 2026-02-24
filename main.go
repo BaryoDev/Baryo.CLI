@@ -92,6 +92,7 @@ func main() {
 			tui.WithSocketPath(cfg.SocketPath),
 			tui.WithSystemPrompt(cfg.SystemPrompt),
 			tui.WithParams(cfg.Params),
+			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 		}
 
 		// Handle session resume flags

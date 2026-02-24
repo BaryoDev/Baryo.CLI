@@ -24,11 +24,13 @@ var DefaultSystemPrompt string
 
 // Config holds merged configuration from all sources.
 type Config struct {
-	Model        string            `yaml:"model"`
-	SocketPath   string            `yaml:"socket_path"`
-	SystemPrompt string            `yaml:"system_prompt"`
-	Params       docker.ChatParams `yaml:"params"`
-	SSHTunnel    *tunnel.Config    `yaml:"ssh_tunnel"`
+	Model          string            `yaml:"model"`
+	SocketPath     string            `yaml:"socket_path"`
+	SystemPrompt   string            `yaml:"system_prompt"`
+	Params         docker.ChatParams `yaml:"params"`
+	SSHTunnel      *tunnel.Config    `yaml:"ssh_tunnel"`
+	SearchProvider string            `yaml:"search_provider"`
+	SearchAPIKey   string            `yaml:"search_api_key"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -122,6 +124,12 @@ func loadFile(path string, cfg *Config) {
 	if file.SSHTunnel != nil && file.SSHTunnel.IsConfigured() {
 		cfg.SSHTunnel = file.SSHTunnel
 	}
+	if file.SearchProvider != "" {
+		cfg.SearchProvider = file.SearchProvider
+	}
+	if file.SearchAPIKey != "" {
+		cfg.SearchAPIKey = file.SearchAPIKey
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -149,6 +157,12 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Params.MaxTokens = &n
 		}
+	}
+	if v := os.Getenv("BARYO_SEARCH_PROVIDER"); v != "" {
+		cfg.SearchProvider = v
+	}
+	if v := os.Getenv("BARYO_SEARCH_API_KEY"); v != "" {
+		cfg.SearchAPIKey = v
 	}
 }
 
