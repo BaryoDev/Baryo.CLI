@@ -78,9 +78,9 @@ baryo --model gemma3
 
 The interactive mode gives you:
 - A model picker with parameter and size info
-- A streaming chat interface
+- A streaming chat interface with personality — the status bar cycles through fun phrases while the model thinks (dev excuses, awkward presenter moments, and more)
 - Input history — press `↑`/`↓` to cycle through previous messages
-- Keyboard navigation (`enter` to send, `ctrl+c` to quit)
+- Keyboard navigation (`enter` to send, `↑`/`↓` scroll, `ctrl+p`/`ctrl+n` history, `ctrl+c` to quit)
 
 ### Print mode
 

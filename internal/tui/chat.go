@@ -137,7 +137,7 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // thinkingPhrases escalate from normal to increasingly awkward as time goes on.
-// Grouped into phases: professional (0-6s), casual (6-15s), awkward (15-30s), unhinged (30s+).
+// Grouped into phases: professional → casual → dev excuses → awkward presenter → meltdown.
 var thinkingPhrases = []string{
 	// Phase 1: Professional (0-8s) — normal stuff
 	"thinking",
@@ -147,26 +147,39 @@ var thinkingPhrases = []string{
 	"still working on it, hang tight",
 	"almost there... probably",
 	"crunching some serious thoughts",
-	// Phase 3: Awkward presenter (18-32s) — filling dead air
+	// Phase 3: Dev excuses (18-38s) — the classics
+	"it worked on my machine though",
+	"the AI is hallucinating again",
+	"can this be an email instead?",
+	"it's not a bug, it's a feature",
+	"have you tried turning it off and on",
+	"works in production, trust me",
+	"that's a known issue, low priority",
+	"it's a race condition, obviously",
+	// Phase 4: Awkward presenter (39-59s) — filling dead air
 	"so... nice weather today huh",
 	"fun fact: octopuses have three hearts",
-	"anyway... still thinking",
 	"*taps microphone* is this thing on",
 	"did you know honey never spoils?",
-	// Phase 4: Losing it (33-50s) — the presenter is sweating
-	"haha so this is taking a while",
+	"anyway... still thinking",
 	"*shuffles papers nervously*",
+	"*elevator music intensifies*",
+	// Phase 5: Losing it (60-80s) — the presenter is sweating
+	"haha so this is taking a while",
 	"i swear this usually works faster",
 	"maybe i should've studied harder",
 	"please hold, brain is buffering",
-	"*elevator music intensifies*",
-	// Phase 5: Full meltdown (51s+) — embrace the chaos
+	"let me just clear my cache real quick",
+	"blame the intern",
+	"per my last thought process...",
+	// Phase 6: Full meltdown (81s+) — embrace the chaos
 	"ok don't panic but i might be lost",
 	"plot twist: i forgot the question",
 	"*stares into the void*",
 	"sending thoughts and prayers to my GPU",
 	"is it too late to call a friend?",
 	"i'm not stuck, i'm just exploring options",
+	"we'll fix it in the next sprint",
 	"*pretends to look busy*",
 	"this is fine. everything is fine.",
 }
@@ -181,19 +194,25 @@ var reasoningPhrases = []string{
 	"going down the rabbit hole",
 	"considering all angles",
 	"running mental simulations",
-	// Phase 3: Awkward
+	// Phase 3: Dev mode
+	"checking stack overflow... mentally",
+	"this would be easier in Python",
+	"let me refactor my thoughts real quick",
+	"git blame says it's not my fault",
+	"reading the docs for the first time",
+	// Phase 4: Awkward
 	"this is a juicy one, hold on",
 	"my brain cells are having a meeting",
 	"*scribbles on whiteboard furiously*",
 	"debating with myself... i'm winning",
 	"the council of neurons is deliberating",
-	// Phase 4: Deep end
+	// Phase 5: Deep end
 	"we're in uncharted territory now",
 	"*squints at problem*",
-	"i've seen things you wouldn't believe",
 	"asking my rubber duck for advice",
 	"hold my coffee, going deeper",
 	"ok this is actually fascinating tho",
+	"should've written tests first",
 	"*montage of me staring at ceiling*",
 }
 
