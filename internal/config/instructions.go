@@ -10,23 +10,19 @@ import (
 	"strings"
 )
 
-// LoadProjectInstructions reads BARYO.md and skills.md files from standard
-// locations and returns their combined content. Files are optional — missing
-// files are silently skipped.
+// LoadProjectInstructions reads BARYO.md files from standard locations and
+// returns their combined content. Skills are loaded separately via SkillIndex().
+// Files are optional — missing files are silently skipped.
 //
 // Load order (all found are concatenated):
-//  1. ~/.baryo/BARYO.md      (global user instructions)
-//  2. .baryo/BARYO.md        (project config dir)
-//  3. BARYO.md               (project root)
-//  4. ~/.baryo/skills.md     (global skills)
-//  5. .baryo/skills.md       (project config dir)
-//  6. skills.md              (project root)
+//  1. ~/.baryo/BARYO.md    (global user instructions)
+//  2. .baryo/BARYO.md      (project config dir)
+//  3. BARYO.md             (project root)
 func LoadProjectInstructions() string {
 	var parts []string
 
 	home, _ := os.UserHomeDir()
 
-	// BARYO.md locations (global → project, so project wins context)
 	baryoPaths := []string{}
 	if home != "" {
 		baryoPaths = append(baryoPaths, filepath.Join(home, ".baryo", "BARYO.md"))
@@ -42,20 +38,10 @@ func LoadProjectInstructions() string {
 		}
 	}
 
-	// skills.md locations (global → project)
-	skillsPaths := []string{}
-	if home != "" {
-		skillsPaths = append(skillsPaths, filepath.Join(home, ".baryo", "skills.md"))
-	}
-	skillsPaths = append(skillsPaths,
-		filepath.Join(".baryo", "skills.md"),
-		"skills.md",
-	)
-
-	for _, p := range skillsPaths {
-		if content := readFileIfExists(p); content != "" {
-			parts = append(parts, content)
-		}
+	// Append skill index (lightweight — names and descriptions only)
+	skills := SkillIndex()
+	if prompt := FormatSkillIndex(skills); prompt != "" {
+		parts = append(parts, prompt)
 	}
 
 	return strings.Join(parts, "\n\n")

@@ -75,3 +75,22 @@ type MentionCandidatesMsg struct {
 	StartPos   int      // byte position of @ in the text
 	Candidates []string // matched file paths
 }
+
+// DiffResultMsg carries git diff output back to the chat.
+type DiffResultMsg struct {
+	Output string
+	Err    error
+}
+
+// RunResultMsg carries shell command output back to the chat.
+type RunResultMsg struct {
+	Command string
+	Output  string
+	Err     error
+}
+
+// CommitResultMsg carries the result of a git commit back to the chat.
+type CommitResultMsg struct {
+	Message string
+	Err     error
+}

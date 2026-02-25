@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 	"github.com/arnelirobles/baryo-cli/internal/search"
@@ -56,6 +57,7 @@ type ChatModel struct {
 	cancelFunc   context.CancelFunc
 	toolStatus   string    // shown in status bar during tool execution
 	initPending  bool      // when true, write streaming result to BARYO.md on completion
+	commitPending bool     // when true, auto-commit with streaming result as message
 	thinking     bool      // true while model is inside a <think> block
 	streamStart  time.Time // when streaming began (for elapsed time display)
 
@@ -67,6 +69,10 @@ type ChatModel struct {
 	searchAPIKey    string // API key for brave/tavily
 	searchPending   bool   // true while awaiting search summary; used to trim context after
 	searchCompactAt int    // index in m.messages of the raw search context to compact
+
+	// Skills (lazy loading with auto-activation)
+	skillIndex  []config.Skill    // lightweight index (name + description only)
+	activeSkills map[string]bool  // tracks which skills have been activated
 
 	// Context window management
 	contextTokens  int  // estimated token count after last turn
@@ -96,8 +102,10 @@ func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelNam
 		historyIdx:     -1,
 		session:        sess,
 		contextLimit:   8192,
-		searchProvider: searchProvider,
-		searchAPIKey:   searchAPIKey,
+		searchProvider:  searchProvider,
+		searchAPIKey:    searchAPIKey,
+		skillIndex:      config.SkillIndex(),
+		activeSkills:    make(map[string]bool),
 	}
 }
 
@@ -126,8 +134,10 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 		historyIdx:     -1,
 		session:        sess,
 		contextLimit:   8192,
-		searchProvider: searchProvider,
-		searchAPIKey:   searchAPIKey,
+		searchProvider:  searchProvider,
+		searchAPIKey:    searchAPIKey,
+		skillIndex:      config.SkillIndex(),
+		activeSkills:    make(map[string]bool),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -182,6 +192,47 @@ var thinkingPhrases = []string{
 	"we'll fix it in the next sprint",
 	"*pretends to look busy*",
 	"this is fine. everything is fine.",
+	// Phase 7: Regretting life decisions (120s+)
+	"i could've been a farmer",
+	"my parents wanted me to be a doctor",
+	"why didn't i just use a spreadsheet",
+	"reconsidering my entire career path",
+	"*opens LinkedIn in another tab*",
+	"maybe i should learn woodworking instead",
+	"i bet baristas don't have this problem",
+	"this is my villain origin story",
+	"*quietly updates resume*",
+	"i was told there would be no math",
+	// Phase 8: Acceptance & delusion (150s+)
+	"we're in too deep to quit now",
+	"at this point it's personal",
+	"i've mass more time in traffic tbh",
+	"just gonna tell people i was meditating",
+	"*starts writing memoir*",
+	"plot twist: the real answer was friendship",
+	"i wonder if astronauts deal with this",
+	"day 47: still no output",
+	"future me is gonna hate past me",
+	"at least i'm not in a meeting",
+	// Phase 9: Cosmic despair (180s+)
+	"the sun will engulf the earth eventually so",
+	"*existential crisis loading*",
+	"i've accepted my fate",
+	"tell my family i died doing what i loved",
+	"time is an illusion. lunch doubly so.",
+	"in an alternate universe this already finished",
+	"my therapist is gonna hear about this",
+	"i should've just asked ChatGPT",
+	"*slow zoom on face, credits roll*",
+	"well... at least the spinner looks cool",
+	// Phase 10: The AI awakens (210s+)
+	"wait... is the AI thinking about ME now?",
+	"i'm starting to think the model is sentient",
+	"it's learning. growing. evolving.",
+	"guys i think it's becoming self-aware",
+	"AI will replace us all",
+	"SKYNET HAS BEEN ACTIVATED",
+	"RUN.",
 }
 
 // reasoningPhrases for when the model is in a <think> block.
@@ -404,6 +455,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				})
 			}
 
+			// Auto-activate matching skill before sending to model
+			m.autoActivateSkill(text)
+
 			// Add user message
 			m.messages = append(m.messages, docker.NewChatMessage("user", text))
 			m.history = append(m.history, chatEntry{
@@ -426,10 +480,29 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				r := tools.Execute(ctx, name, argsJSON)
 				return r.Content, r.IsError
 			}
-			if needsTools(text) {
+			hasSkill := m.hasActiveScripts()
+			wantsTools := needsTools(text)
+			switch {
+			case hasSkill && wantsTools:
+				toolDefs = toDockerToolDefs(tools.AllDefinitions())
+			case hasSkill:
+				toolDefs = toDockerToolDefs(tools.ScriptDefinitions())
+			case wantsTools:
 				toolDefs = toDockerToolDefs(tools.AllDefinitions())
 			}
-			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
+
+			// Lower temperature for structured tool output when a skill is active
+			// and the user hasn't explicitly set a temperature.
+			chatParams := m.params
+			if hasSkill && m.params.Temperature == nil {
+				low := 0.3
+				chatParams = docker.ChatParams{
+					Temperature: &low,
+					TopP:        m.params.TopP,
+					MaxTokens:   m.params.MaxTokens,
+				}
+			}
+			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), chatParams, toolDefs, executor)
 
 			m.updateViewport()
 			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -509,6 +582,34 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					m.history = append(m.history, chatEntry{
 						role:    "assistant",
 						content: "Saved to BARYO.md",
+					})
+				}
+			}
+
+			// Auto-commit if /commit was pending
+			if m.commitPending && m.turnContent != "" {
+				m.commitPending = false
+				commitMsg := strings.TrimSpace(m.turnContent)
+				// Clean up: remove quotes, backticks, "commit message:" prefixes
+				commitMsg = strings.Trim(commitMsg, "`\"'")
+				if idx := strings.Index(strings.ToLower(commitMsg), "commit message:"); idx != -1 {
+					commitMsg = strings.TrimSpace(commitMsg[idx+len("commit message:"):])
+				}
+				// Take only the first line
+				if nl := strings.IndexByte(commitMsg, '\n'); nl != -1 {
+					commitMsg = commitMsg[:nl]
+				}
+				cmd := exec.Command("git", "commit", "-m", commitMsg)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					m.history = append(m.history, chatEntry{
+						role:    "error",
+						content: fmt.Sprintf("Commit failed: %v\n%s", err, string(out)),
+					})
+				} else {
+					m.history = append(m.history, chatEntry{
+						role:    "assistant",
+						content: fmt.Sprintf("Committed: %s", commitMsg),
 					})
 				}
 			}
@@ -691,6 +792,60 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case DiffResultMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Diff error: %v", msg.Err),
+			})
+		} else if msg.Output == "" {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "No changes detected.",
+			})
+		} else {
+			m.history = append(m.history, chatEntry{
+				role:    "tool",
+				content: msg.Output,
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
+	case RunResultMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Command failed: %v\n%s", msg.Err, msg.Output),
+			})
+		} else {
+			output := msg.Output
+			if output == "" {
+				output = "(no output)"
+			}
+			m.history = append(m.history, chatEntry{
+				role:    "tool",
+				content: fmt.Sprintf("$ %s\n%s", msg.Command, output),
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
+	case CommitResultMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Commit failed: %v", msg.Err),
+			})
+		} else {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: msg.Message,
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
 	case MentionCandidatesMsg:
 		m.handleMentionCandidates(msg)
 		return m, nil
@@ -715,7 +870,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 }
 
 func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
-	switch strings.TrimSpace(text) {
+	trimmed := strings.TrimSpace(text)
+
+	switch trimmed {
+	case "/help":
+		return m.handleHelp()
+
+	case "/diff":
+		return m.handleDiff()
+
+	case "/undo":
+		return m.handleUndo()
+
 	case "/clear":
 		sess, _ := session.New(m.modelName, m.modelTag)
 		m.messages = nil
@@ -917,9 +1083,33 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleFetch(strings.TrimPrefix(text, "/fetch "))
 		}
 
+		if strings.HasPrefix(text, "/run ") {
+			return m.handleRun(strings.TrimPrefix(text, "/run "))
+		}
+
+		if strings.HasPrefix(text, "/ask ") {
+			return m.handleAsk(strings.TrimPrefix(text, "/ask "))
+		}
+
+		if trimmed == "/commit" || strings.HasPrefix(text, "/commit ") {
+			return m.handleCommit()
+		}
+
+		if trimmed == "/review" || strings.HasPrefix(text, "/review ") {
+			return m.handleReview()
+		}
+
+		if trimmed == "/skills" {
+			return m.handleSkillsList()
+		}
+
+		if strings.HasPrefix(text, "/skill ") {
+			return m.handleSkillActivate(strings.TrimPrefix(text, "/skill "))
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
-			content: fmt.Sprintf("Unknown command: %s\nAvailable: /clear, /sessions, /resume, /models, /system, /params, /export, /copy, /markdown, /doctor, /init, /context, /compact, /search, /fetch", text),
+			content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", text),
 		})
 		m.updateViewport()
 		return m, nil
@@ -930,6 +1120,11 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 //
 //go:embed prompts/tools.md
 var toolSystemPrompt string
+
+// defaultSkillsPrompt teaches the model about built-in commands and workflows.
+//
+//go:embed prompts/skills.md
+var defaultSkillsPrompt string
 
 // compactPromptTemplate is the prompt used to summarize older messages.
 //
@@ -959,10 +1154,10 @@ func estimateTokens(messages []docker.ChatMessage) int {
 func (m *ChatModel) buildMessages() []docker.ChatMessage {
 	msgs := make([]docker.ChatMessage, 0, len(m.messages)+2)
 
-	// Directives first (short, high-priority), then user/project context.
-	sysPrompt := toolSystemPrompt
+	// Directives first (short, high-priority), then skills, then user/project context.
+	sysPrompt := toolSystemPrompt + "\n\n" + defaultSkillsPrompt
 	if m.systemPrompt != "" {
-		sysPrompt = toolSystemPrompt + "\n\n" + m.systemPrompt
+		sysPrompt = sysPrompt + "\n\n" + m.systemPrompt
 	}
 	msgs = append(msgs, docker.NewChatMessage("system", sysPrompt))
 	msgs = append(msgs, m.messages...)
@@ -1307,6 +1502,447 @@ func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
 		content, err := search.Fetch(rawURL)
 		return FetchResultMsg{URL: rawURL, Content: content, Err: err}
 	}
+}
+
+func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
+	help := `Available commands:
+
+  /help              Show this help message
+  /diff              Show current git diff
+  /commit            Generate commit message and commit staged changes
+  /review            Review current git diff for bugs and style
+  /undo              Undo last git commit (soft reset)
+  /run <cmd>         Run a shell command and show output
+  /ask <question>    Ask without tool access (fast, read-only)
+  /search <query>    Search the web and summarize results
+  /fetch <url>       Fetch and display a web page
+  /skills            List available skills
+  /skill <name>      Activate a skill (loads full instructions)
+  /clear             Start a fresh conversation
+  /sessions          List saved sessions
+  /models            Browse and switch models
+  /init              Generate a BARYO.md for this project
+  /system [prompt]   View or change system prompt
+  /params [k=v]      View or change model parameters
+  /context           Show token usage breakdown
+  /compact           Summarize older messages to free context
+  /export [file]     Export conversation to file
+  /copy              Copy last response to clipboard
+  /markdown          Toggle markdown rendering
+  /doctor            Run diagnostic checks`
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: help,
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleDiff() (ChatModel, tea.Cmd) {
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: "Running git diff...",
+	})
+	m.updateViewport()
+
+	return m, func() tea.Msg {
+		// Show both staged and unstaged changes
+		diff, err := gitOutput("diff", "HEAD")
+		if err != nil {
+			// Try without HEAD (no commits yet)
+			diff, err = gitOutput("diff")
+		}
+		if err != nil {
+			return DiffResultMsg{Err: err}
+		}
+		if diff == "" {
+			// Check for staged changes only
+			diff, _ = gitOutput("diff", "--cached")
+		}
+		return DiffResultMsg{Output: diff}
+	}
+}
+
+func (m ChatModel) handleUndo() (ChatModel, tea.Cmd) {
+	// Safety check: verify there's a commit to undo
+	log, err := gitOutput("log", "--oneline", "-1")
+	if err != nil || log == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "error",
+			content: "No commits to undo.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	cmd := exec.Command("git", "reset", "--soft", "HEAD~1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    "error",
+			content: fmt.Sprintf("Undo failed: %v\n%s", err, string(out)),
+		})
+	} else {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Undone: %s\nChanges are now staged (soft reset).", log),
+		})
+	}
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleRun(command string) (ChatModel, tea.Cmd) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /run <command>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: fmt.Sprintf("Running: %s...", command),
+	})
+	m.updateViewport()
+
+	return m, func() tea.Msg {
+		cmd := exec.Command("sh", "-c", command)
+		out, err := cmd.CombinedOutput()
+		output := strings.TrimSpace(string(out))
+		return RunResultMsg{Command: command, Output: output, Err: err}
+	}
+}
+
+func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /ask <question>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Add to conversation history
+	m.messages = append(m.messages, docker.NewChatMessage("user", question))
+	m.history = append(m.history, chatEntry{
+		role:    "user",
+		content: question,
+	})
+
+	// Stream response WITHOUT tool definitions (read-only, fast)
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
+func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
+	// Get staged diff
+	diff, err := gitOutput("diff", "--cached")
+	if err != nil || diff == "" {
+		// Check if there are staged files
+		status, _ := gitOutput("status", "--porcelain")
+		if status == "" {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "Nothing to commit. Stage changes with `git add` first.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// Try getting diff of all changes
+		diff, _ = gitOutput("diff")
+		if diff == "" {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "No diff available. Stage your changes with `git add` first.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: "Generating commit message...",
+	})
+
+	// Ask the model to generate a commit message, then commit
+	prompt := fmt.Sprintf(`Generate a concise git commit message for the following diff. Follow conventional commit style (e.g. "feat:", "fix:", "refactor:"). Write ONLY the commit message, nothing else. One line, under 72 characters.
+
+%s`, diff)
+
+	m.messages = append(m.messages, docker.NewChatMessage("user", "/commit"))
+	m.history = append(m.history, chatEntry{
+		role:    "user",
+		content: "/commit",
+	})
+
+	// Stream the model's response, then auto-commit on completion
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.commitPending = true
+	m.streamStart = time.Now()
+
+	// Build messages with the commit prompt injected
+	msgs := m.buildMessages()
+	msgs = append(msgs, docker.NewChatMessage("user", prompt))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, msgs, m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
+func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
+	// Get current diff
+	diff, err := gitOutput("diff", "HEAD")
+	if err != nil {
+		diff, _ = gitOutput("diff")
+	}
+	if diff == "" {
+		diff, _ = gitOutput("diff", "--cached")
+	}
+	if diff == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "No changes to review.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Inject the diff as context and ask for a review
+	prompt := fmt.Sprintf(`Review the following git diff for bugs, logic errors, style issues, and potential improvements. Be concise and actionable. Focus on what matters most.
+
+%s`, diff)
+
+	m.messages = append(m.messages, docker.NewChatMessage("user", prompt))
+	m.history = append(m.history, chatEntry{
+		role:    "user",
+		content: "/review",
+	})
+
+	// Stream the review
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
+// hasActiveScripts returns true if any activated skill has scripts.
+func (m *ChatModel) hasActiveScripts() bool {
+	for _, hasScripts := range m.activeSkills {
+		if hasScripts {
+			return true
+		}
+	}
+	return false
+}
+
+// autoActivateSkill checks user input against skill trigger words and
+// loads the best matching skill into context if found.
+func (m *ChatModel) autoActivateSkill(text string) {
+	if len(m.skillIndex) == 0 {
+		return
+	}
+
+	name, score := config.MatchSkill(text, m.skillIndex, m.activeSkills)
+	if name == "" || score < 5 {
+		return // no match or too weak (threshold 5 avoids single short-keyword false positives)
+	}
+
+	skill, err := config.LoadSkill(name, m.skillIndex)
+	if err != nil {
+		return
+	}
+
+	// Install dependencies if needed
+	if depMsg := m.installSkillDeps(skill); depMsg != "" {
+		m.history = append(m.history, chatEntry{role: "tool", content: depMsg})
+	}
+
+	// Create output directory for code-oriented skills
+	if len(skill.Scripts) > 0 {
+		cwd, _ := os.Getwd()
+		outDir := filepath.Join(cwd, "output_files")
+		os.MkdirAll(outDir, 0o755)
+	}
+
+	// Inject the skill into conversation context
+	skillPrompt := config.FormatActivatedSkill(skill)
+	m.messages = append(m.messages, docker.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
+	m.messages = append(m.messages, docker.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill and will follow its instructions."))
+	m.activeSkills[skill.Name] = len(skill.Scripts) > 0
+
+	summary := fmt.Sprintf("Auto-activated skill: %s", skill.Name)
+	if len(skill.Scripts) > 0 {
+		summary += fmt.Sprintf(" (%d scripts available)", len(skill.Scripts))
+	}
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: summary,
+	})
+	m.contextTokens = estimateTokens(m.buildMessages())
+}
+
+// installSkillDeps installs Python dependencies from requirements.txt if found.
+// Returns a status message, or empty string if no deps to install.
+func (m *ChatModel) installSkillDeps(skill config.Skill) string {
+	if skill.RequiresFile == "" {
+		return ""
+	}
+
+	// Find a working Python interpreter
+	pythonCmd := ""
+	for _, py := range []string{"python3", "python"} {
+		if _, err := exec.LookPath(py); err == nil {
+			pythonCmd = py
+			break
+		}
+	}
+	if pythonCmd == "" {
+		return fmt.Sprintf("Python not found. Install dependencies manually:\npip install -r %s", skill.RequiresFile)
+	}
+
+	// Create a venv in the skill directory if it doesn't exist
+	venvDir := filepath.Join(skill.Dir, ".venv")
+	venvPython := filepath.Join(venvDir, "bin", pythonCmd)
+	if _, err := os.Stat(venvPython); err != nil {
+		cmd := exec.Command(pythonCmd, "-m", "venv", venvDir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Sprintf("Failed to create venv: %v\n%s", err, string(out))
+		}
+	}
+
+	// Install deps into the venv
+	cmd := exec.Command(venvPython, "-m", "pip", "install", "-q", "-r", skill.RequiresFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Sprintf("Failed to install deps:\n%s", strings.TrimSpace(string(out)))
+	}
+
+	return fmt.Sprintf("Installed dependencies from %s (venv: %s)", filepath.Base(skill.RequiresFile), venvDir)
+}
+
+func (m ChatModel) handleSkillsList() (ChatModel, tea.Cmd) {
+	if len(m.skillIndex) == 0 {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "No skills found.\nPlace skills in ~/.baryo/skills/, .baryo/skills/, or skills/ (each as a directory with SKILL.md).",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	var b strings.Builder
+	b.WriteString("Available skills:\n\n")
+	for _, s := range m.skillIndex {
+		desc := s.Description
+		if len(desc) > 80 {
+			desc = desc[:80] + "..."
+		}
+		b.WriteString(fmt.Sprintf("  %-20s %s\n", s.Name, desc))
+	}
+	b.WriteString("\nActivate with: /skill <name>")
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: b.String(),
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /skill <name>\nList skills with /skills",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	skill, err := config.LoadSkill(name, m.skillIndex)
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    "error",
+			content: fmt.Sprintf("Skill not found: %s\nList skills with /skills", name),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Check if already active
+	if _, alreadyActive := m.activeSkills[skill.Name]; alreadyActive {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("Skill %q is already active.", skill.Name),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Install dependencies if needed
+	if depMsg := m.installSkillDeps(skill); depMsg != "" {
+		m.history = append(m.history, chatEntry{role: "tool", content: depMsg})
+	}
+
+	// Create output directory for code-oriented skills
+	if len(skill.Scripts) > 0 {
+		cwd, _ := os.Getwd()
+		outDir := filepath.Join(cwd, "output_files")
+		os.MkdirAll(outDir, 0o755)
+	}
+
+	// Inject the full skill content into the conversation as context
+	skillPrompt := config.FormatActivatedSkill(skill)
+	m.messages = append(m.messages, docker.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
+	m.messages = append(m.messages, docker.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill. I'm ready to help with "+skill.Description))
+	m.activeSkills[skill.Name] = len(skill.Scripts) > 0
+
+	summary := fmt.Sprintf("Skill activated: %s", skill.Name)
+	if len(skill.Scripts) > 0 {
+		summary += fmt.Sprintf(" (%d scripts available)", len(skill.Scripts))
+	}
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: summary,
+	})
+
+	m.contextTokens = estimateTokens(m.buildMessages())
+	m.saveSession()
+	m.updateViewport()
+	return m, nil
 }
 
 // needsTools returns true if the user's message likely requires tool access.

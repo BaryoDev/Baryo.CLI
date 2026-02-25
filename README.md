@@ -122,6 +122,51 @@ Inside the TUI you can also use:
 - `/resume` — alias for `/sessions`
 - `/clear` — start a fresh conversation
 
+### Slash commands
+
+Baryo includes built-in slash commands for common workflows. Type `/help` to see them all.
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List all available commands |
+| `/diff` | Show current git diff in chat |
+| `/commit` | Generate a commit message from staged changes and auto-commit |
+| `/review` | Review current git diff for bugs, style issues, and improvements |
+| `/undo` | Undo the last git commit (soft reset, changes stay staged) |
+| `/run <cmd>` | Run a shell command and display output |
+| `/ask <question>` | Ask the model without tool access (fast, read-only) |
+| `/search <query>` | Search the web and summarize results |
+| `/fetch <url>` | Fetch and display a web page |
+| `/skills` | List available skills |
+| `/skill <name>` | Activate a skill (loads full instructions into context) |
+| `/clear` | Start a fresh conversation |
+| `/sessions` | List and pick a saved session |
+| `/models` | Browse and switch models |
+| `/init` | Generate a BARYO.md for this project |
+| `/system [prompt]` | View or change the system prompt |
+| `/params [k=v]` | View or change model parameters |
+| `/context` | Show token usage breakdown |
+| `/compact` | Summarize older messages to free context |
+| `/export [file]` | Export conversation to a file |
+| `/copy` | Copy last response to clipboard |
+| `/markdown` | Toggle markdown rendering |
+| `/doctor` | Run diagnostic checks |
+
+**Workflows:**
+
+```bash
+# Review → Fix → Commit
+/review              # Find issues in your changes
+# ... fix the issues ...
+/commit              # Generate a commit message and commit
+
+# Run tests and check output
+/run go test ./...
+
+# Quick question without tool overhead
+/ask explain what a goroutine is
+```
+
 ### Model browser
 
 Browse downloaded and available models from Docker Hub without leaving the TUI.
@@ -487,11 +532,64 @@ Baryo checks these locations (all are optional, all found are combined):
 | `BARYO.md` | Project root — project-specific instructions |
 | `.baryo/BARYO.md` | Project config directory — alternative location |
 | `~/.baryo/BARYO.md` | User home — global instructions for all projects |
-| `skills.md` | Project root — reusable prompt snippets and skills |
-| `.baryo/skills.md` | Project config directory — alternative location |
-| `~/.baryo/skills.md` | User home — global skills for all projects |
 
 Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads your project files (README, config files, directory structure, recent commits) and writes tailored instructions automatically.
+
+### Skills (Agent Skills format)
+
+Baryo supports the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills are directories containing a `SKILL.md` file with YAML frontmatter and markdown instructions, plus optional `scripts/` and `resources/` directories.
+
+```
+my-skill/
+├── SKILL.md          # Required — YAML frontmatter + instructions
+├── scripts/          # Optional — executable scripts
+└── resources/        # Optional — supporting files
+```
+
+**SKILL.md format:**
+
+```yaml
+---
+name: my-skill
+description: What this skill does and when to use it
+---
+
+# My Skill
+
+Instructions the model follows when this skill is active.
+```
+
+**Skill directories are scanned from:**
+
+| Path | Scope |
+|------|-------|
+| `~/.baryo/skills/*/SKILL.md` | Global skills for all projects |
+| `.baryo/skills/*/SKILL.md` | Project config directory |
+| `skills/*/SKILL.md` | Project root |
+
+If a skill includes a `scripts/` directory, the model is told about available scripts and can suggest running them via `/run`. Project-level skills override global skills with the same name.
+
+Baryo ships with skills from the [Anthropic Agent Skills](https://github.com/anthropics/skills) repository in the `skills/` directory. Skills are **lazy-loaded** — only names and descriptions are read on startup. Full content is loaded on-demand when you activate a skill.
+
+```bash
+# List available skills
+/skills
+
+# Activate a skill — loads full instructions + scripts into context
+/skill pdf
+/skill internal-comms
+
+# Then just ask naturally
+create a sample incident report for the outage last night
+```
+
+The model sees the skill index in the system prompt and can suggest activating skills when relevant (e.g., "You might want to run `/skill pdf` for this task").
+
+**Install skills globally:**
+
+```bash
+cp -r skills/pdf ~/.baryo/skills/pdf
+```
 
 ## How it works
 

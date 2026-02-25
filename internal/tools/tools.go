@@ -59,3 +59,18 @@ func AllDefinitions() []Definition {
 	}
 	return defs
 }
+
+// scriptToolNames are the tools needed for skill script execution.
+var scriptToolNames = []string{"run_code", "run_script"}
+
+// ScriptDefinitions returns only the run_code and run_script tool definitions.
+// Used when a skill is active to reduce tool count for smaller models.
+func ScriptDefinitions() []Definition {
+	var defs []Definition
+	for _, name := range scriptToolNames {
+		if t, ok := registry[name]; ok {
+			defs = append(defs, t.Def)
+		}
+	}
+	return defs
+}

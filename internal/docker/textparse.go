@@ -65,7 +65,13 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 		jsonStr := text[loc[2]:loc[3]]
 		var tc toolCallJSON
 		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			continue
+			// Small models often output raw newlines inside JSON strings.
+			// Try sanitizing before giving up.
+			sanitized := sanitizeJSONStrings(jsonStr)
+			if err2 := json.Unmarshal([]byte(sanitized), &tc); err2 != nil {
+				continue
+			}
+			jsonStr = sanitized
 		}
 		if !validNames[tc.Name] {
 			continue
@@ -159,7 +165,11 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 		}
 		args := text[loc[4]:loc[5]]
 		if !json.Valid([]byte(args)) {
-			continue
+			// Try sanitizing raw control characters.
+			args = sanitizeJSONStrings(args)
+			if !json.Valid([]byte(args)) {
+				continue
+			}
 		}
 		calls = append(calls, TextToolCall{
 			Name:      name,
@@ -220,4 +230,59 @@ func buildValidToolNames(defs []ToolDefinition) map[string]bool {
 		names[d.Function.Name] = true
 	}
 	return names
+}
+
+// sanitizeJSONStrings escapes raw control characters (newlines, tabs, etc.)
+// that appear inside JSON string values. Small models often emit raw newlines
+// in code strings instead of proper \n escapes, causing json.Unmarshal to fail.
+func sanitizeJSONStrings(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 64)
+
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		if escaped {
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+
+		if c == '\\' && inString {
+			b.WriteByte(c)
+			escaped = true
+			continue
+		}
+
+		if c == '"' {
+			inString = !inString
+			b.WriteByte(c)
+			continue
+		}
+
+		// Escape raw control characters inside strings.
+		if inString && c < 0x20 {
+			switch c {
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '\t':
+				b.WriteString(`\t`)
+			default:
+				// Other control chars: use unicode escape.
+				b.WriteString(`\u00`)
+				b.WriteByte("0123456789abcdef"[c>>4])
+				b.WriteByte("0123456789abcdef"[c&0x0f])
+			}
+			continue
+		}
+
+		b.WriteByte(c)
+	}
+
+	return b.String()
 }
