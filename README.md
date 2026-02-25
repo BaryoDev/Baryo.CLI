@@ -535,55 +535,78 @@ Baryo checks these locations (all are optional, all found are combined):
 
 Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads your project files (README, config files, directory structure, recent commits) and writes tailored instructions automatically.
 
-### Skills (Agent Skills format)
+### Skills
 
-Baryo supports the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills are directories containing a `SKILL.md` file with YAML frontmatter and markdown instructions, plus optional `scripts/` and `resources/` directories.
+Baryo ships with 16 skills based on the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills extend the model with domain-specific knowledge, scripts, and code execution capabilities.
+
+**Auto-activation:** Skills activate automatically when your message matches trigger keywords. Ask "merge these two PDFs" and the `pdf` skill loads instantly — no manual commands needed.
+
+```bash
+# These just work — the right skill activates automatically
+create a spreadsheet to track expenses        → xlsx
+make me a bouncing ball gif for slack          → slack-gif-creator
+build a pitch deck for my startup              → pptx
+write a technical spec for the new API         → doc-coauthoring
+```
+
+**Manual activation:**
+
+```bash
+/skills              # List all available skills
+/skill pdf           # Activate a specific skill
+```
+
+**Available skills:**
+
+| Skill | Description |
+|-------|-------------|
+| `pdf` | Read, merge, split, OCR, fill forms, create PDFs |
+| `docx` | Create, read, edit Word documents |
+| `pptx` | Create and edit PowerPoint presentations |
+| `xlsx` | Create, edit, analyze spreadsheets and financial models |
+| `slack-gif-creator` | Create animated GIFs optimized for Slack |
+| `frontend-design` | Build distinctive, production-grade web interfaces |
+| `algorithmic-art` | Generative art with p5.js and seeded randomness |
+| `canvas-design` | Visual art and poster design in PNG/PDF |
+| `mcp-builder` | Create MCP servers for LLM tool integration |
+| `doc-coauthoring` | Structured workflow for co-authoring documentation |
+| `webapp-testing` | Test web apps with Playwright |
+| `web-artifacts-builder` | Multi-component React/Tailwind HTML artifacts |
+| `skill-creator` | Create and benchmark new skills |
+| `theme-factory` | Apply professional themes to artifacts |
+| `internal-comms` | Templates for newsletters, updates, FAQs |
+| `brand-guidelines` | Anthropic brand colors and typography |
+
+**Code execution:** Skills with scripts get `run_code` and `run_script` tools. The model writes code, executes it, and reports results — including the file path so you can find the output.
+
+```
+You: create a spreadsheet to track expenses
+
+[xlsx skill auto-activated]
+Tool: run_code(python) → Files created: output_files/expense_tracker.xlsx
+```
+
+Output files are saved to the `output_files/` directory in your project root.
+
+**Skill structure:**
 
 ```
 my-skill/
 ├── SKILL.md          # Required — YAML frontmatter + instructions
-├── scripts/          # Optional — executable scripts
+├── scripts/          # Optional — executable scripts (.py, .sh, .js)
+├── core/             # Optional — importable modules
 └── resources/        # Optional — supporting files
-```
-
-**SKILL.md format:**
-
-```yaml
----
-name: my-skill
-description: What this skill does and when to use it
----
-
-# My Skill
-
-Instructions the model follows when this skill is active.
 ```
 
 **Skill directories are scanned from:**
 
 | Path | Scope |
 |------|-------|
-| `~/.baryo/skills/*/SKILL.md` | Global skills for all projects |
-| `.baryo/skills/*/SKILL.md` | Project config directory |
 | `skills/*/SKILL.md` | Project root |
+| `.baryo/skills/*/SKILL.md` | Project config directory |
+| `~/.baryo/skills/*/SKILL.md` | Global skills for all projects |
 
-If a skill includes a `scripts/` directory, the model is told about available scripts and can suggest running them via `/run`. Project-level skills override global skills with the same name.
-
-Baryo ships with skills from the [Anthropic Agent Skills](https://github.com/anthropics/skills) repository in the `skills/` directory. Skills are **lazy-loaded** — only names and descriptions are read on startup. Full content is loaded on-demand when you activate a skill.
-
-```bash
-# List available skills
-/skills
-
-# Activate a skill — loads full instructions + scripts into context
-/skill pdf
-/skill internal-comms
-
-# Then just ask naturally
-create a sample incident report for the outage last night
-```
-
-The model sees the skill index in the system prompt and can suggest activating skills when relevant (e.g., "You might want to run `/skill pdf` for this task").
+Skills are **lazy-loaded** — only names and descriptions are indexed on startup. Full content, scripts, and resources are loaded on-demand when activated. Project-level skills override global skills with the same name.
 
 **Install skills globally:**
 
