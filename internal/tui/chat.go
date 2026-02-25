@@ -70,6 +70,8 @@ type ChatModel struct {
 	searchPending   bool   // true while awaiting search summary; used to trim context after
 	searchCompactAt int    // index in m.messages of the raw search context to compact
 
+	searchFallbackUsed bool // prevents infinite search fallback loops (once per turn)
+
 	// Skills (lazy loading with auto-activation)
 	skillIndex  []config.Skill    // lightweight index (name + description only)
 	activeSkills map[string]bool  // tracks which skills have been activated
@@ -482,12 +484,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			hasSkill := m.hasActiveScripts()
 			wantsTools := needsTools(text)
-			switch {
-			case hasSkill && wantsTools:
-				toolDefs = toDockerToolDefs(tools.AllDefinitions())
-			case hasSkill:
-				toolDefs = toDockerToolDefs(tools.ScriptDefinitions())
-			case wantsTools:
+			if hasSkill || wantsTools {
 				toolDefs = toDockerToolDefs(tools.AllDefinitions())
 			}
 
@@ -633,6 +630,33 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
+			// Search fallback: if model tried but failed to search, auto-trigger /search
+			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" {
+				tc := strings.ToLower(m.turnContent)
+				failedSearch := (strings.Contains(tc, "issue accessing the search") ||
+					(strings.Contains(tc, "couldn't access") && strings.Contains(tc, "search")) ||
+					strings.Contains(tc, "unable to search") ||
+					strings.Contains(tc, "unable to perform") ||
+					strings.Contains(tc, "don't have access to") ||
+					strings.Contains(tc, "don't have the ability") ||
+					(strings.Contains(tc, "search tool") && (strings.Contains(tc, "fail") || strings.Contains(tc, "error") || strings.Contains(tc, "issue") || strings.Contains(tc, "unavailable"))) ||
+					(strings.Contains(tc, "cannot") && strings.Contains(tc, "search")))
+				if failedSearch {
+					query := m.extractSearchTopic()
+					if query != "" {
+						m.searchFallbackUsed = true
+						m.streaming = ""
+						m.turnContent = ""
+						m.isStream = false
+						m.cancelFunc = nil
+						m.eventCh = nil
+						m.toolStatus = ""
+						return m.handleSearch(query)
+					}
+				}
+			}
+
+			m.searchFallbackUsed = false
 			m.streaming = ""
 			m.turnContent = ""
 			m.isStream = false
@@ -1426,25 +1450,38 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 	}
 }
 
-// isSearchAgreement returns true if the user's input is a short affirmative
-// and the last assistant message suggested searching.
+// isSearchAgreement returns true if the user's input indicates agreement to
+// search and the last assistant message suggested searching.
 func (m *ChatModel) isSearchAgreement(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
+
+	// Check for affirmative words anywhere in the message
 	affirmatives := []string{
 		"yes", "yeah", "yep", "sure", "ok", "okay",
-		"go ahead", "search", "search it", "please",
-		"do it", "go for it", "yes please", "y",
+		"go ahead", "please", "do it", "go for it", "y",
 	}
-	isAffirmative := false
+	hasAffirmative := false
 	for _, a := range affirmatives {
-		if lower == a {
-			isAffirmative = true
+		if lower == a || strings.HasPrefix(lower, a+" ") || strings.HasPrefix(lower, a+",") {
+			hasAffirmative = true
 			break
 		}
 	}
-	if !isAffirmative {
+
+	// Check for explicit search intent words
+	searchIntents := []string{"search", "look it up", "look that up", "find it", "google"}
+	hasSearchIntent := false
+	for _, s := range searchIntents {
+		if strings.Contains(lower, s) {
+			hasSearchIntent = true
+			break
+		}
+	}
+
+	if !hasAffirmative && !hasSearchIntent {
 		return false
 	}
+
 	// Check if last assistant message suggested searching
 	for i := len(m.history) - 1; i >= 0; i-- {
 		if m.history[i].role == "assistant" {
