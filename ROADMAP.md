@@ -1,148 +1,212 @@
 # Baryo Roadmap
 
+Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. Every feature should strengthen at least one of these.
+
 ---
 
 ## Core — Essential Next Steps
 
-Features that fill critical gaps and make Baryo competitive with Claude Code, Gemini CLI, and Copilot CLI.
+### File Write & Edit Tools
+The model can read files but can't write or edit them. This is the single biggest gap blocking real coding workflows.
 
-### Memory (Persistent Context Across Sessions)
-Allow the model to remember things across chat sessions — user preferences, project decisions, learned facts, and recurring instructions.
-
-- `/remember <fact>` — explicitly save something (e.g., "always use TypeScript", "project uses PostgreSQL")
-- `/forget <fact>` — remove a saved memory
-- `/memories` — list all saved memories
-- Auto-detect memorable moments — when the user corrects the model or states a preference, offer to remember it
-- Memories stored in `~/.baryo/memories.json` (global) and `.baryo/memories.json` (per-project)
-- Injected into system prompt at session start; per-project takes priority over global
+- `write_file` tool — create or overwrite files
+- `edit_file` tool — exact string replacement in existing files (like Claude Code's Edit tool)
+- Multi-file editing in a single turn
+- Permission gating — confirm before writes (see Permission System below)
+- Auto-create directories as needed
 
 ### Permission System
-Tiered permission levels for tool execution and file modification. Every major CLI tool has this.
+Tiered permission levels for tool execution and file modification. Required before enabling write tools.
 
-- Modes: `suggest` (read-only), `confirm` (ask before writes/runs), `auto` (full autonomy, like Gemini's yolo mode)
+- Modes: `suggest` (read-only), `confirm` (ask before writes/runs), `auto` (full autonomy, like `--yolo`)
 - Default to `confirm` for destructive operations (file writes, shell commands, `run_code`)
-- Per-tool allow/deny overrides (e.g., always auto-approve `read_file`, always confirm `run_code`)
+- Per-tool allow/deny overrides (e.g., always auto-approve `read_file`, always confirm `write_file`)
 - Config via `~/.baryo/config.yaml` or `--mode` flag
+- `--yolo` / `-y` flag for unattended operation (CI/CD)
 
-### Model Switching Mid-Session
-Switch between models during a conversation without losing context. Basic expectation for any multi-model tool.
+### GitHub Workflow (PR, Issues, Code Review)
+End-to-end GitHub workflow via the `gh` CLI. Key differentiator for dev workflows.
 
-- `/model <name>` command to switch mid-session
-- Conversation history preserved across model switches
-- Use a fast model for simple questions, a powerful one for complex reasoning
+- `/pr` — create a PR from current branch with AI-generated title and description
+- `/pr review` — review an open PR (fetch diff, analyze, comment)
+- `/issue <number>` — read a GitHub issue, create a branch, start implementing
+- `/pr status` — show PR review status (approved/pending/changes requested)
+- Respond to PR review comments and push fixes
+- Branch management: create, switch, merge, delete
+
+### Deep Research Mode
+Go beyond single searches. Multi-step research that scours the internet, compiles findings, and generates structured reports.
+
+- `/research <topic>` — deep research with multiple search rounds
+- Search → fetch top pages → identify gaps → search again → compile report
+- Structured output: executive summary, key findings, sources, methodology
+- Configurable depth: quick (1 round), standard (3 rounds), deep (5+ rounds)
+- Auto-cite all sources with user's preferred citation style (from memories)
+- Export research to markdown file
+- Follow-up: "dig deeper into finding #3" for iterative research
+
+### Headless / CI Mode
+Non-interactive mode for scripts, CI/CD pipelines, and automation. Required for DevOps integration.
+
+- `baryo -p "prompt"` already exists — extend with multi-turn support
+- `--yolo` flag for auto-approving all operations
+- `--max-turns N` to limit execution rounds
+- Output formats: `text`, `json`, `stream-json`
+- Exit codes for success/failure (useful in pipelines)
+- Pipe support: `cat file.go | baryo -p "review this code"`
+- GitHub Actions: `baryo -p "review PR diff" --yolo` in CI workflows
 
 ### Ignore Files
 Prevent the model from reading sensitive files. Security baseline.
 
 - `.baryoignore` file (similar to `.gitignore` patterns)
 - Auto-exclude `.env`, credentials, secrets, API keys
-- Respected by all tools (`readfile`, `glob`, `grep`, `@mentions`)
+- Respected by all tools (`read_file`, `glob`, `grep`, `@mentions`)
 - Falls back to `.gitignore` rules when `.baryoignore` doesn't exist
 
+---
+
+## High Impact — Major Features
+
+### DevOps Toolkit
+Purpose-built tools for infrastructure, deployment, and container management.
+
+- `/deploy` — generate deployment files for the current project:
+  - Dockerfile / docker-compose.yml
+  - GitHub Actions workflows (.github/workflows/)
+  - Kubernetes manifests (deployment, service, ingress)
+  - Terraform / CloudFormation templates
+- `/docker` — manage local Docker containers:
+  - List running containers, images, volumes
+  - Build, run, stop, remove containers
+  - View logs, inspect, exec into containers
+- Docker Compose awareness: detect `docker-compose.yml` and offer relevant commands
+- CI/CD pipeline generation based on project type detection (Go, Node, Python, Rust)
+- Infrastructure-as-Code generation with security best practices
+
+### Plan Mode
+Read-only analysis and planning before coding. Inspired by Claude Code and Copilot CLI.
+
+- `/plan` — enter plan mode (model can read but not write)
+- Model analyzes codebase, proposes step-by-step implementation plan
+- User approves, rejects, or modifies the plan
+- On approval, switch to execution mode and implement
+- Architecture decisions documented as part of the plan
+- Useful for complex refactors and multi-file changes
+
+### Agent Modes
+Specialized modes with different tool access and behavior.
+
+- `/mode ask` — read-only answers, no tools, fast (extends existing `/ask`)
+- `/mode code` — model can read/write files, run tools, execute code
+- `/mode architect` — high-level planning, generates plans without executing
+- `/mode review` — focused on code review with security and style checks
+- `/mode research` — web-focused, search and fetch tools prioritized
+- Mode persists for the session, switchable at any time
+
+### Multi-Source Search
+Strengthen research by querying multiple sources simultaneously.
+
+- Parallel search across multiple providers (DDG + Brave + Tavily)
+- Deduplicate and rank results across providers
+- `/fetch <url>` improvements: better content extraction, PDF support, structured data
+- Domain-specific search: `--site:github.com`, `--site:stackoverflow.com`
+- Search result caching to avoid re-fetching within a session
+- Configurable number of pages to deep-read (currently 3, allow up to 10)
+
+### Auto-Fix on Lint/Test
+Automatically run linters and tests after code changes, fix issues. Inspired by Aider.
+
+- After tool-based code changes, run configured linter (e.g., `golangci-lint`, `eslint`)
+- If issues found, feed them back to the model and auto-fix
+- Also run tests: `go test`, `npm test`, `pytest` — detected from project type
+- Configurable per-project via BARYO.md or config
+- Can be combined with hooks system
+
+### Hooks System
+Shell commands that run on events — pre-tool, post-tool, on-error, on-commit.
+
+- Define hooks in `~/.baryo/config.yaml` or `.baryo/config.yaml`
+- Events: `pre-tool`, `post-tool`, `on-error`, `on-commit`, `on-stream-end`, `on-search`
+- Use cases: auto-lint after code changes, format files, run tests, notify
+- Hook output shown in chat as tool results
+- Blocking hooks can cancel operations (e.g., pre-commit validation)
+
+### Subagent / Task Delegation
+Spawn specialized sub-tasks for parallel or isolated work. Inspired by Kimi CLI and Claude Code.
+
+- `/task "description"` — delegate a task to a sub-model call
+- Subagent runs in isolated context with its own message history
+- Parallel task execution for independent work
+- Results merged back into main conversation
+- Use cases: research one topic while coding another, run tests in background
+
+### MCP (Model Context Protocol) Support
+Universal tool connectivity via the MCP standard.
+
+- Connect to external MCP servers (GitHub, Jira, Slack, databases, etc.)
+- MCP server config in `~/.baryo/config.yaml` or `.baryo/config.yaml`
+- `baryo mcp add/list/remove` management commands
+- Dynamically register tools from MCP servers alongside built-in tools
+- Compatible with Claude Code and Kimi CLI MCP configs
+
+### RAG (Retrieval-Augmented Generation)
+Index project files and auto-retrieve relevant context.
+
+- Lightweight file-tree + function/type signature index built on startup
+- AST-aware repo map (like Aider's tree-sitter approach) for structural understanding
+- Auto-retrieve relevant files based on user query without sending entire codebase
+- Fall back to existing `glob`/`grep`/`read_file` tools for on-demand access
+
+---
+
+## Additive — Polish & Quality of Life
+
+### Project Scaffolding
+Generate new projects from templates.
+
+- `/new <type>` — scaffold a new project (go-api, react-app, python-cli, etc.)
+- Generate boilerplate: main file, config, Dockerfile, CI/CD, README, .gitignore
+- Customizable templates stored in `~/.baryo/templates/` or `.baryo/templates/`
+- Model fills in project-specific details (name, description, dependencies)
+
+### Shell Toggle (Ctrl-X)
+Switch between AI chat and direct shell execution without leaving Baryo. Inspired by Kimi CLI.
+
+- `Ctrl-X` toggles between chat mode and shell mode
+- Shell mode: type commands directly, output shown inline
+- Prefix with `!` for quick one-off commands (already possible via `/run`)
+- Shell history shared with input history
+
+### Model Switching Mid-Session
+Switch between models during a conversation without losing context.
+
+- `/model <name>` command to switch mid-session
+- Conversation history preserved across model switches
+- Use a fast model for simple questions, a powerful one for complex reasoning
+
 ### Context Pinning
-Always include specific files as context without re-mentioning them.
+Always include specific files as context.
 
 - `/pin @file` — pin a file so it's always included in context
 - `/unpin @file` — remove a pinned file
 - `/pins` — list currently pinned files
 - Pinned content injected into every model call alongside system prompt
 
+### Checkpoints & Rewind
+Named save-points mid-conversation. Inspired by Claude Code.
+
+- `/checkpoint <name>` — save current conversation + git state
+- `/rewind` — roll back to a previous point
+- Integrates with git: can restore code state alongside conversation
+- Like save-points in a game — explore freely, restore if it goes wrong
+
 ### Notification on Completion
-Terminal bell or OS notification when a long task finishes. Small but essential UX.
+Terminal bell or OS notification when a long task finishes.
 
 - Terminal bell on stream completion
 - Optional OS notification via `osascript` (macOS) / `notify-send` (Linux)
 - Configurable: `notifications: true` in config
-
----
-
-## Important — High-Impact Features
-
-Features that significantly expand what Baryo can do. Larger effort but strong differentiators.
-
-### Hooks System
-Shell commands that run on events — pre-tool, post-tool, on-error. Inspired by Claude Code.
-
-- Define hooks in `~/.baryo/config.yaml` or `.baryo/config.yaml`
-- Events: `pre-tool`, `post-tool`, `on-error`, `on-commit`, `on-stream-end`
-- Use cases: auto-lint after code changes, format files, run tests, send Slack notifications
-- Hook output shown in chat as tool results
-
-### Agent Modes
-Specialized modes with different tool access and behavior. Inspired by Copilot CLI and Aider.
-
-- `/mode ask` — read-only answers, no tools, fast (extends existing `/ask`)
-- `/mode code` — model can read/write files, run tools, execute code
-- `/mode architect` — high-level planning, generates step-by-step plans without executing
-- `/mode review` — focused on code review with security and style checks
-- Mode persists for the session, switchable at any time
-
-### PR Workflow
-End-to-end pull request workflow. Inspired by Copilot CLI.
-
-- `/pr` — create a PR from current branch with AI-generated title and description
-- `/pr review` — review an open PR (fetch diff, analyze, comment)
-- Issue-to-code: `/issue <number>` — read a GitHub issue, create a branch, implement it
-- Respond to PR review comments and update code
-
-### Auto-Fix on Lint
-Automatically run linters after changes and fix detected issues. Inspired by Aider.
-
-- After tool-based code changes, run configured linter (e.g., `golangci-lint`, `eslint`)
-- If issues found, feed them back to the model and auto-fix
-- Configurable per-project via BARYO.md or config
-- Can be combined with hooks system
-
-### RAG (Retrieval-Augmented Generation)
-Index project files and retrieve relevant context automatically instead of requiring manual `@mentions`.
-
-- Lightweight file-tree + function/type signature index built on startup or on-demand
-- AST-aware repo map (like Aider's tree-sitter approach) for structural understanding
-- Auto-retrieve relevant files based on user query without sending the entire codebase
-- Fall back to existing `glob`/`grep`/`readfile` tools for on-demand access
-
-### Multi-Modal Input
-Support image attachments in chat for models that support vision (LLaVA, etc.).
-
-- `@image path/to/screenshot.png` syntax or paste from clipboard
-- Model capability detection — only enable for vision-capable models
-- Useful for UI work, diagram analysis, and visual debugging
-
-### MCP (Model Context Protocol) Support
-Integrate with the MCP standard for universal tool connectivity. Adopted by Anthropic, OpenAI, Google, Microsoft.
-
-- Connect to external MCP servers (Figma, Jira, GitHub, Slack, databases, etc.)
-- MCP server config in `~/.baryo/config.yaml` or `.baryo/config.yaml`
-- Dynamically register tools from MCP servers alongside built-in tools
-- Thousands of existing MCP servers available immediately
-
-### Sandboxed Code Execution
-Run AI-generated code in isolated containers. Inspired by Codex CLI and Gemini CLI.
-
-- Use Docker (already a dependency) for sandboxing `run_code` and `run_script`
-- Prevent accidental damage to the host filesystem
-- Optional — users can opt into direct execution for trusted workflows
-- Configurable: `sandbox: true` in config or `--sandbox` flag
-
----
-
-## Additive — Nice-to-Haves
-
-Features that polish the experience. Lower priority but each one makes Baryo feel more complete.
-
-### Shell Completions
-Tab completion scripts for shell environments.
-
-- `baryo completion zsh/bash/fish/powershell` subcommand
-- Complete flags, model names, session IDs
-
-### Themes
-Built-in color schemes. Inspired by Gemini CLI.
-
-- 2-3 built-in themes (dark, light, minimal)
-- Auto-detect terminal background color
-- Custom theme support via config
-- `/theme <name>` command to switch
 
 ### Streaming Speed Metrics
 Show tokens/second during streaming.
@@ -150,64 +214,64 @@ Show tokens/second during streaming.
 - Display in status bar alongside token count
 - Useful for comparing model performance on local hardware
 
-### Session Management Improvements
-Better organization and discovery of saved sessions.
+### Multi-Modal Input
+Support image attachments for vision-capable models (LLaVA, etc.).
 
-- Auto-generated or user-set session titles (not just hex IDs)
-- `/sessions --search <query>` to search past sessions by content
-- Session tagging/labeling for grouping (e.g., `tag:debugging`, `tag:feature-x`)
-- Auto-cleanup of old sessions (configurable retention)
+- `@image path/to/screenshot.png` syntax
+- Model capability detection — only enable for vision-capable models
+- Useful for UI work, diagram analysis, and visual debugging
 
-### Checkpoints
-Named save-points mid-conversation. Inspired by Gemini CLI.
+### Shell Completions
+Tab completion scripts for shell environments.
 
-- `/checkpoint <name>` — save the current conversation state
-- `/restore <name>` — roll back to a named checkpoint
-- Like save-points in a game — explore freely, restore if it goes wrong
-
-### Conversation Branching
-Fork a conversation at any point to explore different directions without losing the original thread.
-
-- `/branch` to create a fork from the current point
-- `/branches` to list and switch between branches
-- Session format would need tree structure support
+- `baryo completion zsh/bash/fish/powershell` subcommand
+- Complete flags, model names, session IDs
 
 ### Worktree Isolation
-Agent works on a git worktree so it can't break your main branch. Inspired by Claude Code.
+Agent works on a git worktree so it can't break your main branch.
 
 - Auto-create git worktree for agent code changes
-- Changes only merge back to main branch on user approval
-- Prevents accidental damage to working directory
-
-### Plugin System
-Allow users to add custom tools via a plugin config.
-
-- Tool definitions in YAML/JSON config files
-- Specify name, description, parameters, and shell command to execute
-- Loaded dynamically alongside built-in tools
-- Project-level plugins in `.baryo/plugins/` and global in `~/.baryo/plugins/`
+- Changes only merge back on user approval
+- `--worktree` flag to enable
 
 ### Background Agents
-Delegate tasks to background workers. Inspired by Claude Code.
+Delegate tasks to background workers.
 
 - Prefix with `&` or `/bg <prompt>` to run in background
 - `/tasks` to list running background agents
-- `/resume <id>` to check on or continue a background task
-- Useful for long-running code generation or research
+- Results available when done, don't block main conversation
+- Useful for long-running research or code generation
+
+### Sandboxed Code Execution
+Run AI-generated code in isolated containers.
+
+- Use Docker (already a dependency) for sandboxing `run_code` and `run_script`
+- Prevent accidental damage to the host filesystem
+- Optional — users can opt into direct execution for trusted workflows
+- `--sandbox` flag to enable
+
+### Session Management Improvements
+Better organization and discovery of saved sessions.
+
+- Auto-generated session titles (not just hex IDs)
+- `/sessions --search <query>` to search past sessions by content
+- Session tagging/labeling
+- Auto-cleanup of old sessions (configurable retention)
 
 ### Extended Thinking Display
-Show/hide model reasoning in a collapsible block. Inspired by Claude Code.
+Show/hide model reasoning in a collapsible block.
 
 - `<think>` blocks already parsed — render them as collapsible sections
 - Toggle visibility with `/thinking` command
 - Dimmed or indented display to distinguish from actual response
 
-### Cost Tracking
-Track token usage per session. Inspired by Claude Code.
+### Plugin System
+Allow users to add custom tools via config.
 
-- Running total of tokens used (input + output) per session
-- Estimated cost for API-based providers (if configured)
-- `/usage` command to show session stats
+- Tool definitions in YAML/JSON config files
+- Specify name, description, parameters, and shell command to execute
+- Loaded dynamically alongside built-in tools
+- Project-level plugins in `.baryo/plugins/` and global in `~/.baryo/plugins/`
 
 ---
 
