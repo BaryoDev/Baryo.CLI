@@ -35,7 +35,7 @@ func sessionsDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(home, ".baryo", "sessions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -70,7 +70,7 @@ func (s *Session) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, s.ID+".json"), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, s.ID+".json"), data, 0o600)
 }
 
 // Load reads a session by ID from disk.

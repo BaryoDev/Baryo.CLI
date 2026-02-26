@@ -62,7 +62,7 @@ func loadMemoryFile(path, source string) []Memory {
 
 // saveMemoryFile writes memories to a JSON file, creating dirs as needed.
 func saveMemoryFile(path string, memories []Memory) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	store := MemoryStore{Memories: memories}
@@ -70,7 +70,7 @@ func saveMemoryFile(path string, memories []Memory) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 // LoadMemories reads both global and project memory files and returns
