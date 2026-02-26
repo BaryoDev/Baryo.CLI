@@ -33,10 +33,13 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	socketPath     string            // unix socket for Docker Model Runner
-	systemPrompt   string            // active system prompt
-	memoriesPrompt string            // formatted <memories> block (injected prominently)
-	params         docker.ChatParams // model parameters
+	endpoint         docker.Endpoint   // where to send inference requests
+	localSocketPath  string            // kept for /models and /doctor (always local)
+	systemPrompt     string            // active system prompt
+	memoriesPrompt   string            // formatted <memories> block (injected prominently)
+	params           docker.ChatParams // model parameters
+	geminiAPIKey     string            // for model switching via /models
+	openRouterAPIKey string            // for model switching via /models
 	modelName    string            // display name (e.g. "ai/mistral")
 	modelTag     string            // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
 	messages     []docker.ChatMessage
@@ -88,6 +91,11 @@ type ChatModel struct {
 	compactPending bool // true during compaction streaming
 	compactKeep    int  // number of messages to keep during compaction
 
+	// API cost tracking (cloud providers only)
+	promptPrice     float64 // cost per prompt token (0 for local)
+	completionPrice float64 // cost per completion token (0 for local)
+	sessionCost     float64 // cumulative cost this session
+
 	// Permission system
 	permissionMode string           // "auto", "confirm", "suggest"
 	confirmCh      chan confirmRequest // executor writes, TUI reads
@@ -103,33 +111,39 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey, permissionMode string) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string) ChatModel {
 	ta := newTextarea()
-	sess, _ := session.New(modelName, modelTag)
+	sess, _ := session.New(model.Name, model.Tag)
+	ep := endpointForModel(socketPath, model, geminiAPIKey, openRouterAPIKey)
 	return ChatModel{
-		socketPath:     socketPath,
-		systemPrompt:   systemPrompt,
-		memoriesPrompt: memoriesPrompt,
-		params:         params,
-		modelName:      modelName,
-		modelTag:       modelTag,
-		textarea:       ta,
-		markdown:       true,
-		historyIdx:     -1,
-		session:        sess,
-		contextLimit:   8192,
-		searchProvider:  searchProvider,
-		searchAPIKey:    searchAPIKey,
-		skillIndex:      config.SkillIndex(),
-		activeSkills:    make(map[string]bool),
-		modelHints:      docker.DetectModelHints(modelTag),
-		permissionMode:  permissionMode,
-		confirmCh:       make(chan confirmRequest, 1),
+		endpoint:         ep,
+		localSocketPath:  socketPath,
+		systemPrompt:     systemPrompt,
+		memoriesPrompt:   memoriesPrompt,
+		params:           params,
+		geminiAPIKey:     geminiAPIKey,
+		openRouterAPIKey: openRouterAPIKey,
+		modelName:        model.Name,
+		modelTag:         model.Tag,
+		textarea:         ta,
+		markdown:         true,
+		historyIdx:       -1,
+		session:          sess,
+		contextLimit:     8192,
+		searchProvider:   searchProvider,
+		searchAPIKey:     searchAPIKey,
+		skillIndex:       config.SkillIndex(),
+		activeSkills:     make(map[string]bool),
+		modelHints:       docker.DetectModelHints(model.Tag),
+		permissionMode:   permissionMode,
+		confirmCh:        make(chan confirmRequest, 1),
+		promptPrice:      model.PromptPrice,
+		completionPrice:  model.CompletionPrice,
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -140,30 +154,69 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		history[i] = chatEntry{role: m.Role, content: c}
 	}
 	msgs := append([]docker.ChatMessage{}, sess.Messages...)
+	// Detect provider from model tag for session restore.
+	model := docker.DockerModel{Name: sess.ModelName, Tag: sess.ModelTag}
+	model.Provider = detectProviderFromTag(sess.ModelTag)
+	// Restore pricing for Gemini models (OpenRouter pricing requires API call,
+	// so cost tracking starts fresh for restored OpenRouter sessions).
+	if model.Provider == "gemini" {
+		p := docker.LookupGeminiPricing(model.Tag)
+		model.PromptPrice = p.PromptPrice
+		model.CompletionPrice = p.CompletionPrice
+	}
+	ep := endpointForModel(socketPath, model, geminiAPIKey, openRouterAPIKey)
 	cm := ChatModel{
-		socketPath:     socketPath,
-		systemPrompt:   systemPrompt,
-		memoriesPrompt: memoriesPrompt,
-		params:         params,
-		modelName:      sess.ModelName,
-		modelTag:       sess.ModelTag,
-		messages:       msgs,
-		history:        history,
-		textarea:       ta,
-		markdown:       true,
-		historyIdx:     -1,
-		session:        sess,
-		contextLimit:   8192,
-		searchProvider:  searchProvider,
-		searchAPIKey:    searchAPIKey,
-		skillIndex:      config.SkillIndex(),
-		activeSkills:    make(map[string]bool),
-		modelHints:      docker.DetectModelHints(sess.ModelTag),
-		permissionMode:  permissionMode,
-		confirmCh:       make(chan confirmRequest, 1),
+		endpoint:         ep,
+		localSocketPath:  socketPath,
+		systemPrompt:     systemPrompt,
+		memoriesPrompt:   memoriesPrompt,
+		params:           params,
+		geminiAPIKey:     geminiAPIKey,
+		openRouterAPIKey: openRouterAPIKey,
+		modelName:        sess.ModelName,
+		modelTag:         sess.ModelTag,
+		messages:         msgs,
+		history:          history,
+		textarea:         ta,
+		markdown:         true,
+		historyIdx:       -1,
+		session:          sess,
+		contextLimit:     8192,
+		searchProvider:   searchProvider,
+		searchAPIKey:     searchAPIKey,
+		skillIndex:       config.SkillIndex(),
+		activeSkills:     make(map[string]bool),
+		modelHints:       docker.DetectModelHints(sess.ModelTag),
+		permissionMode:   permissionMode,
+		confirmCh:        make(chan confirmRequest, 1),
+		promptPrice:      model.PromptPrice,
+		completionPrice:  model.CompletionPrice,
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
+}
+
+// endpointForModel returns the appropriate endpoint based on a model's provider.
+func endpointForModel(socketPath string, model docker.DockerModel, geminiKey, openRouterKey string) docker.Endpoint {
+	switch model.Provider {
+	case "gemini":
+		return docker.ProviderEndpoint("gemini", geminiKey)
+	case "openrouter":
+		return docker.ProviderEndpoint("openrouter", openRouterKey)
+	default:
+		return docker.LocalEndpoint(socketPath)
+	}
+}
+
+// detectProviderFromTag guesses the provider from a model tag string.
+func detectProviderFromTag(tag string) string {
+	lower := strings.ToLower(tag)
+	if strings.HasPrefix(lower, "gemini-") {
+		return "gemini"
+	}
+	// OpenRouter models typically contain a slash like "meta-llama/llama-3..."
+	// but we can't reliably detect them from tag alone.
+	return ""
 }
 
 // spinnerFrames are the animation frames for the inline spinner.
@@ -530,35 +583,22 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				content: text,
 			})
 
-			// Start streaming
-			m.isStream = true
-			m.streaming = ""
-			m.turnContent = ""
-			m.toolStatus = ""
-			m.streamStart = time.Now()
-
-			ctx, cancel := context.WithCancel(context.Background())
-			m.cancelFunc = cancel
-
-			var toolDefs []docker.ToolDefinition
-			executor := m.makeExecutor()
 			hasSkill := m.hasActiveScripts()
 			wantsTools := needsTools(text)
 			hasTools := hasSkill || wantsTools
-			if hasTools {
-				toolDefs = toDockerToolDefs(tools.AllDefinitions())
+
+			// Rewrite pass: short, tool-oriented messages get rewritten for clarity
+			if hasTools && !hasSkill && len(text) <= 80 {
+				m.isStream = true
+				m.toolStatus = "rewriting prompt..."
+				m.streamStart = time.Now()
+				ctxSummary := rewriteContext(m.history)
+				m.updateViewport()
+				return m, tea.Batch(doRewrite(m.endpoint, m.modelTag, ctxSummary, text, hasTools, hasSkill), doSpinTick())
 			}
 
-			// Apply model hints and temperature adjustments.
-			chatParams := m.applyModelHints(hasTools, hasSkill)
-			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
-
-			m.updateViewport()
-			cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
-			if m.permissionMode == "confirm" {
-				cmds = append(cmds, waitForConfirm(m.confirmCh))
-			}
-			return m, tea.Batch(cmds...)
+			// Start streaming directly (long/explicit prompts skip rewrite)
+			return m.startToolStream(text, hasTools, hasSkill)
 		}
 
 	case ToolConfirmMsg:
@@ -567,6 +607,24 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.pendingConfirm = msg.Req.RespCh
 		m.updateViewport()
 		return m, nil
+
+	case RewriteDoneMsg:
+		m.toolStatus = ""
+		rewritten := msg.Rewritten
+		if rewritten != "" && rewritten != msg.Original {
+			// Replace the last user message in m.messages with the rewritten version
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].Role == "user" {
+					m.messages[i] = docker.NewChatMessage("user", rewritten)
+					break
+				}
+			}
+			m.history = append(m.history, chatEntry{
+				role:    "tool",
+				content: fmt.Sprintf("Rewrite: %s", rewritten),
+			})
+		}
+		return m.startToolStream(rewritten, msg.HasTools, msg.HasSkill)
 
 	case spinTickMsg:
 		if m.isStream {
@@ -752,6 +810,13 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			m.searchFallbackUsed = false
+
+			// Accumulate API cost from token usage stats.
+			if evt.Usage != nil && m.promptPrice > 0 {
+				m.sessionCost += float64(evt.Usage.PromptTokens)*m.promptPrice +
+					float64(evt.Usage.CompletionTokens)*m.completionPrice
+			}
+
 			m.streaming = ""
 			m.turnContent = ""
 			m.isStream = false
@@ -886,7 +951,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancelFunc = cancel
-		m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+		m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -1029,7 +1094,9 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		}
 
 	case "/models":
-		socketPath := m.socketPath
+		socketPath := m.localSocketPath
+		geminiKey := m.geminiAPIKey
+		openRouterKey := m.openRouterAPIKey
 		return m, func() tea.Msg {
 			var downloaded []docker.DockerModel
 			var dlErr error
@@ -1041,8 +1108,20 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			if dlErr != nil {
 				return ShowModelsMsg{Err: dlErr}
 			}
+
+			// Append cloud provider models.
+			if geminiKey != "" {
+				if pm, e := docker.ListProviderModels("gemini", geminiKey); e == nil {
+					downloaded = append(downloaded, pm...)
+				}
+			}
+			if openRouterKey != "" {
+				if pm, e := docker.ListProviderModels("openrouter", openRouterKey); e == nil {
+					downloaded = append(downloaded, pm...)
+				}
+			}
+
 			if isRemoteSocket(socketPath) {
-				// No Docker Hub search for remote servers
 				return ShowModelsMsg{Downloaded: downloaded}
 			}
 			available, srErr := docker.SearchModels()
@@ -1053,7 +1132,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		}
 
 	case "/doctor":
-		results := doctor.RunChecks(m.socketPath)
+		results := doctor.RunChecks(m.localSocketPath)
 		var b strings.Builder
 		pass := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("✓")
 		fail := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("✗")
@@ -1115,6 +1194,21 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 				pct,
 			),
 		})
+		m.updateViewport()
+		return m, nil
+
+	case "/cost":
+		if m.promptPrice == 0 {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "Cost tracking is not available for local models.",
+			})
+		} else {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: fmt.Sprintf("Session cost: $%.4f", m.sessionCost),
+			})
+		}
 		m.updateViewport()
 		return m, nil
 
@@ -1272,6 +1366,12 @@ var compactPromptTemplate string
 //go:embed prompts/search.md
 var searchPromptTemplate string
 
+// rewritePromptTemplate is used to rewrite vague user instructions into
+// clear, tool-oriented prompts before the main execution pass.
+//
+//go:embed prompts/rewrite.md
+var rewritePromptTemplate string
+
 // estimateTokens returns a rough token count for a set of messages.
 // Uses the chars/4 heuristic plus per-message overhead.
 func estimateTokens(messages []docker.ChatMessage) int {
@@ -1407,6 +1507,35 @@ func (m *ChatModel) formatParams() string {
 	}
 	result += "\n\nUsage: /params temperature=0.8 top_p=0.9 max_tokens=2048 top_k=40"
 	return result
+}
+
+// startToolStream sets up streaming state and starts StreamChatWithTools.
+// Used by both the enter handler (direct path) and RewriteDoneMsg handler.
+func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatModel, tea.Cmd) {
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	var toolDefs []docker.ToolDefinition
+	executor := m.makeExecutor()
+	if hasTools {
+		toolDefs = toDockerToolDefs(tools.AllDefinitions())
+	}
+
+	chatParams := m.applyModelHints(hasTools, hasSkill)
+	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
+
+	m.updateViewport()
+	cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
+	if m.permissionMode == "confirm" {
+		cmds = append(cmds, waitForConfirm(m.confirmCh))
+	}
+	return *m, tea.Batch(cmds...)
 }
 
 // makeExecutor returns a tool executor function that respects the permission mode.
@@ -1582,7 +1711,7 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 
 	toolDefs := toDockerToolDefs(tools.AllDefinitions())
 	executor := m.makeExecutor()
-	m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
+	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
 	m.updateViewport()
 	initCmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
@@ -1927,6 +2056,7 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /system [prompt]   View or change system prompt
   /params [k=v]      View or change model parameters
   /context           Show token usage breakdown
+  /cost              Show session API cost (cloud providers)
   /compact           Summarize older messages to free context
   /export [file]     Export conversation to file
   /copy              Copy last response to clipboard
@@ -2047,7 +2177,7 @@ func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2109,7 +2239,7 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, msgs, m.params)
+	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, msgs, m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2154,7 +2284,7 @@ func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params)
+	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2479,6 +2609,67 @@ func needsTools(text string) bool {
 	return false
 }
 
+// rewriteContext builds a compact summary from the last few history entries
+// so the rewrite prompt knows what "it" / "that" refers to.
+func rewriteContext(history []chatEntry) string {
+	start := len(history) - 5
+	if start < 0 {
+		start = 0
+	}
+	var sb strings.Builder
+	for _, e := range history[start:] {
+		label := e.role
+		text := e.content
+		if len(text) > 120 {
+			text = text[:120] + "..."
+		}
+		sb.WriteString(label)
+		sb.WriteString(": ")
+		sb.WriteString(text)
+		sb.WriteByte('\n')
+	}
+	if sb.Len() > 500 {
+		return sb.String()[:500]
+	}
+	return sb.String()
+}
+
+// doRewrite runs a quick rewrite pass: sends the user's vague message through
+// StreamChat (no tools, low temperature) with the rewrite prompt, collects the
+// full response, and returns a RewriteDoneMsg.
+func doRewrite(ep docker.Endpoint, modelTag, contextSummary, userText string, hasTools, hasSkill bool) tea.Cmd {
+	return func() tea.Msg {
+		prompt := fmt.Sprintf(rewritePromptTemplate, contextSummary, userText)
+		msgs := []docker.ChatMessage{
+			docker.NewChatMessage("user", prompt),
+		}
+		lowTemp := 0.1
+		params := docker.ChatParams{Temperature: &lowTemp}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		ch := docker.StreamChat(ctx, ep, modelTag, msgs, params)
+
+		var result strings.Builder
+		for evt := range ch {
+			if evt.Done || evt.Error != "" {
+				break
+			}
+			if evt.Token != "" {
+				result.WriteString(evt.Token)
+			}
+		}
+		rewritten := strings.TrimSpace(result.String())
+		return RewriteDoneMsg{
+			Original:  userText,
+			Rewritten: rewritten,
+			HasTools:  hasTools,
+			HasSkill:  hasSkill,
+		}
+	}
+}
+
 // toolCallExample is the tool-call syntax example injected into the system prompt
 // ONLY when tools are actually available. Keeping it out of the base prompt prevents
 // small models from hallucinating tool calls when tools aren't passed.
@@ -2622,7 +2813,7 @@ func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
 	compactMsgs := []docker.ChatMessage{
 		docker.NewChatMessage("user", prompt),
 	}
-	m.eventCh = docker.StreamChat(ctx, m.socketPath, m.modelTag, compactMsgs, m.params)
+	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, compactMsgs, m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2639,7 +2830,13 @@ func (m *ChatModel) updateViewport() {
 		case "error":
 			b.WriteString(ErrorStyle.Render("Error: " + entry.content))
 		case "tool":
-			b.WriteString(ToolLabelStyle.Render(entry.content))
+			if m.markdown && strings.HasPrefix(entry.content, "Result: ") {
+				b.WriteString(ToolLabelStyle.Render("Result: "))
+				result := strings.TrimPrefix(entry.content, "Result: ")
+				b.WriteString(RenderMarkdown(result, m.width))
+			} else {
+				b.WriteString(ToolLabelStyle.Render(entry.content))
+			}
 		case "assistant":
 			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
 			if m.markdown {
@@ -2716,14 +2913,24 @@ func (m ChatModel) View() string {
 			tokenStyled = TokenDimStyle.Render(tokenInfo)
 		}
 
-		// Right-align the token count.
+		// Append session cost for cloud provider models.
+		rightInfo := tokenStyled
+		if m.promptPrice > 0 {
+			costStr := fmt.Sprintf("$%.4f", m.sessionCost)
+			rightInfo += TokenDimStyle.Render(" • "+costStr)
+		}
+
+		// Right-align the right info.
 		helpWidth := lipgloss.Width(help)
-		tokenWidth := lipgloss.Width(tokenInfo)
-		gap := m.width - helpWidth - tokenWidth
+		rightWidth := lipgloss.Width(tokenInfo)
+		if m.promptPrice > 0 {
+			rightWidth += 3 + len(fmt.Sprintf("$%.4f", m.sessionCost)) // " • " + cost
+		}
+		gap := m.width - helpWidth - rightWidth
 		if gap < 2 {
 			gap = 2
 		}
-		status = HelpStyle.Render(help) + strings.Repeat(" ", gap) + tokenStyled
+		status = HelpStyle.Render(help) + strings.Repeat(" ", gap) + rightInfo
 	}
 
 	return fmt.Sprintf("%s\n%s\n%s\n%s",

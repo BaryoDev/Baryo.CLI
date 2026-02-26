@@ -36,9 +36,11 @@ type AppModel struct {
 	memoriesPrompt string
 	params         docker.ChatParams
 
-	searchProvider string
-	searchAPIKey   string
-	permissionMode string // "auto", "confirm", "suggest"
+	searchProvider   string
+	searchAPIKey     string
+	permissionMode   string // "auto", "confirm", "suggest"
+	geminiAPIKey     string
+	openRouterAPIKey string
 
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
@@ -117,6 +119,14 @@ func WithPermissionMode(mode string) AppOption {
 	}
 }
 
+// WithProviderKeys sets API keys for cloud model providers.
+func WithProviderKeys(gemini, openRouter string) AppOption {
+	return func(a *AppModel) {
+		a.geminiAPIKey = gemini
+		a.openRouterAPIKey = openRouter
+	}
+}
+
 // WithSessionList starts on the session picker screen.
 func WithSessionList(summaries []session.Summary) AppOption {
 	return func(a *AppModel) {
@@ -174,7 +184,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -334,15 +344,36 @@ func (m AppModel) View() string {
 
 // loadModels returns a Cmd that fetches the model list.
 // For TCP/remote connections, it queries the server API instead of docker CLI.
+// Also appends models from configured cloud providers (Gemini, OpenRouter).
 func (m AppModel) loadModels() tea.Cmd {
 	socketPath := m.socketPath
+	geminiKey := m.geminiAPIKey
+	openRouterKey := m.openRouterAPIKey
 	return func() tea.Msg {
+		var models []docker.DockerModel
+		var err error
 		if isRemoteSocket(socketPath) {
-			models, err := docker.ListRemoteModels(socketPath)
-			return ModelsLoadedMsg{Models: models, Err: err}
+			models, err = docker.ListRemoteModels(socketPath)
+		} else {
+			models, err = docker.ListModels()
 		}
-		models, err := docker.ListModels()
-		return ModelsLoadedMsg{Models: models, Err: err}
+		if err != nil {
+			return ModelsLoadedMsg{Err: err}
+		}
+
+		// Append cloud provider models (non-fatal on error).
+		if geminiKey != "" {
+			if pm, e := docker.ListProviderModels("gemini", geminiKey); e == nil {
+				models = append(models, pm...)
+			}
+		}
+		if openRouterKey != "" {
+			if pm, e := docker.ListProviderModels("openrouter", openRouterKey); e == nil {
+				models = append(models, pm...)
+			}
+		}
+
+		return ModelsLoadedMsg{Models: models}
 	}
 }
 
@@ -362,7 +393,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey, m.permissionMode)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,
@@ -372,8 +403,13 @@ func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 }
 
 // startModelLoading transitions to the loading screen for remote models,
-// or directly to chat for local models.
+// or directly to chat for local/cloud-provider models.
 func (m *AppModel) startModelLoading(model docker.DockerModel) (tea.Model, tea.Cmd) {
+	// Cloud provider models don't need preloading.
+	if model.Provider != "" {
+		cmd := m.transitionToChat(model)
+		return *m, cmd
+	}
 	if isRemoteSocket(m.socketPath) {
 		m.screen = screenModelLoading
 		m.pendingModel = &model

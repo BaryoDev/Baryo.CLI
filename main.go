@@ -69,8 +69,14 @@ func main() {
 		memoriesPrompt = config.FormatMemoriesForPrompt(memories)
 	}
 
-	// Run startup health checks unless skipped
-	if !flags.SkipChecks {
+	// Run startup health checks unless skipped or using a cloud provider model.
+	skipDoctor := flags.SkipChecks
+	if !skipDoctor && cfg.Model != "" {
+		if pm, ok := tryProviderModel(&cfg); ok && isProviderModel(pm) {
+			skipDoctor = true
+		}
+	}
+	if !skipDoctor {
 		results := doctor.RunChecks(cfg.SocketPath)
 		if !doctor.AllPassed(results) {
 			fmt.Fprintf(os.Stderr, "Baryo — startup check failed\n\n")
@@ -87,7 +93,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if err := cli.RunPrint(cfg.SocketPath, cfg.SystemPrompt, model, flags.FullPrompt(), cfg.Params); err != nil {
+		ep := endpointForModel(cfg, model)
+		if err := cli.RunPrint(ep, cfg.SystemPrompt, model, flags.FullPrompt(), cfg.Params); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -101,6 +108,7 @@ func main() {
 			tui.WithParams(cfg.Params),
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 			tui.WithPermissionMode(cfg.PermissionMode),
+			tui.WithProviderKeys(cfg.GeminiAPIKey, cfg.OpenRouterAPIKey),
 		}
 
 		// Handle session resume flags
@@ -166,11 +174,18 @@ func startTunnel(cfg *config.Config) *tunnel.Tunnel {
 
 // resolveModel lists available models and matches the query.
 // For TCP connections, it queries the remote server's API for available models.
+// Also checks provider models when no local match is found.
 func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
+	// Try provider models first if model name has a known prefix.
+	if cfg.Model != "" {
+		if pm, ok := tryProviderModel(cfg); ok {
+			return pm, nil
+		}
+	}
+
 	if isRemoteSocket(cfg.SocketPath) {
 		models, err := docker.ListRemoteModels(cfg.SocketPath)
 		if err != nil {
-			// Fallback: if we can't list models but have a model name, use it directly.
 			if cfg.Model != "" {
 				return docker.DockerModel{Name: cfg.Model, Tag: cfg.Model}, nil
 			}
@@ -196,6 +211,38 @@ func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
 		return models[0], nil
 	}
 	return cli.MatchModel(cfg.Model, models)
+}
+
+// tryProviderModel checks if the model name matches a known provider prefix
+// and returns the model directly without listing.
+func tryProviderModel(cfg *config.Config) (docker.DockerModel, bool) {
+	lower := strings.ToLower(cfg.Model)
+	switch {
+	case strings.HasPrefix(lower, "gemini-") && cfg.GeminiAPIKey != "":
+		return docker.DockerModel{Name: cfg.Model, Tag: cfg.Model, Provider: "gemini"}, true
+	default:
+		// For OpenRouter, model names are like "meta-llama/llama-3..."
+		// Can't reliably detect from prefix; user should set the model name explicitly
+		// and it'll be picked up via provider key in the TUI model list.
+		return docker.DockerModel{}, false
+	}
+}
+
+// endpointForModel returns the appropriate endpoint for a model.
+func endpointForModel(cfg config.Config, model docker.DockerModel) docker.Endpoint {
+	switch model.Provider {
+	case "gemini":
+		return docker.ProviderEndpoint("gemini", cfg.GeminiAPIKey)
+	case "openrouter":
+		return docker.ProviderEndpoint("openrouter", cfg.OpenRouterAPIKey)
+	default:
+		return docker.LocalEndpoint(cfg.SocketPath)
+	}
+}
+
+// isProviderModel returns true if the model is a cloud provider model.
+func isProviderModel(model docker.DockerModel) bool {
+	return model.Provider != ""
 }
 
 func isRemoteSocket(socketPath string) bool {

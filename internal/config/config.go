@@ -29,9 +29,11 @@ type Config struct {
 	SystemPrompt   string            `yaml:"system_prompt"`
 	Params         docker.ChatParams `yaml:"params"`
 	SSHTunnel      *tunnel.Config    `yaml:"ssh_tunnel"`
-	SearchProvider string            `yaml:"search_provider"`
-	SearchAPIKey   string            `yaml:"search_api_key"`
-	PermissionMode string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
+	SearchProvider   string            `yaml:"search_provider"`
+	SearchAPIKey     string            `yaml:"search_api_key"`
+	PermissionMode   string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
+	GeminiAPIKey     string            `yaml:"gemini_api_key"`
+	OpenRouterAPIKey string            `yaml:"openrouter_api_key"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -135,6 +137,12 @@ func loadFile(path string, cfg *Config) {
 	if file.PermissionMode != "" {
 		cfg.PermissionMode = file.PermissionMode
 	}
+	if file.GeminiAPIKey != "" {
+		cfg.GeminiAPIKey = file.GeminiAPIKey
+	}
+	if file.OpenRouterAPIKey != "" {
+		cfg.OpenRouterAPIKey = file.OpenRouterAPIKey
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -171,6 +179,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_PERMISSION_MODE"); v != "" {
 		cfg.PermissionMode = v
+	}
+	if v := os.Getenv("BARYO_GEMINI_API_KEY"); v != "" {
+		cfg.GeminiAPIKey = v
+	}
+	if v := os.Getenv("BARYO_OPENROUTER_API_KEY"); v != "" {
+		cfg.OpenRouterAPIKey = v
 	}
 }
 

@@ -35,7 +35,7 @@ func sanitizeToolCallID(id string) string {
 
 // StreamChatWithTools streams a conversation that may include tool calls.
 // The model can call tools up to maxToolRounds times before the final response.
-func StreamChatWithTools(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor) <-chan StreamEvent {
+func StreamChatWithTools(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor) <-chan StreamEvent {
 	out := make(chan StreamEvent, 64)
 
 	go func() {
@@ -54,7 +54,7 @@ func StreamChatWithTools(ctx context.Context, socketPath, model string, messages
 			if round == 0 {
 				roundTools = toolDefs
 			}
-			evtCh, resCh := streamChatRaw(ctx, socketPath, model, msgs, params, roundTools)
+			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, roundTools)
 
 			// Forward all streaming events (tokens, errors).
 			var contentBuf string

@@ -277,6 +277,20 @@ Allow users to add custom tools via config.
 
 ## Completed
 
+### Cloud Provider Support & Cost Tracking (v0.2.3)
+- Gemini and OpenRouter as cloud model providers (Gemini, OpenRouter)
+- API key config via YAML (`gemini_api_key`, `openrouter_api_key`) or env vars
+- Cloud models appear in model picker and browser with `[gemini]`/`[openrouter]` tags
+- Per-session API cost tracking from actual token usage stats
+- Cost displayed in status bar for cloud models (e.g. `$0.0012`)
+- `/cost` command for session spend breakdown
+- Gemini hardcoded pricing table (2.5-pro, 2.5-flash, 2.0-flash)
+- OpenRouter pricing parsed from `/models` API response
+- `Endpoint` abstraction — local socket, TCP, and HTTPS providers unified
+- Print mode (`-p`) works with cloud providers
+- Docker health checks skipped for cloud-only usage
+- Model selector scrolling for long provider model lists
+
 ### Small Model Optimization (v0.2.2)
 - XML-structured system prompts with sandwich pattern for better instruction following
 - Model family detection (Qwen, Llama, Mistral, Phi, Gemma) with optimized parameter presets

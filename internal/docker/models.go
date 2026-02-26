@@ -67,7 +67,7 @@ type ollamaTagsResponse struct {
 // socketPath should be a TCP address like "tcp://localhost:11434".
 func ListRemoteModels(socketPath string) ([]DockerModel, error) {
 	client := &http.Client{
-		Transport: newHTTPClient(socketPath).Transport,
+		Transport: newHTTPClient(Endpoint{SocketPath: socketPath}).Transport,
 		Timeout:   15 * time.Second,
 	}
 
@@ -155,7 +155,7 @@ func listRemoteModelsOpenAI(client *http.Client) ([]DockerModel, error) {
 // Blocks until the model is loaded or an error occurs.
 func PreloadModel(socketPath, model string) error {
 	client := &http.Client{
-		Transport: newHTTPClient(socketPath).Transport,
+		Transport: newHTTPClient(Endpoint{SocketPath: socketPath}).Transport,
 		Timeout:   10 * time.Minute,
 	}
 

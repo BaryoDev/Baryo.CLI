@@ -17,11 +17,18 @@ import (
 	"time"
 )
 
-// newHTTPClient creates an HTTP client that connects via unix socket or TCP.
-// TCP paths are detected by "tcp://" prefix or "host:port" format.
-// Remote servers (TCP) get a longer header timeout to allow for model loading.
-func newHTTPClient(socketPath string) *http.Client {
-	network, addr := parseSocketAddr(socketPath)
+// newHTTPClient creates an HTTP client for the given endpoint.
+// Remote HTTPS providers use a standard client; local/TCP use socket dialing.
+func newHTTPClient(ep Endpoint) *http.Client {
+	if ep.IsRemote() {
+		return &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 2 * time.Minute,
+			},
+		}
+	}
+
+	network, addr := parseSocketAddr(ep.SocketPath)
 	dial := func(_ context.Context, _, _ string) (net.Conn, error) {
 		return net.DialTimeout(network, addr, 30*time.Second)
 	}
@@ -61,7 +68,7 @@ type streamResult struct {
 // streamChatRaw sends a chat request and streams events into the returned channel.
 // The channel is closed when streaming ends. On completion the streamResult is
 // sent via the result channel so callers can inspect accumulated tool calls.
-func streamChatRaw(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
+func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
 	ch := make(chan StreamEvent, 64)
 	resCh := make(chan streamResult, 1)
 
@@ -90,16 +97,22 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 			return
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST",
-			"http://localhost/v1/chat/completions",
-			bytes.NewReader(body))
+		url := "http://localhost/v1/chat/completions"
+		if ep.IsRemote() {
+			url = ep.BaseURL + "/chat/completions"
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if ep.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+ep.APIKey)
+		}
 
-		client := newHTTPClient(socketPath)
+		client := newHTTPClient(ep)
 		resp, err := client.Do(req)
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
@@ -199,8 +212,8 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 }
 
 // StreamChat sends a chat request and streams events. No tools are provided.
-func StreamChat(ctx context.Context, socketPath, model string, messages []ChatMessage, params ChatParams) <-chan StreamEvent {
-	ch, resCh := streamChatRaw(ctx, socketPath, model, messages, params, nil)
+func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams) <-chan StreamEvent {
+	ch, resCh := streamChatRaw(ctx, ep, model, messages, params, nil)
 	out := make(chan StreamEvent, 64)
 	go func() {
 		defer close(out)

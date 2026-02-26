@@ -60,6 +60,13 @@ func DetectModelHints(modelTag string) ModelHints {
 			Temperature: &temp,
 		}
 
+	case strings.HasPrefix(lower, "gemini"):
+		temp := 1.0
+		return ModelHints{
+			Family:      "gemini",
+			Temperature: &temp,
+		}
+
 	default:
 		return ModelHints{
 			Family: "unknown",

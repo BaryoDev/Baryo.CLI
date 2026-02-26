@@ -1,16 +1,17 @@
 # Baryo
 
-A local AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/). Chat with AI models running entirely on your machine — no API keys, no cloud, no data leaving your laptop.
+An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to Gemini and OpenRouter for cloud inference.
 
 Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation.
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Model Runner enabled
-- At least one AI model pulled:
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Model Runner enabled (for local models)
+- At least one AI model pulled (for local models):
   ```bash
   docker model pull ai/gemma3
   ```
+- Or a cloud provider API key (Gemini or OpenRouter) — no Docker needed for cloud models
 - [Go 1.25+](https://go.dev/dl/) (to build from source)
 
 ## Installation
@@ -146,6 +147,7 @@ Baryo includes built-in slash commands for common workflows. Type `/help` to see
 | `/system [prompt]` | View or change the system prompt |
 | `/params [k=v]` | View or change model parameters |
 | `/context` | Show token usage breakdown |
+| `/cost` | Show session API cost (cloud providers) |
 | `/compact` | Summarize older messages to free context |
 | `/export [file]` | Export conversation to a file |
 | `/copy` | Copy last response to clipboard |
@@ -359,6 +361,8 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_MODEL` | Default model |
 | `BARYO_SOCKET` | Docker Model Runner socket path |
 | `BARYO_SYSTEM_PROMPT` | Override the system prompt |
+| `BARYO_GEMINI_API_KEY` | Google Gemini API key |
+| `BARYO_OPENROUTER_API_KEY` | OpenRouter API key |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
 
 ### Precedence
@@ -496,6 +500,38 @@ You: yes
 # ~/.baryo/config.yaml
 search_provider: brave    # or tavily
 search_api_key: your-key
+```
+
+### Cloud providers
+
+Baryo supports cloud model providers alongside local Docker models. Configure an API key and cloud models appear in the model picker.
+
+**Supported providers:**
+
+| Provider | Config key | Environment variable |
+|----------|-----------|---------------------|
+| [Google Gemini](https://ai.google.dev/) | `gemini_api_key` | `BARYO_GEMINI_API_KEY` |
+| [OpenRouter](https://openrouter.ai/) | `openrouter_api_key` | `BARYO_OPENROUTER_API_KEY` |
+
+```yaml
+# ~/.baryo/config.yaml
+gemini_api_key: your-gemini-key
+openrouter_api_key: your-openrouter-key
+```
+
+Or via environment variables:
+
+```bash
+export BARYO_GEMINI_API_KEY=your-key
+export BARYO_OPENROUTER_API_KEY=your-key
+```
+
+Cloud models show a `[gemini]` or `[openrouter]` tag in the model picker and browser. No Docker setup is needed for cloud-only usage.
+
+**Cost tracking:** For cloud providers, the status bar shows your cumulative session cost next to the token count. Use `/cost` to see the current session spend. Cost resets on each new session.
+
+```
+enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit    ~1.2k / 8k • $0.0012
 ```
 
 ### Tool use

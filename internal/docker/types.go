@@ -19,11 +19,24 @@ type dockerModelRaw struct {
 
 // DockerModel is the cleaned-up model info we use in the TUI.
 type DockerModel struct {
-	Name   string // e.g. "ai/mistral"
-	Tag    string // full tag e.g. "docker.io/ai/mistral:latest"
-	Params string // e.g. "7.25 B"
-	Size   string // e.g. "4.07 GiB"
+	Name            string  // e.g. "ai/mistral"
+	Tag             string  // full tag e.g. "docker.io/ai/mistral:latest"
+	Params          string  // e.g. "7.25 B"
+	Size            string  // e.g. "4.07 GiB"
+	Provider        string  // empty = local, "gemini", "openrouter"
+	PromptPrice     float64 // cost per prompt token (0 for local)
+	CompletionPrice float64 // cost per completion token (0 for local)
 }
+
+// Endpoint describes where to send inference requests.
+type Endpoint struct {
+	SocketPath string // for local Docker/Ollama (unix socket or tcp://)
+	BaseURL    string // for remote HTTPS providers
+	APIKey     string // bearer token for authenticated providers
+}
+
+// IsRemote returns true if this endpoint targets an HTTPS provider.
+func (e Endpoint) IsRemote() bool { return e.BaseURL != "" }
 
 // ToolCall represents a completed tool call from the assistant.
 type ToolCall struct {

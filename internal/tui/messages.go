@@ -109,3 +109,11 @@ type confirmRequest struct {
 type ToolConfirmMsg struct {
 	Req confirmRequest
 }
+
+// RewriteDoneMsg is sent when the prompt rewrite pass completes.
+type RewriteDoneMsg struct {
+	Original  string
+	Rewritten string
+	HasTools  bool
+	HasSkill  bool
+}

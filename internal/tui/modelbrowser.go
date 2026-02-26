@@ -69,9 +69,13 @@ func (m *ModelBrowserModel) buildItems() {
 	m.items = nil
 
 	for _, d := range m.downloaded {
+		detail := fmt.Sprintf("params: %s  quantized size: %s", d.Params, d.Size)
+		if d.Provider != "" {
+			detail = "cloud model"
+		}
 		m.items = append(m.items, modelItem{
 			name:       d.Name,
-			detail:     fmt.Sprintf("params: %s  quantized size: %s", d.Params, d.Size),
+			detail:     detail,
 			size:       d.Size,
 			downloaded: true,
 			model:      d,
@@ -210,6 +214,7 @@ func (m ModelBrowserModel) View() string {
 	installedTag := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("[installed]")
 	availableTag := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("[available]")
 	sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 
 	b.WriteString(TitleStyle.Render("🐳 Baryo — Model Browser"))
 	b.WriteString("\n\n")
@@ -279,6 +284,9 @@ func (m ModelBrowserModel) View() string {
 		tag := availableTag
 		if item.downloaded {
 			tag = installedTag
+		}
+		if item.model.Provider != "" {
+			tag = providerTagStyle.Render("[" + item.model.Provider + "]")
 		}
 
 		sizeInfo := ""

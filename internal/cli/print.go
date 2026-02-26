@@ -14,7 +14,7 @@ import (
 )
 
 // RunPrint streams a single prompt/response to stdout without the TUI.
-func RunPrint(socketPath, systemPrompt string, model docker.DockerModel, prompt string, params docker.ChatParams) error {
+func RunPrint(ep docker.Endpoint, systemPrompt string, model docker.DockerModel, prompt string, params docker.ChatParams) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -24,7 +24,7 @@ func RunPrint(socketPath, systemPrompt string, model docker.DockerModel, prompt 
 	}
 	messages = append(messages, docker.NewChatMessage("user", prompt))
 
-	ch := docker.StreamChat(ctx, socketPath, model.Tag, messages, params)
+	ch := docker.StreamChat(ctx, ep, model.Tag, messages, params)
 
 	for evt := range ch {
 		if evt.Error != "" {
