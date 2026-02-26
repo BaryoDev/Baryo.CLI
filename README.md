@@ -39,7 +39,7 @@ scoop install baryo
 ### Go install
 
 ```bash
-go install github.com/arnelirobles/baryo-cli@latest
+go install github.com/baryodev/baryo-cli@latest
 ```
 
 ### Pre-built binaries
