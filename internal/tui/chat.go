@@ -78,6 +78,11 @@ type ChatModel struct {
 
 	searchFallbackUsed bool // prevents infinite search fallback loops (once per turn)
 
+	// Deep research
+	researchPending    bool      // true during pipeline + final report streaming
+	researchProgressCh <-chan string // receives status updates from pipeline goroutine
+	researchCompactAt  int       // index in m.messages for post-report compaction
+
 	// Model hints
 	modelHints docker.ModelHints // detected model family parameters
 
@@ -765,6 +770,23 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
+			// After research report, compact: trim raw context + remove report prompt
+			if m.researchPending {
+				m.researchPending = false
+				idx := m.researchCompactAt
+				if idx >= 0 && idx < len(m.messages) && m.messages[idx].Role == "user" && m.messages[idx].Content != nil {
+					content := *m.messages[idx].Content
+					if len(content) > 500 {
+						content = content[:500] + "\n... (full research context summarized by assistant above)"
+					}
+					m.messages[idx] = docker.NewChatMessage("user", content)
+				}
+				promptIdx := idx + 1
+				if promptIdx < len(m.messages) && m.messages[promptIdx].Role == "user" {
+					m.messages = append(m.messages[:promptIdx], m.messages[promptIdx+1:]...)
+				}
+			}
+
 			// Search fallback: if model tried but failed to search, auto-trigger /search
 			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" {
 				tc := strings.ToLower(m.turnContent)
@@ -980,6 +1002,84 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.saveSession()
 		m.updateViewport()
 		return m, nil
+
+	case ResearchProgressMsg:
+		m.toolStatus = msg.Status
+		m.history = append(m.history, chatEntry{
+			role:    "tool",
+			content: msg.Status,
+		})
+		m.updateViewport()
+		return m, waitForResearchProgress(m.researchProgressCh)
+
+	case ResearchDoneMsg:
+		result := msg.Result
+		if result.Err != nil {
+			m.researchPending = false
+			m.isStream = false
+			m.toolStatus = ""
+			m.history = append(m.history, chatEntry{
+				role:    "error",
+				content: fmt.Sprintf("Research error: %v", result.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+
+		// Build numbered source list for the report prompt
+		var sourceList strings.Builder
+		for i, src := range result.Sources {
+			fmt.Fprintf(&sourceList, "[%d] %s — %s (round %d)\n", i+1, src.Title, src.URL, src.Round)
+		}
+
+		// Pre-flight: estimate available space and truncate findings if needed
+		currentTokens := estimateTokens(m.buildMessages())
+		availableTokens := m.contextLimit - currentTokens - 500 // reserve for report prompt + response
+		if availableTokens < 1000 {
+			availableTokens = 1000
+		}
+		availableChars := availableTokens * 4 // inverse of chars/4 heuristic
+		findings := result.AccumulatedContext
+		if len(findings) > availableChars {
+			findings = search.TruncateContent(findings, availableChars)
+		}
+
+		// Inject accumulated research context (findings live here, not in report prompt)
+		contextMsg := fmt.Sprintf("[Deep research on %q — %d rounds]\n\n%s", result.Topic, result.Rounds, findings)
+		m.researchCompactAt = len(m.messages)
+		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+
+		// Build the report prompt (references findings above, does not duplicate them)
+		memoriesBlock := ""
+		if m.memoriesPrompt != "" {
+			memoriesBlock = "\n\n" + m.memoriesPrompt + "\n\n"
+		}
+		reportPrompt := fmt.Sprintf(researchReportTemplate,
+			result.Topic,
+			strconv.Itoa(result.Rounds),
+			sourceList.String(),
+			memoriesBlock,
+		)
+		m.messages = append(m.messages, docker.NewChatMessage("user", reportPrompt))
+
+		m.history = append(m.history, chatEntry{
+			role:    "tool",
+			content: fmt.Sprintf("Research complete — %d rounds, %d sources. Compiling report...", result.Rounds, len(result.Sources)),
+		})
+
+		// Stream the final report
+		m.isStream = true
+		m.streaming = ""
+		m.turnContent = ""
+		m.toolStatus = "Compiling report..."
+		m.streamStart = time.Now()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancelFunc = cancel
+		m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+
+		m.updateViewport()
+		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 
 	case DiffResultMsg:
 		if msg.Err != nil {
@@ -1297,6 +1397,10 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleSearch(strings.TrimPrefix(text, "/search "))
 		}
 
+		if strings.HasPrefix(text, "/research ") {
+			return m.handleResearch(strings.TrimPrefix(text, "/research "))
+		}
+
 		if strings.HasPrefix(text, "/fetch ") {
 			return m.handleFetch(strings.TrimPrefix(text, "/fetch "))
 		}
@@ -1371,6 +1475,16 @@ var searchPromptTemplate string
 //
 //go:embed prompts/rewrite.md
 var rewritePromptTemplate string
+
+// researchAnalysisTemplate is the prompt used for intermediate round analysis.
+//
+//go:embed prompts/research_analysis.md
+var researchAnalysisTemplate string
+
+// researchReportTemplate is the prompt used to compile the final research report.
+//
+//go:embed prompts/research_report.md
+var researchReportTemplate string
 
 // estimateTokens returns a rough token count for a set of messages.
 // Uses the chars/4 heuristic plus per-message overhead.
@@ -1869,6 +1983,118 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 	}
 }
 
+// handleResearch starts the multi-round deep research pipeline.
+func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /research [quick|deep] <topic>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	depth, topic := search.ParseDepth(args)
+	depthLabel := "standard"
+	switch depth {
+	case search.DepthQuick:
+		depthLabel = "quick"
+	case search.DepthDeep:
+		depthLabel = "deep"
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: fmt.Sprintf("Starting %s research: %s", depthLabel, topic),
+	})
+	m.researchPending = true
+	m.toolStatus = fmt.Sprintf("Researching: %s...", topic)
+	m.isStream = true
+	m.streamStart = time.Now()
+	m.updateViewport()
+
+	progressCh := make(chan string, 10)
+	m.researchProgressCh = progressCh
+
+	ep := m.endpoint
+	modelTag := m.modelTag
+	provider := m.searchProvider
+	apiKey := m.searchAPIKey
+
+	// Compute context budget: use ~60% of remaining context for research findings
+	currentTokens := estimateTokens(m.buildMessages())
+	availableTokens := m.contextLimit - currentTokens - 1000 // reserve for prompts + report
+	contextBudget := availableTokens * 4                     // tokens → chars (inverse of chars/4)
+	if contextBudget < 4000 {
+		contextBudget = 4000
+	}
+
+	doneCh := make(chan search.ResearchResult, 1)
+
+	// Use a cancellable context (no global timeout — web calls have their own
+	// HTTP timeouts, and model inference runs as long as needed).
+	// The user can cancel via ctrl+c which calls m.cancelFunc.
+	pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
+	m.cancelFunc = pipelineCancel
+
+	go func() {
+		cfg := search.ResearchConfig{
+			Provider:      provider,
+			APIKey:        apiKey,
+			Topic:         topic,
+			Depth:         depth,
+			ContextBudget: contextBudget,
+			Progress:      progressCh,
+			ModelCall: func(callCtx context.Context, prompt string) (string, error) {
+				msgs := []docker.ChatMessage{
+					docker.NewChatMessage("user", prompt),
+				}
+				lowTemp := 0.3
+				params := docker.ChatParams{Temperature: &lowTemp}
+				ch := docker.StreamChat(callCtx, ep, modelTag, msgs, params)
+
+				var result strings.Builder
+				for evt := range ch {
+					if evt.Error != "" {
+						return result.String(), fmt.Errorf("%s", evt.Error)
+					}
+					if evt.Done {
+						break
+					}
+					if evt.Token != "" {
+						result.WriteString(evt.Token)
+					}
+				}
+				return strings.TrimSpace(result.String()), nil
+			},
+		}
+
+		result := search.RunResearch(pipelineCtx, cfg)
+		close(progressCh)
+		doneCh <- result
+	}()
+
+	waitDone := func() tea.Msg {
+		result := <-doneCh
+		return ResearchDoneMsg{Result: result}
+	}
+
+	return m, tea.Batch(waitForResearchProgress(m.researchProgressCh), waitDone, doSpinTick())
+}
+
+// waitForResearchProgress returns a Cmd that reads the next progress string
+// from the research pipeline channel.
+func waitForResearchProgress(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		status, ok := <-ch
+		if !ok {
+			return nil // channel closed, pipeline done
+		}
+		return ResearchProgressMsg{Status: status}
+	}
+}
+
 // isSearchAgreement returns true if the user's input indicates agreement to
 // search and the last assistant message suggested searching.
 func (m *ChatModel) isSearchAgreement(text string) bool {
@@ -2043,6 +2269,7 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /run <cmd>         Run a shell command and show output
   /ask <question>    Ask without tool access (fast, read-only)
   /search <query>    Search the web and summarize results
+  /research <topic>  Multi-round deep research with report
   /fetch <url>       Fetch and display a web page
   /skills            List available skills
   /skill <name>      Activate a skill (loads full instructions)

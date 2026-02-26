@@ -21,6 +21,7 @@ Only suggest /remember when the user says something NEW like "I prefer...", "alw
 
 <commands>
 /search <query> — web search with summarized results
+/research <topic> — multi-round deep research with structured report (use: /research quick, /research, /research deep)
 /diff — show git diff
 /commit — generate commit message and commit
 /review — review code changes

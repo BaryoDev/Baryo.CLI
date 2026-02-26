@@ -6,6 +6,7 @@ package tui
 
 import (
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
@@ -116,4 +117,14 @@ type RewriteDoneMsg struct {
 	Rewritten string
 	HasTools  bool
 	HasSkill  bool
+}
+
+// ResearchProgressMsg carries a status update from the research pipeline.
+type ResearchProgressMsg struct {
+	Status string
+}
+
+// ResearchDoneMsg signals that the research pipeline has finished.
+type ResearchDoneMsg struct {
+	Result search.ResearchResult
 }

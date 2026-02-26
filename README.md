@@ -137,6 +137,7 @@ Baryo includes built-in slash commands for common workflows. Type `/help` to see
 | `/run <cmd>` | Run a shell command and display output |
 | `/ask <question>` | Ask the model without tool access (fast, read-only) |
 | `/search <query>` | Search the web and summarize results |
+| `/research <topic>` | Multi-round deep research with structured report |
 | `/fetch <url>` | Fetch and display a web page |
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill (loads full instructions into context) |
@@ -501,6 +502,37 @@ You: yes
 search_provider: brave    # or tavily
 search_api_key: your-key
 ```
+
+### Deep research
+
+Run multi-round research on a topic. Baryo searches iteratively, identifies knowledge gaps, fetches follow-up sources, and compiles a structured report with citations.
+
+```bash
+# Inside the TUI
+/research quantum computing advances
+/research quick Go error handling          # 1 round (fast)
+/research deep Rust vs Go for web servers  # 5 rounds (thorough)
+```
+
+**Depth levels:**
+
+| Prefix | Rounds | Use case |
+|--------|--------|----------|
+| `quick` | 1 | Enhanced search with a structured report |
+| *(default)* | 3 | Balanced depth for most topics |
+| `deep` | 5 | Comprehensive investigation |
+
+**How it works:**
+
+1. Each round: searches the web, fetches top pages, and asks the model to analyse findings
+2. The model identifies knowledge gaps and generates follow-up search queries
+3. Next round searches those follow-up queries for deeper coverage
+4. Progress updates appear in the status bar as each round runs
+5. After all rounds, the model compiles a structured report with an executive summary, key findings, analysis, and numbered source citations
+
+The report is a normal assistant message — use `/copy` to clipboard or `/export` to save it. Follow up naturally in conversation ("dig deeper into finding #3") since the full report stays in context.
+
+**Context-aware:** Research automatically scales to fit your model's context window. Findings are compacted per-round and trimmed if needed so the final report prompt doesn't overflow.
 
 ### Cloud providers
 
