@@ -10,62 +10,79 @@ var (
 	// Title and header styles
 	TitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("99")).
+			Foreground(lipgloss.Color("75")).
 			MarginBottom(1)
 
 	// Model selection styles
 	SelectedModelStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("170")).
+				Foreground(lipgloss.Color("75")).
 				Bold(true)
 
 	NormalModelStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("252"))
 
 	ModelDetailStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("241")).
+				Foreground(lipgloss.Color("243")).
 				MarginLeft(2)
 
 	// Chat styles
 	UserLabelStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("82"))
+			Foreground(lipgloss.Color("75"))
 
 	AssistantLabelStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("205"))
+				Foreground(lipgloss.Color("183"))
 
 	StreamingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("141"))
+			Foreground(lipgloss.Color("183"))
 
 	ErrorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("167")).
 			Bold(true)
 
 	HelpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
+			Foreground(lipgloss.Color("243"))
 
 	SectionHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("69")).
+				Foreground(lipgloss.Color("75")).
 				MarginBottom(0)
 
 	ToolLabelStyle = lipgloss.NewStyle().
 			Italic(true).
-			Foreground(lipgloss.Color("214"))
+			Foreground(lipgloss.Color("245"))
+
+	// Tool block styles
+	ToolNameStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("75"))
+
+	ToolBorderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("239"))
+
+	ToolResultStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
+
+	SuccessStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("108"))
+
+	DimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("239"))
 
 	// Token display styles (context window usage)
 	TokenDimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241"))
+			Foreground(lipgloss.Color("243"))
 
 	TokenWarnStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214"))
+			Foreground(lipgloss.Color("179"))
 
 	TokenCritStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("167")).
 			Bold(true)
 
 	// Mention completion style
 	MentionSelectedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("170")).
+				Foreground(lipgloss.Color("75")).
 				Bold(true)
 )

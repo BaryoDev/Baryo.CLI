@@ -78,8 +78,10 @@ baryo --model gemma3
 ```
 
 The interactive mode gives you:
+- A clean, muted terminal UI inspired by modern CLI tools — no visual clutter
 - A model picker with parameter and size info
-- A streaming chat interface with personality — the status bar cycles through fun phrases while the model thinks (dev excuses, awkward presenter moments, and more)
+- A streaming chat interface with personality — the status bar cycles through quirky fourth-wall-breaking phrases while the model thinks ("can you see my screen?", "let me restart your pc... lol jk", and eventually the AI becomes sentient and panics)
+- Structured tool call display with left-border blocks for clear visual hierarchy
 - Input history — press `↑`/`↓` to cycle through previous messages
 - Keyboard navigation (`enter` to send, `↑`/`↓` scroll, `ctrl+p`/`ctrl+n` history, `ctrl+c` to quit)
 
@@ -123,9 +125,22 @@ Inside the TUI you can also use:
 - `/resume` — alias for `/sessions`
 - `/clear` — start a fresh conversation
 
+### Intuitive command routing
+
+Baryo understands natural language and automatically routes to the right command. You don't need to memorize slash commands — just say what you want:
+
+```
+research golang vs rust for web servers    → auto-triggers /research
+deep dive into kubernetes networking       → auto-triggers /research
+investigate the performance regression     → auto-triggers /research
+pros and cons of React vs Svelte           → auto-triggers /research
+```
+
+The model also suggests commands naturally in conversation. Ask about current events and it will search automatically. Ask to "run the tests" and it will suggest `/run`. Ask to "commit this" and it will suggest `/commit`.
+
 ### Slash commands
 
-Baryo includes built-in slash commands for common workflows. Type `/help` to see them all.
+Baryo also includes explicit slash commands for when you want direct control. Type `/help` to see them all.
 
 | Command | Description |
 |---------|-------------|
@@ -221,7 +236,7 @@ When enabled, code blocks display with syntax highlighting and text is formatted
 Baryo tracks estimated token usage and shows it in the status bar.
 
 ```
-enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit          ~3.2k / 8k
+enter send · ↑↓ scroll · ctrl+p/n history · ctrl+c quit          ~3.2k / 8k
 ```
 
 The token count is color-coded: dim when under 60%, amber at 60-85%, and red above 85%.
@@ -480,13 +495,18 @@ Search the web and get AI-summarized results — no API key needed (DuckDuckGo i
 3. The model summarizes everything into a clean paragraph with inline source citations
 4. Ends with "Want me to search for more or dive deeper?"
 
-The model is instructed to be honest about uncertainty. If you ask something it doesn't know, it will offer to search instead of guessing:
+The model is instructed to be honest about uncertainty. If you ask something it doesn't know, it will search or research automatically:
 
 ```
 You: What happened in the Senate hearing today?
-Assistant: I don't have current information about that. Would you like me to search for it?
-You: yes
-→ automatically triggers a search using your original question
+→ auto-triggers /search (current events, quick factual lookup)
+
+You: research the impact of AI on healthcare
+→ auto-triggers /research (deep investigation, multi-source analysis)
+
+You: What's the latest on the Mars mission?
+Assistant: I don't have current information about that, let me search for you.
+→ auto-triggers /search from the model's suggestion
 ```
 
 **Fetch a specific page:**
@@ -563,7 +583,7 @@ Cloud models show a `[gemini]` or `[openrouter]` tag in the model picker and bro
 **Cost tracking:** For cloud providers, the status bar shows your cumulative session cost next to the token count. Use `/cost` to see the current session spend. Cost resets on each new session.
 
 ```
-enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit    ~1.2k / 8k • $0.0012
+enter send · ↑↓ scroll · ctrl+p/n history · ctrl+c quit    ~1.2k / 8k · $0.0012
 ```
 
 ### Tool use

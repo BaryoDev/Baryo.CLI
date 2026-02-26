@@ -49,7 +49,7 @@ type ModelBrowserModel struct {
 func NewModelBrowser(downloaded []docker.DockerModel, available []docker.SearchModel) ModelBrowserModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
 	)
 	m := ModelBrowserModel{
 		downloaded: downloaded,
@@ -211,12 +211,12 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 func (m ModelBrowserModel) View() string {
 	var b strings.Builder
 
-	installedTag := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("[installed]")
-	availableTag := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("[available]")
-	sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
-	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	installedTag := lipgloss.NewStyle().Foreground(lipgloss.Color("108")).Render("[installed]")
+	availableTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[available]")
+	sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-	b.WriteString(TitleStyle.Render("🐳 Baryo — Model Browser"))
+	b.WriteString(TitleStyle.Render("baryo") + DimStyle.Render(" · ") + HelpStyle.Render("model browser"))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -231,14 +231,14 @@ func (m ModelBrowserModel) View() string {
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
-		b.WriteString(HelpStyle.Render("esc cancel • ctrl+c quit"))
+		b.WriteString(HelpStyle.Render("esc cancel · ctrl+c quit"))
 		return b.String()
 	}
 
 	if len(m.items) == 0 {
 		b.WriteString(HelpStyle.Render("  No models found."))
 		b.WriteString("\n\n")
-		b.WriteString(HelpStyle.Render("esc back • ctrl+c quit"))
+		b.WriteString(HelpStyle.Render("esc back · ctrl+c quit"))
 		return b.String()
 	}
 
@@ -305,7 +305,7 @@ func (m ModelBrowserModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(HelpStyle.Render("↑/↓ navigate • enter select/pull • esc back • ctrl+c quit"))
+	b.WriteString(HelpStyle.Render("↑/↓ navigate · enter select/pull · esc back · ctrl+c quit"))
 
 	return b.String()
 }

@@ -97,13 +97,13 @@ func (m SessionSelectModel) Update(msg tea.Msg) (SessionSelectModel, tea.Cmd) {
 func (m SessionSelectModel) View() string {
 	var b strings.Builder
 
-	b.WriteString(TitleStyle.Render("🐳 Baryo — Resume a Session"))
+	b.WriteString(TitleStyle.Render("baryo") + DimStyle.Render(" · ") + HelpStyle.Render("resume session"))
 	b.WriteString("\n\n")
 
 	if len(m.sessions) == 0 {
 		b.WriteString(HelpStyle.Render("  No saved sessions found."))
 		b.WriteString("\n\n")
-		b.WriteString(HelpStyle.Render("esc back • ctrl+c quit"))
+		b.WriteString(HelpStyle.Render("esc back · ctrl+c quit"))
 		return b.String()
 	}
 
@@ -149,7 +149,7 @@ func (m SessionSelectModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(HelpStyle.Render("↑/↓ navigate • enter select • esc back • ctrl+c quit"))
+	b.WriteString(HelpStyle.Render("↑/↓ navigate · enter select · esc back · ctrl+c quit"))
 
 	return b.String()
 }

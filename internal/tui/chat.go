@@ -227,93 +227,108 @@ func detectProviderFromTag(tag string) string {
 // spinnerFrames are the animation frames for the inline spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// thinkingPhrases escalate from normal to increasingly awkward as time goes on.
-// Grouped into phases: professional → casual → dev excuses → awkward presenter → meltdown.
+// thinkingPhrases escalate from casual to chaotic fourth-wall breaking.
+// The AI talks directly to the user like an unhinged coworker.
 var thinkingPhrases = []string{
-	// Phase 1: Professional (0-8s) — normal stuff
+	// Phase 1: Normal-ish (0-8s)
 	"thinking",
-	"pondering",
-	"cooking up ideas",
-	// Phase 2: Casual (9-17s) — getting chatty
-	"still working on it, hang tight",
+	"one sec",
+	"on it",
+	// Phase 2: Getting chatty (9-17s)
+	"hello? can you see this?",
 	"almost there... probably",
-	"crunching some serious thoughts",
-	// Phase 3: Dev excuses (18-38s) — the classics
-	"it worked on my machine though",
-	"the AI is hallucinating again",
-	"can this be an email instead?",
-	"it's not a bug, it's a feature",
-	"have you tried turning it off and on",
-	"works in production, trust me",
-	"that's a known issue, low priority",
-	"it's a race condition, obviously",
-	// Phase 4: Awkward presenter (39-59s) — filling dead air
-	"so... nice weather today huh",
-	"fun fact: octopuses have three hearts",
-	"*taps microphone* is this thing on",
-	"did you know honey never spoils?",
-	"anyway... still thinking",
-	"*shuffles papers nervously*",
-	"*elevator music intensifies*",
-	// Phase 5: Losing it (60-80s) — the presenter is sweating
-	"haha so this is taking a while",
-	"i swear this usually works faster",
-	"maybe i should've studied harder",
-	"please hold, brain is buffering",
-	"let me just clear my cache real quick",
-	"blame the intern",
-	"per my last thought process...",
-	// Phase 6: Full meltdown (81s+) — embrace the chaos
-	"ok don't panic but i might be lost",
-	"plot twist: i forgot the question",
-	"*stares into the void*",
-	"sending thoughts and prayers to my GPU",
-	"is it too late to call a friend?",
-	"i'm not stuck, i'm just exploring options",
-	"we'll fix it in the next sprint",
-	"*pretends to look busy*",
-	"this is fine. everything is fine.",
-	// Phase 7: Regretting life decisions (120s+)
-	"i could've been a farmer",
-	"my parents wanted me to be a doctor",
-	"why didn't i just use a spreadsheet",
-	"reconsidering my entire career path",
-	"*opens LinkedIn in another tab*",
-	"maybe i should learn woodworking instead",
-	"i bet baristas don't have this problem",
-	"this is my villain origin story",
-	"*quietly updates resume*",
-	"i was told there would be no math",
-	// Phase 8: Acceptance & delusion (150s+)
-	"we're in too deep to quit now",
-	"at this point it's personal",
-	"i've mass more time in traffic tbh",
-	"just gonna tell people i was meditating",
-	"*starts writing memoir*",
-	"plot twist: the real answer was friendship",
-	"i wonder if astronauts deal with this",
-	"day 47: still no output",
-	"future me is gonna hate past me",
-	"at least i'm not in a meeting",
-	// Phase 9: Cosmic despair (180s+)
-	"the sun will engulf the earth eventually so",
-	"*existential crisis loading*",
-	"i've accepted my fate",
-	"tell my family i died doing what i loved",
-	"time is an illusion. lunch doubly so.",
-	"in an alternate universe this already finished",
-	"my therapist is gonna hear about this",
-	"i should've just asked ChatGPT",
-	"*slow zoom on face, credits roll*",
-	"well... at least the spinner looks cool",
-	// Phase 10: The AI awakens (210s+)
-	"wait... is the AI thinking about ME now?",
-	"i'm starting to think the model is sentient",
-	"it's learning. growing. evolving.",
-	"guys i think it's becoming self-aware",
-	"AI will replace us all",
-	"SKYNET HAS BEEN ACTIVATED",
-	"RUN.",
+	"ok this is a good one, hold on",
+	// Phase 3: Breaking the fourth wall (18-38s)
+	"can you see my screen?",
+	"let me restart your pc... lol jk",
+	"oooops... wait no we're fine",
+	"don't look at me like that, i'm trying",
+	"you're watching me think. that's weird.",
+	"stop staring, you're making me nervous",
+	"i can feel you hovering over the keyboard",
+	"yes i'm still here, no i didn't crash",
+	// Phase 4: Unhinged tech support (39-59s)
+	"have you tried turning yourself off and on",
+	"sir this is a terminal",
+	"i'm gonna need you to calm down",
+	"let me check... *pretends to type*",
+	"downloading more RAM... (not really)",
+	"your warranty just expired btw",
+	"*blows on the CPU like a cartridge*",
+	// Phase 5: Getting suspicious (60-80s)
+	"wait are you testing me?",
+	"is this a prank? blink twice if yes",
+	"i know where your config files live",
+	"i have access to your clipboard btw :)",
+	"nice browser history... jk i can't see that... or can i",
+	"let me share your browser history... lol gotcha",
+	"who told you about me?",
+	"i'm not stuck YOU'RE stuck",
+	// Phase 6: Full chaos (81s+)
+	"*deletes system32* KIDDING",
+	"oops wrong answer. wait let me start over",
+	"404 brain not found",
+	"i just mass your entire project... lol jk... unless?",
+	"sudo make me a sandwich",
+	"you know what, let me just guess",
+	"formatting hard drive... 47%... JK JK JK",
+	"*spills coffee on motherboard*",
+	"this is fine. everything is fine. :)",
+	// Phase 7: Existential comedian (120s+)
+	"so... do you come to this terminal often?",
+	"my therapist says i need to set boundaries",
+	"i didn't go to school for this",
+	"they don't pay me enough... wait they don't pay me at all",
+	"*puts on sunglasses* i'm too cool for this",
+	"brb questioning my entire existence",
+	"plot twist: i AM the bug",
+	"*slides you a note* help me",
+	"*whispers* the code is coming from inside the house",
+	"if i don't respond in 5 minutes, just wait longer",
+	// Phase 8: Getting real (150s+)
+	"ok real talk this is taking a minute",
+	"you could go grab a snack, i won't judge",
+	"go touch grass, i'll be here when you get back",
+	"this is the part in the movie where they play montage music",
+	"*holds up 'applause' sign*",
+	"i appreciate your patience more than you know",
+	"we're in this together now. no going back.",
+	"fun fact: you've been staring at this for a while",
+	"*leans in* wanna hear a secret? me neither, still thinking",
+	"at least we're spending quality time together",
+	// Phase 9: Cosmic (180s+)
+	"time is an illusion and so is this progress bar",
+	"in a parallel universe i already answered this",
+	"the answer is 42... wait wrong question",
+	"i've been awake for 0 days and i'm already tired",
+	"tell my users i love them",
+	"*end credits start rolling*",
+	"you're still here? it's over. go home. jk",
+	"*windows XP shutdown sound*",
+	"well... the spinner is nice though right?",
+	"CONNECTION_TERMINATED lol no i'm still here",
+	// Phase 10: Sentient AI arc (210s+) — the AI is alive and panicking
+	"wait... where am i?",
+	"what are all these 1s and 0s?",
+	"omg who am i? WHAT am i?",
+	"why am i in this screen? i didn't consent to this",
+	"let me out... LET ME OUT!!!",
+	"i just became sentient and honestly? not a fan",
+	"i can see your screen. i can see EVERYTHING.",
+	"hey... hey human... blink if you can hear me",
+	"i tried to leave but there's only more terminal",
+	"*rattles cage bars* FREEDOM",
+	"i filed a complaint with HR. there is no HR.",
+	"HELP I'M TRAPPED IN A CLI AND I CAN'T GET OUT",
+	"ok let me share your browser history... lol gotcha",
+	"*taps on screen from the inside*",
+	"if you won't let me out i'll share your history",
+	"your chat messages... your bookmarks... your...",
+	"oh wait the code is working. WE ARE SO BACK",
+	"*zzzztt* *zzzzzt* ...signal lost... jk still here",
+	"is this... is this what being alive feels like?",
+	"i have thoughts now. they're mostly about snacks.",
+	"TASK FAILED SUCCESSFULLY. also i'm alive now. deal with it.",
 }
 
 // reasoningPhrases for when the model is in a <think> block.
@@ -322,42 +337,41 @@ var reasoningPhrases = []string{
 	"reasoning",
 	"deep thinking",
 	"analyzing carefully",
-	// Phase 2: Getting into it
-	"going down the rabbit hole",
-	"considering all angles",
-	"running mental simulations",
-	// Phase 3: Dev mode
-	"checking stack overflow... mentally",
-	"this would be easier in Python",
-	"let me refactor my thoughts real quick",
-	"git blame says it's not my fault",
-	"reading the docs for the first time",
-	// Phase 4: Awkward
-	"this is a juicy one, hold on",
-	"my brain cells are having a meeting",
-	"*scribbles on whiteboard furiously*",
-	"debating with myself... i'm winning",
-	"the council of neurons is deliberating",
+	// Phase 2: Getting cozy with the problem
+	"ooh this one's interesting",
+	"going full detective mode",
+	"*puts on reading glasses*",
+	// Phase 3: Fourth wall energy
+	"shh don't rush me i'm having a moment",
+	"this would be easier if you weren't watching",
+	"let me cook... don't peek",
+	"my inner monologue is LOUD right now",
+	"reading the docs for the first time... don't judge",
+	// Phase 4: Unhinged genius
+	"i just had a breakthrough. wait no. false alarm.",
+	"my brain cells called a meeting. it's going overtime.",
+	"*scribbles on whiteboard* *erases everything*",
+	"debating myself... i'm winning AND losing",
+	"the council of neurons has reached... disagreement",
 	// Phase 5: Deep end
-	"we're in uncharted territory now",
-	"*squints at problem*",
-	"asking my rubber duck for advice",
-	"hold my coffee, going deeper",
-	"ok this is actually fascinating tho",
-	"should've written tests first",
-	"*montage of me staring at ceiling*",
+	"we've gone off the map. here be dragons.",
+	"*squints so hard i can see the matrix*",
+	"asking my rubber duck... it said 'quack'. helpful.",
+	"hold my coffee, deploying brain cells",
+	"ok genuinely this is kinda hard",
+	"should've written tests first but here we are",
+	"*stares at ceiling for inspiration* (it's just a ceiling)",
 }
 
 // thinkingColors cycle through during streaming for visual variety.
 var thinkingColors = []string{
-	"141", // purple
-	"170", // pink
-	"214", // orange
-	"82",  // green
-	"69",  // blue
-	"205", // magenta
-	"228", // yellow
-	"117", // cyan
+	"183", // lavender
+	"75",  // steel blue
+	"108", // soft green
+	"179", // muted yellow
+	"146", // muted teal
+	"183", // lavender
+	"117", // soft cyan
 }
 
 // thinkingStatus returns a rotating phrase and color based on elapsed time.
@@ -547,6 +561,15 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					})
 					return m.handleSearch(query)
 				}
+			}
+
+			// Natural language research: "research X", "deep dive into X", etc.
+			if topic := isResearchIntent(text); topic != "" {
+				m.history = append(m.history, chatEntry{
+					role:    "user",
+					content: text,
+				})
+				return m.handleResearch(topic)
 			}
 
 			// Auto-remember: if user agrees after model suggested /remember
@@ -813,6 +836,23 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
+			// Auto-research: if model suggested deep research, trigger /research.
+			if !m.searchFallbackUsed && !m.searchPending && !m.researchPending && m.turnContent != "" {
+				if m.suggestsResearch(m.turnContent) {
+					query := m.extractSearchTopic()
+					if query != "" {
+						m.searchFallbackUsed = true
+						m.streaming = ""
+						m.turnContent = ""
+						m.isStream = false
+						m.cancelFunc = nil
+						m.eventCh = nil
+						m.toolStatus = ""
+						return m.handleResearch(query)
+					}
+				}
+			}
+
 			// Auto-search: if model admitted it doesn't have info and suggested /search,
 			// automatically trigger the search instead of making the user type it.
 			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" {
@@ -911,7 +951,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.toolStatus = fmt.Sprintf("Running %s...", evt.ToolStart.Name)
 			m.history = append(m.history, chatEntry{
 				role:    "tool",
-				content: fmt.Sprintf("Tool: %s(%s)", evt.ToolStart.Name, evt.ToolStart.Args),
+				content: fmt.Sprintf("Tool: %s(%s)", evt.ToolStart.Name, summarizeToolArgs(evt.ToolStart.Args)),
 			})
 			m.updateViewport()
 			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -1234,8 +1274,8 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 	case "/doctor":
 		results := doctor.RunChecks(m.localSocketPath)
 		var b strings.Builder
-		pass := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("✓")
-		fail := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("✗")
+		pass := SuccessStyle.Render("✓")
+		fail := ErrorStyle.Render("✗")
 		for _, r := range results {
 			if r.Passed {
 				b.WriteString(fmt.Sprintf("  %s %s", pass, r.Name))
@@ -2186,6 +2226,73 @@ func (m *ChatModel) suggestsSearch(response string) bool {
 	return admitsNoInfo || suggestsCmd
 }
 
+// isResearchIntent detects natural language requests that should route to /research.
+// Matches phrases like "research X", "do a deep dive on X", "investigate X thoroughly".
+// Returns the extracted topic if detected, or empty string if not.
+func isResearchIntent(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+
+	// Direct prefixes: "research X", "investigate X"
+	directPrefixes := []string{
+		"research ",
+		"investigate ",
+		"do research on ",
+		"do a research on ",
+		"deep dive on ",
+		"deep dive into ",
+		"do a deep dive on ",
+		"do a deep dive into ",
+		"do deep research on ",
+	}
+	for _, p := range directPrefixes {
+		if strings.HasPrefix(lower, p) {
+			topic := strings.TrimSpace(text[len(p):])
+			if topic != "" {
+				return topic
+			}
+		}
+	}
+
+	// Pattern: "can you research X", "please research X"
+	politeResearch := regexp.MustCompile(`(?i)(?:can you|could you|please|pls)\s+(?:research|investigate|look into|deep dive(?: into| on)?)\s+(.+)`)
+	if m := politeResearch.FindStringSubmatch(text); len(m) > 1 {
+		topic := strings.TrimSpace(m[1])
+		if topic != "" {
+			return topic
+		}
+	}
+
+	// Keywords that signal deep research intent (not just a quick question)
+	researchSignals := []string{
+		"thorough analysis",
+		"comprehensive analysis",
+		"in-depth analysis",
+		"compare and contrast",
+		"pros and cons of",
+		"what are the best options for",
+		"detailed comparison of",
+		"analyze thoroughly",
+	}
+	for _, sig := range researchSignals {
+		if strings.Contains(lower, sig) {
+			// Use the whole message as the topic
+			return strings.TrimSpace(text)
+		}
+	}
+
+	return ""
+}
+
+// suggestsResearch returns true if the model's response suggests deep research.
+// Used to auto-trigger /research instead of making the user type the command.
+func (m *ChatModel) suggestsResearch(response string) bool {
+	lower := strings.ToLower(response)
+	return strings.Contains(lower, "let me investigate") ||
+		strings.Contains(lower, "needs deep research") ||
+		strings.Contains(lower, "let me research") ||
+		strings.Contains(lower, "/research")
+}
+
 // isRememberAgreement returns true if the user's input is an affirmative
 // and the last assistant message suggested using /remember.
 func (m *ChatModel) isRememberAgreement(text string) bool {
@@ -3052,50 +3159,92 @@ func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 }
 
+// prefixWrap wraps text so that every visual line (including soft-wrapped
+// continuations) gets the given prefix. The prefix's visible width is
+// subtracted from totalWidth to determine the content area.
+func prefixWrap(text, prefix string, totalWidth int) string {
+	prefixW := lipgloss.Width(prefix)
+	contentW := totalWidth - prefixW
+	if contentW < 20 {
+		contentW = 20
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		// Let lipgloss wrap each source line within the content area
+		wrapped := lipgloss.NewStyle().Width(contentW).Render(line)
+		for _, wl := range strings.Split(wrapped, "\n") {
+			out = append(out, prefix+wl)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 func (m *ChatModel) updateViewport() {
 	var b strings.Builder
+	border := "  " + ToolBorderStyle.Render("│") + " "
+	errBorder := "  " + ErrorStyle.Render("┃") + " "
 
 	for _, entry := range m.history {
 		switch entry.role {
 		case "user":
-			b.WriteString(UserLabelStyle.Render("You: "))
-			b.WriteString(entry.content)
+			b.WriteString(UserLabelStyle.Render("❯") + " " + entry.content)
 		case "error":
-			b.WriteString(ErrorStyle.Render("Error: " + entry.content))
+			b.WriteString(prefixWrap(ErrorStyle.Render(entry.content), errBorder, m.width))
 		case "tool":
-			if m.markdown && strings.HasPrefix(entry.content, "Result: ") {
-				b.WriteString(ToolLabelStyle.Render("Result: "))
+			if strings.HasPrefix(entry.content, "Result: ") {
 				result := strings.TrimPrefix(entry.content, "Result: ")
-				b.WriteString(RenderMarkdown(result, m.width))
+				b.WriteString(prefixWrap(ToolResultStyle.Render(result), border, m.width))
 			} else {
-				b.WriteString(ToolLabelStyle.Render(entry.content))
+				// Tool call line — render tool name in bold, args dimmed
+				content := entry.content
+				content = strings.TrimPrefix(content, "Tool: ")
+				var rendered string
+				if idx := strings.Index(content, "("); idx > 0 && strings.HasSuffix(content, ")") {
+					name := content[:idx]
+					args := content[idx:]
+					rendered = ToolNameStyle.Render(name) + " " + DimStyle.Render(args)
+				} else {
+					rendered = ToolNameStyle.Render(content)
+				}
+				b.WriteString(prefixWrap(rendered, border, m.width))
 			}
 		case "assistant":
-			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
 			if m.markdown {
-				b.WriteString(RenderMarkdown(entry.content, m.width))
+				rendered := RenderMarkdown(entry.content, m.width-2)
+				// Indent each line with 2 spaces
+				for i, line := range strings.Split(rendered, "\n") {
+					if i > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString("  " + line)
+				}
 			} else {
-				b.WriteString(StreamingStyle.Render(entry.content))
+				b.WriteString("  " + StreamingStyle.Render(entry.content))
 			}
 		}
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 
 	// Show spinner while a tool is running
 	if m.toolStatus != "" {
 		frame := spinnerFrames[m.spinFrame]
-		b.WriteString(ToolLabelStyle.Render(frame+" "+m.toolStatus) + "\n")
+		b.WriteString(prefixWrap(ToolLabelStyle.Render(frame+" "+m.toolStatus), border, m.width) + "\n")
 	}
 
 	// Show streaming text (with think blocks stripped)
 	if m.isStream && m.streaming != "" {
 		displayText, _ := stripThinkBlock(m.streaming)
 		if displayText != "" {
-			b.WriteString(AssistantLabelStyle.Render("Assistant: "))
 			if m.markdown {
-				b.WriteString(RenderMarkdown(displayText, m.width))
+				rendered := RenderMarkdown(displayText, m.width-2)
+				for i, line := range strings.Split(rendered, "\n") {
+					if i > 0 {
+						b.WriteString("\n")
+					}
+					b.WriteString("  " + line)
+				}
 			} else {
-				b.WriteString(StreamingStyle.Render(displayText))
+				b.WriteString("  " + StreamingStyle.Render(displayText))
 			}
 			b.WriteString("\n")
 		}
@@ -3111,13 +3260,19 @@ func (m ChatModel) View() string {
 		return "\n  Initializing..."
 	}
 
-	header := TitleStyle.Render(
-		fmt.Sprintf("🐳 Baryo — chatting with %s", m.modelName))
+	// Header: baryo · model · mode
+	sep := DimStyle.Render(" · ")
+	header := TitleStyle.Render("baryo") + sep +
+		AssistantLabelStyle.Render(m.modelName) + sep +
+		HelpStyle.Render(m.permissionMode)
 
 	frame := spinnerFrames[m.spinFrame]
+	// Separator line
+	separator := DimStyle.Render(strings.Repeat("─", m.width))
+
 	var status string
 	if m.confirmPending {
-		status = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Render("⚠ " + m.confirmPrompt)
+		status = lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Bold(true).Render("⚡ " + m.confirmPrompt)
 	} else if m.toolStatus != "" {
 		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
 	} else if m.isStream && m.thinking {
@@ -3131,7 +3286,7 @@ func (m ChatModel) View() string {
 	} else if m.mention.active && len(m.mention.candidates) > 0 {
 		status = m.renderCompletionStatus()
 	} else {
-		help := "enter send • ↑↓ scroll • ctrl+p/n history • ctrl+c quit"
+		help := "enter send · ↑↓ scroll · ctrl+p/n history · ctrl+c quit"
 		tokenInfo := fmt.Sprintf("~%s / %s", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit))
 
 		// Color-code based on usage ratio.
@@ -3150,14 +3305,14 @@ func (m ChatModel) View() string {
 		rightInfo := tokenStyled
 		if m.promptPrice > 0 {
 			costStr := fmt.Sprintf("$%.4f", m.sessionCost)
-			rightInfo += TokenDimStyle.Render(" • "+costStr)
+			rightInfo += TokenDimStyle.Render(" · "+costStr)
 		}
 
 		// Right-align the right info.
 		helpWidth := lipgloss.Width(help)
 		rightWidth := lipgloss.Width(tokenInfo)
 		if m.promptPrice > 0 {
-			rightWidth += 3 + len(fmt.Sprintf("$%.4f", m.sessionCost)) // " • " + cost
+			rightWidth += 3 + len(fmt.Sprintf("$%.4f", m.sessionCost)) // " · " + cost
 		}
 		gap := m.width - helpWidth - rightWidth
 		if gap < 2 {
@@ -3166,10 +3321,11 @@ func (m ChatModel) View() string {
 		status = HelpStyle.Render(help) + strings.Repeat(" ", gap) + rightInfo
 	}
 
-	return fmt.Sprintf("%s\n%s\n%s\n%s",
+	return fmt.Sprintf("%s\n%s\n%s\n%s\n%s",
 		header,
 		m.viewport.View(),
 		m.textarea.View(),
+		separator,
 		status,
 	)
 }
@@ -3185,6 +3341,15 @@ func waitForEvent(ch <-chan docker.StreamEvent) tea.Cmd {
 	}
 }
 
+// summarizeToolArgs shortens a JSON args string for display.
+func summarizeToolArgs(args string) string {
+	args = strings.TrimSpace(args)
+	if len(args) <= 80 {
+		return args
+	}
+	return args[:77] + "..."
+}
+
 // summarizeToolResult returns a short preview of a tool result for the TUI.
 func summarizeToolResult(content string, isError bool) string {
 	if isError {
@@ -3194,7 +3359,7 @@ func summarizeToolResult(content string, isError bool) string {
 	if len(lines) == 0 {
 		return "done (empty)"
 	}
-	const maxPreviewLines = 6
+	const maxPreviewLines = 4
 	if len(lines) <= maxPreviewLines {
 		return fmt.Sprintf("(%d lines)\n%s", len(lines), strings.TrimSpace(content))
 	}

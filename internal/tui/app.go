@@ -138,7 +138,7 @@ func WithSessionList(summaries []session.Summary) AppOption {
 func NewApp(opts ...AppOption) AppModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
 	)
 	m := AppModel{
 		screen:  screenLoading,
@@ -314,7 +314,7 @@ func (m AppModel) View() string {
 			return ErrorStyle.Render("Error: "+m.err.Error()) + "\n\n" +
 				HelpStyle.Render("ctrl+c to quit")
 		}
-		return m.spinner.View() + " Loading models..."
+		return m.spinner.View() + " " + HelpStyle.Render("loading models...")
 
 	case screenModelSelect:
 		return m.modelSelect.View()
@@ -325,9 +325,11 @@ func (m AppModel) View() string {
 		if m.pendingModel != nil {
 			name = m.pendingModel.Name
 		}
-		return fmt.Sprintf("\n  %s Loading %s into memory... (%s)\n\n  %s",
-			m.spinner.View(), name, elapsed,
-			HelpStyle.Render("This may take a few minutes for large models"))
+		return fmt.Sprintf("\n  %s %s (%s)\n\n  %s",
+			m.spinner.View(),
+			HelpStyle.Render("loading "+name+" into memory..."),
+			HelpStyle.Render(elapsed.String()),
+			DimStyle.Render("this may take a few minutes for large models"))
 
 	case screenChat:
 		return m.chat.View()

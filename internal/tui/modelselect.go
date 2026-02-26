@@ -93,10 +93,10 @@ func (m ModelSelectModel) Update(msg tea.Msg) (ModelSelectModel, tea.Cmd) {
 func (m ModelSelectModel) View() string {
 	var b strings.Builder
 
-	b.WriteString(TitleStyle.Render("🐳 Baryo — Select a Model"))
+	b.WriteString(TitleStyle.Render("baryo") + DimStyle.Render(" · ") + HelpStyle.Render("select a model"))
 	b.WriteString("\n\n")
 
-	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
 	// Determine visible window
 	ps := m.pageSize()
@@ -144,7 +144,7 @@ func (m ModelSelectModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(HelpStyle.Render("↑/↓ navigate • enter select • ctrl+c quit"))
+	b.WriteString(HelpStyle.Render("↑/↓ navigate · enter select · ctrl+c quit"))
 
 	return b.String()
 }
