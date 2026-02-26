@@ -87,6 +87,13 @@ type ChatModel struct {
 	contextLimit   int  // max context window (default 8192)
 	compactPending bool // true during compaction streaming
 	compactKeep    int  // number of messages to keep during compaction
+
+	// Permission system
+	permissionMode string           // "auto", "confirm", "suggest"
+	confirmCh      chan confirmRequest // executor writes, TUI reads
+	confirmPending bool             // true while waiting for y/n
+	confirmPrompt  string           // rendered prompt text for the user
+	pendingConfirm chan<- bool       // response channel for the pending confirm
 }
 
 // chatEntry is a rendered message in the history.
@@ -96,7 +103,7 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey string) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey, permissionMode string) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(modelName, modelTag)
 	return ChatModel{
@@ -116,11 +123,13 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 		skillIndex:      config.SkillIndex(),
 		activeSkills:    make(map[string]bool),
 		modelHints:      docker.DetectModelHints(modelTag),
+		permissionMode:  permissionMode,
+		confirmCh:       make(chan confirmRequest, 1),
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey string) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -150,6 +159,8 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		skillIndex:      config.SkillIndex(),
 		activeSkills:    make(map[string]bool),
 		modelHints:      docker.DetectModelHints(sess.ModelTag),
+		permissionMode:  permissionMode,
+		confirmCh:       make(chan confirmRequest, 1),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -368,6 +379,36 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		// Permission confirm/deny: y or n while waiting for approval.
+		if m.confirmPending {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmPending = false
+				m.confirmPrompt = ""
+				m.pendingConfirm <- true
+				m.pendingConfirm = nil
+				m.history = append(m.history, chatEntry{
+					role:    "tool",
+					content: "Approved",
+				})
+				m.updateViewport()
+				return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick(), waitForConfirm(m.confirmCh))
+			case "n", "N":
+				m.confirmPending = false
+				m.confirmPrompt = ""
+				m.pendingConfirm <- false
+				m.pendingConfirm = nil
+				m.history = append(m.history, chatEntry{
+					role:    "tool",
+					content: "Denied",
+				})
+				m.updateViewport()
+				return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick(), waitForConfirm(m.confirmCh))
+			default:
+				return m, nil
+			}
+		}
+
 		// Viewport scrolling — up/down arrows scroll the conversation.
 		if msg.String() == "up" && !m.isStream {
 			m.viewport.ScrollUp(3)
@@ -500,10 +541,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.cancelFunc = cancel
 
 			var toolDefs []docker.ToolDefinition
-			executor := func(ctx context.Context, name, argsJSON string) (string, bool) {
-				r := tools.Execute(ctx, name, argsJSON)
-				return r.Content, r.IsError
-			}
+			executor := m.makeExecutor()
 			hasSkill := m.hasActiveScripts()
 			wantsTools := needsTools(text)
 			hasTools := hasSkill || wantsTools
@@ -516,8 +554,19 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
 
 			m.updateViewport()
-			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+			cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
+			if m.permissionMode == "confirm" {
+				cmds = append(cmds, waitForConfirm(m.confirmCh))
+			}
+			return m, tea.Batch(cmds...)
 		}
+
+	case ToolConfirmMsg:
+		m.confirmPending = true
+		m.confirmPrompt = msg.Req.Prompt
+		m.pendingConfirm = msg.Req.RespCh
+		m.updateViewport()
+		return m, nil
 
 	case spinTickMsg:
 		if m.isStream {
@@ -1360,6 +1409,84 @@ func (m *ChatModel) formatParams() string {
 	return result
 }
 
+// makeExecutor returns a tool executor function that respects the permission mode.
+// For destructive tools in "confirm" mode, it sends a confirmRequest on the channel
+// and blocks until the TUI sends back a response.
+func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
+	mode := m.permissionMode
+	ch := m.confirmCh
+	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		if tools.IsDestructive(name) {
+			switch mode {
+			case "suggest":
+				return fmt.Sprintf("[suggest mode] Would run %s — approve with --yolo or permission_mode: auto", name), true
+			case "confirm":
+				prompt := formatConfirmPrompt(name, argsJSON)
+				respCh := make(chan bool, 1)
+				ch <- confirmRequest{
+					Name:   name,
+					Args:   argsJSON,
+					Prompt: prompt,
+					RespCh: respCh,
+				}
+				select {
+				case approved := <-respCh:
+					if !approved {
+						return fmt.Sprintf("[denied] %s was not approved", name), true
+					}
+				case <-ctx.Done():
+					return "cancelled", true
+				}
+			}
+			// "auto" falls through to execute
+		}
+		r := tools.Execute(ctx, name, argsJSON)
+		return r.Content, r.IsError
+	}
+}
+
+// waitForConfirm returns a Cmd that listens on the confirm channel and returns
+// a ToolConfirmMsg when a request arrives.
+func waitForConfirm(ch <-chan confirmRequest) tea.Cmd {
+	return func() tea.Msg {
+		req, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return ToolConfirmMsg{Req: req}
+	}
+}
+
+// formatConfirmPrompt extracts key info from the tool args to build a readable prompt.
+func formatConfirmPrompt(name, argsJSON string) string {
+	var args map[string]interface{}
+	json.Unmarshal([]byte(argsJSON), &args)
+
+	switch name {
+	case "write_file":
+		if p, ok := args["path"].(string); ok {
+			return fmt.Sprintf("Allow write to %s? [y/n]", p)
+		}
+	case "edit_file":
+		if p, ok := args["path"].(string); ok {
+			return fmt.Sprintf("Allow edit to %s? [y/n]", p)
+		}
+	case "delete_file":
+		if p, ok := args["path"].(string); ok {
+			return fmt.Sprintf("Allow delete %s? [y/n]", p)
+		}
+	case "run_code":
+		if lang, ok := args["language"].(string); ok {
+			return fmt.Sprintf("Allow running %s code? [y/n]", lang)
+		}
+	case "run_script":
+		if p, ok := args["path"].(string); ok {
+			return fmt.Sprintf("Allow running script %s? [y/n]", p)
+		}
+	}
+	return fmt.Sprintf("Allow %s? [y/n]", name)
+}
+
 func (m *ChatModel) parseParams(input string) error {
 	for _, part := range strings.Fields(input) {
 		kv := strings.SplitN(part, "=", 2)
@@ -1454,14 +1581,15 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 	m.cancelFunc = cancel
 
 	toolDefs := toDockerToolDefs(tools.AllDefinitions())
-	executor := func(ctx context.Context, name, argsJSON string) (string, bool) {
-		r := tools.Execute(ctx, name, argsJSON)
-		return r.Content, r.IsError
-	}
+	executor := m.makeExecutor()
 	m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
 	m.updateViewport()
-	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+	initCmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
+	if m.permissionMode == "confirm" {
+		initCmds = append(initCmds, waitForConfirm(m.confirmCh))
+	}
+	return m, tea.Batch(initCmds...)
 }
 
 // gatherProjectContext collects project files and structure for the /init prompt.
@@ -2341,6 +2469,7 @@ func needsTools(text string) bool {
 		"refactor", "generate", "implement", "rename", "move", "delete", "remove",
 		"add a", "add the", "make a", "make the", "build a", "build the",
 		"scaffold", "setup", "set up", "new file", "new function", "new class",
+		"run ", "run it", "execute", "try it", "test it",
 	}
 	for _, kw := range keywords {
 		if strings.Contains(lower, kw) {
@@ -2355,8 +2484,30 @@ func needsTools(text string) bool {
 // small models from hallucinating tool calls when tools aren't passed.
 const toolCallExample = `
 
-When a skill is active and the user asks you to create something, write the code and execute it IMMEDIATELY. Do NOT describe what you would do — just write the code and call the tool. The ONLY tool names that exist are run_code and run_script. Example:
-<tool_call>{"name": "run_code", "arguments": {"code": "print('hello')", "language": "python"}}</tool_call>`
+<tool-usage>
+IMPORTANT: You have tools. USE THEM. Do NOT simulate what tools would do — actually call them.
+
+FILE OPERATIONS — when the user says create, write, edit, update, modify, delete:
+- Create new file → call write_file (NOT print code in a block)
+- Edit existing file → call read_file, then edit_file (NOT print the changed code)
+- Delete file → call delete_file
+
+CODE EXECUTION — when the user says run, execute, test:
+- Run a file → call run_code with the file's code and language
+- Run inline code → call run_code with code and language
+- You CANNOT execute code by printing it. You MUST call run_code.
+- NEVER write "$ python file.py" followed by fake output. You do not know the output — only the tool does.
+
+WRONG (do NOT do this):
+` + "```" + `bash
+$ python3 hello.py
+Hello World
+` + "```" + `
+
+RIGHT (do this instead):
+→ Call run_code with code="print('Hello World')" language="python"
+→ The tool will return the actual output.
+</tool-usage>`
 
 // noToolsNotice is appended to the system prompt when tools are NOT available,
 // telling the model to answer directly without attempting tool calls.
@@ -2365,7 +2516,7 @@ const noToolsNotice = "\n\nTools are NOT available for this message. Answer the 
 // longConversationReminder is injected as a system message before the last user
 // message when conversation exceeds 10 messages. Counteracts the "lost in the
 // middle" effect where small models forget system instructions.
-const longConversationReminder = "[System: Answer the user's question directly. Only use tools if asked about files/code. Do NOT hallucinate tool calls.]"
+const longConversationReminder = "[System: Answer the user's question directly. Use tools for file operations and code execution — NEVER fake output. Do NOT hallucinate tool calls.]"
 
 // reHallucinatedToolCall matches <tool_call>...</tool_call> blocks in text.
 var reHallucinatedToolCall = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
@@ -2535,7 +2686,9 @@ func (m ChatModel) View() string {
 
 	frame := spinnerFrames[m.spinFrame]
 	var status string
-	if m.toolStatus != "" {
+	if m.confirmPending {
+		status = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Render("⚠ " + m.confirmPrompt)
+	} else if m.toolStatus != "" {
 		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
 	} else if m.isStream && m.thinking {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)

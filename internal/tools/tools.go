@@ -31,8 +31,9 @@ type FunctionDef struct {
 
 // Tool is a registered tool with its schema and executor.
 type Tool struct {
-	Def     Definition
-	Execute func(ctx context.Context, argsJSON string) Result
+	Def         Definition
+	Execute     func(ctx context.Context, argsJSON string) Result
+	Destructive bool // true for tools that modify the filesystem or run code
 }
 
 var registry = map[string]Tool{}
@@ -49,6 +50,15 @@ func Execute(ctx context.Context, name, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("unknown tool: %s", name), IsError: true}
 	}
 	return tool.Execute(ctx, argsJSON)
+}
+
+// IsDestructive returns true if the named tool is marked as destructive.
+func IsDestructive(name string) bool {
+	tool, ok := registry[name]
+	if !ok {
+		return false
+	}
+	return tool.Destructive
 }
 
 // AllDefinitions returns the tool definitions for all registered tools.

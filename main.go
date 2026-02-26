@@ -32,7 +32,7 @@ func main() {
 		return
 	case cli.ModeDoctor:
 		cfg := config.Load()
-		cfg.ApplyCLI("", "", flags.Tunnel, docker.ChatParams{})
+		cfg.ApplyCLI("", "", flags.Tunnel, docker.ChatParams{}, flags.Yolo)
 		tun := startTunnel(&cfg)
 		if tun != nil {
 			defer tun.Close()
@@ -50,7 +50,7 @@ func main() {
 
 	// Load config and apply CLI flag overrides
 	cfg := config.Load()
-	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Tunnel, flags.Params)
+	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Tunnel, flags.Params, flags.Yolo)
 
 	// Start SSH tunnel if configured
 	tun := startTunnel(&cfg)
@@ -100,6 +100,7 @@ func main() {
 			tui.WithMemories(memoriesPrompt),
 			tui.WithParams(cfg.Params),
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
+			tui.WithPermissionMode(cfg.PermissionMode),
 		}
 
 		// Handle session resume flags

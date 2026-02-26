@@ -94,3 +94,18 @@ type CommitResultMsg struct {
 	Message string
 	Err     error
 }
+
+// confirmRequest is sent from the executor goroutine to the TUI when a
+// destructive tool needs user approval.
+type confirmRequest struct {
+	Name    string    // tool name
+	Args    string    // raw JSON args
+	Prompt  string    // human-friendly prompt text
+	RespCh  chan bool // executor blocks on this; TUI sends true/false
+}
+
+// ToolConfirmMsg is the Bubble Tea message that carries a confirm request
+// from the channel listener into the Update loop.
+type ToolConfirmMsg struct {
+	Req confirmRequest
+}

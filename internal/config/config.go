@@ -31,6 +31,7 @@ type Config struct {
 	SSHTunnel      *tunnel.Config    `yaml:"ssh_tunnel"`
 	SearchProvider string            `yaml:"search_provider"`
 	SearchAPIKey   string            `yaml:"search_api_key"`
+	PermissionMode string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -73,8 +74,9 @@ func probeLinuxSocket(home string) string {
 //	env vars > .baryo/config.yaml (project) > ~/.baryo/config.yaml (user) > defaults
 func Load() Config {
 	cfg := Config{
-		SocketPath:   defaultSocketPath(),
-		SystemPrompt: DefaultSystemPrompt,
+		SocketPath:     defaultSocketPath(),
+		SystemPrompt:   DefaultSystemPrompt,
+		PermissionMode: "confirm",
 	}
 
 	// User-level config: ~/.baryo/config.yaml
@@ -130,6 +132,9 @@ func loadFile(path string, cfg *Config) {
 	if file.SearchAPIKey != "" {
 		cfg.SearchAPIKey = file.SearchAPIKey
 	}
+	if file.PermissionMode != "" {
+		cfg.PermissionMode = file.PermissionMode
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -164,11 +169,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_SEARCH_API_KEY"); v != "" {
 		cfg.SearchAPIKey = v
 	}
+	if v := os.Getenv("BARYO_PERMISSION_MODE"); v != "" {
+		cfg.PermissionMode = v
+	}
 }
 
 // ApplyCLI merges CLI flag values on top of config (highest precedence).
-// Only non-empty values are applied.
-func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params docker.ChatParams) {
+// Only non-empty values are applied. If yolo is true, PermissionMode is set to "auto".
+func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params docker.ChatParams, yolo bool) {
 	if model != "" {
 		c.Model = model
 	}
@@ -186,6 +194,9 @@ func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params docker.
 	}
 	if tunnelFlag != "" {
 		c.SSHTunnel = parseTunnelFlag(tunnelFlag)
+	}
+	if yolo {
+		c.PermissionMode = "auto"
 	}
 }
 

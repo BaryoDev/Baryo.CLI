@@ -38,6 +38,7 @@ type Config struct {
 	Continue     bool
 	Resume       bool
 	ResumeID     string
+	Yolo         bool
 	SkipChecks   bool
 	Doctor       bool
 	ShowHelp     bool
@@ -66,6 +67,8 @@ func Parse() Config {
 	fs.BoolVar(&cfg.Resume, "resume", false, "list and pick a saved session")
 	fs.StringVar(&cfg.ResumeID, "resume-id", "", "resume a specific session by ID")
 	fs.StringVar(&cfg.Tunnel, "tunnel", "", "SSH tunnel as user@host (ports default to 11434)")
+	fs.BoolVar(&cfg.Yolo, "y", false, "auto-approve all destructive tool calls")
+	fs.BoolVar(&cfg.Yolo, "yolo", false, "auto-approve all destructive tool calls")
 	fs.BoolVar(&cfg.SkipChecks, "skip-checks", false, "skip startup health checks")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
@@ -163,6 +166,7 @@ Flags:
   -r, --resume          List and pick a saved session to resume
   --resume-id <id>      Resume a specific session by ID
   --tunnel <user@host>  Auto-start SSH tunnel to remote Ollama server
+  -y, --yolo            Auto-approve all destructive tool calls
   --skip-checks         Skip startup health checks
   --version             Print version and exit
   --help                Print this help message

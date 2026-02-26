@@ -12,10 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 func init() {
 	Register("edit_file", Tool{
+		Destructive: true,
 		Def: Definition{
 			Type: "function",
 			Function: FunctionDef{
@@ -84,9 +87,9 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: "path is outside the project directory", IsError: true}
 	}
 
-	// Check .gitignore.
-	if IsGitIgnored(ctx, absPath) {
-		return Result{Content: fmt.Sprintf("file is ignored by .gitignore: %s", args.Path), IsError: true}
+	// Check .baryoignore + .gitignore.
+	if ignore.IsIgnored(ctx, absPath) {
+		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
 	}
 
 	// Read the file.

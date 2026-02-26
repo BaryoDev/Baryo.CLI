@@ -11,10 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 func init() {
 	Register("delete_file", Tool{
+		Destructive: true,
 		Def: Definition{
 			Type: "function",
 			Function: FunctionDef{
@@ -65,6 +68,11 @@ func executeDeleteFile(ctx context.Context, argsJSON string) Result {
 	// Ensure the path is within the working directory.
 	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
 		return Result{Content: "path is outside the project directory", IsError: true}
+	}
+
+	// Check .baryoignore + .gitignore.
+	if ignore.IsIgnored(ctx, absPath) {
+		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
 	}
 
 	// Check that it exists and is a file (not a directory).

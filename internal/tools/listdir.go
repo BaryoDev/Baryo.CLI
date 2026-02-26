@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 const maxListEntries = 500
@@ -127,7 +129,7 @@ func walkDir(ctx context.Context, dir, indent string, depth, maxDepth int, b *st
 
 		absPath := filepath.Join(dir, e.Name())
 
-		if IsGitIgnored(ctx, absPath) {
+		if ignore.IsIgnored(ctx, absPath) {
 			continue
 		}
 

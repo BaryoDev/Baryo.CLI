@@ -20,6 +20,7 @@ const maxScriptOutput = 200 * 1024 // 200 KB
 
 func init() {
 	Register("run_script", Tool{
+		Destructive: true,
 		Def: Definition{
 			Type: "function",
 			Function: FunctionDef{
@@ -45,6 +46,7 @@ func init() {
 	})
 
 	Register("run_code", Tool{
+		Destructive: true,
 		Def: Definition{
 			Type: "function",
 			Function: FunctionDef{

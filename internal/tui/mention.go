@@ -16,7 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/arnelirobles/baryo-cli/internal/tools"
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 const (
@@ -401,10 +401,10 @@ func readFileForMention(path string) (*fileContext, error) {
 		return nil, fmt.Errorf("file too large (%d KB, max %d KB)", fi.Size()/1024, maxMentionFileSize/1024)
 	}
 
-	// Check gitignore
+	// Check .baryoignore + .gitignore
 	ctx := context.Background()
-	if tools.IsGitIgnored(ctx, resolved) {
-		return nil, fmt.Errorf("file is ignored by .gitignore")
+	if ignore.IsIgnored(ctx, resolved) {
+		return nil, fmt.Errorf("file is ignored")
 	}
 
 	data, err := os.ReadFile(resolved)

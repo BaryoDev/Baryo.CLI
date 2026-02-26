@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 const maxGlobResults = 200
@@ -105,7 +107,7 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 			continue
 		}
 
-		if IsGitIgnored(ctx, absPath) {
+		if ignore.IsIgnored(ctx, absPath) {
 			continue
 		}
 		// Return paths relative to cwd.

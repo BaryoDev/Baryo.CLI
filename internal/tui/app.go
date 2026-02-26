@@ -38,6 +38,7 @@ type AppModel struct {
 
 	searchProvider string
 	searchAPIKey   string
+	permissionMode string // "auto", "confirm", "suggest"
 
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
@@ -109,6 +110,13 @@ func WithSearchConfig(provider, apiKey string) AppOption {
 	}
 }
 
+// WithPermissionMode sets the permission mode for destructive tool calls.
+func WithPermissionMode(mode string) AppOption {
+	return func(a *AppModel) {
+		a.permissionMode = mode
+	}
+}
+
 // WithSessionList starts on the session picker screen.
 func WithSessionList(summaries []session.Summary) AppOption {
 	return func(a *AppModel) {
@@ -166,7 +174,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -354,7 +362,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey, m.permissionMode)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

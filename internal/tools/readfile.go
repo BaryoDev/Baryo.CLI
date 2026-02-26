@@ -10,9 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 const maxFileSize = 100 * 1024 // 100 KB
@@ -81,9 +82,9 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: "path is outside the project directory", IsError: true}
 	}
 
-	// Check .gitignore via git check-ignore.
-	if IsGitIgnored(ctx, absPath) {
-		return Result{Content: fmt.Sprintf("file is ignored by .gitignore: %s", args.Path), IsError: true}
+	// Check .baryoignore + .gitignore.
+	if ignore.IsIgnored(ctx, absPath) {
+		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
 	}
 
 	// Read the file.
@@ -150,11 +151,3 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 	return Result{Content: content}
 }
 
-// IsGitIgnored returns true if the file is ignored by git.
-func IsGitIgnored(ctx context.Context, absPath string) bool {
-	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-q", absPath)
-	cmd.Dir = filepath.Dir(absPath)
-	err := cmd.Run()
-	// Exit code 0 = ignored, 1 = not ignored, other = git not available (allow)
-	return err == nil
-}
