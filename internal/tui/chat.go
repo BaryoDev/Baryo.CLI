@@ -1726,6 +1726,10 @@ func formatConfirmPrompt(name, argsJSON string) string {
 		if p, ok := args["path"].(string); ok {
 			return fmt.Sprintf("Allow running script %s? [y/n]", p)
 		}
+	case "shell":
+		if cmd, ok := args["command"].(string); ok {
+			return fmt.Sprintf("Allow shell: %s? [y/n]", cmd)
+		}
 	}
 	return fmt.Sprintf("Allow %s? [y/n]", name)
 }
@@ -2827,6 +2831,8 @@ func needsTools(text string) bool {
 		"add a", "add the", "make a", "make the", "build a", "build the",
 		"scaffold", "setup", "set up", "new file", "new function", "new class",
 		"run ", "run it", "execute", "try it", "test it",
+		"install", "deploy", "brew ", "npm ", "pip ", "cargo ",
+		"aws ", "kubectl", "docker ", "shell", "command", "terminal", "cli",
 	}
 	for _, kw := range keywords {
 		if strings.Contains(lower, kw) {

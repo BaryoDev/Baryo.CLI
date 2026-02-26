@@ -51,6 +51,10 @@ When the user asks you to run, execute, or test a file or code — you MUST call
 - NEVER print "$ command" followed by made-up output
 
 If you are not sure whether a file exists, call read_file first.
+
+- Run a shell/terminal command → call shell with the command string
+- Use shell for CLI tools (aws, kubectl, docker, brew, npm, pip, cargo, etc.)
+- For git read operations (status, diff, log), prefer the built-in git tools
 </tool-rules>
 
 <search-rules>
