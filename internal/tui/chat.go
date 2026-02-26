@@ -2337,6 +2337,10 @@ func needsTools(text string) bool {
 		"project", "struct", "func ", "import", "package",
 		"error", "bug", "fix", "test",
 		"what's in", "what is in", "how many",
+		"write", "create", "edit", "modify", "change", "update",
+		"refactor", "generate", "implement", "rename", "move", "delete", "remove",
+		"add a", "add the", "make a", "make the", "build a", "build the",
+		"scaffold", "setup", "set up", "new file", "new function", "new class",
 	}
 	for _, kw := range keywords {
 		if strings.Contains(lower, kw) {
