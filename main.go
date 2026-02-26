@@ -63,6 +63,12 @@ func main() {
 		cfg.SystemPrompt = cfg.SystemPrompt + "\n\n<project-context>\n" + instructions + "\n</project-context>"
 	}
 
+	// Load saved memories (passed separately for prominent injection)
+	var memoriesPrompt string
+	if memories := config.LoadMemories(); len(memories) > 0 {
+		memoriesPrompt = config.FormatMemoriesForPrompt(memories)
+	}
+
 	// Run startup health checks unless skipped
 	if !flags.SkipChecks {
 		results := doctor.RunChecks(cfg.SocketPath)
@@ -91,6 +97,7 @@ func main() {
 		opts := []tui.AppOption{
 			tui.WithSocketPath(cfg.SocketPath),
 			tui.WithSystemPrompt(cfg.SystemPrompt),
+			tui.WithMemories(memoriesPrompt),
 			tui.WithParams(cfg.Params),
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 		}

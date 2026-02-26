@@ -21,6 +21,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"regexp"
+
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
@@ -31,9 +33,10 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	socketPath   string            // unix socket for Docker Model Runner
-	systemPrompt string            // active system prompt
-	params       docker.ChatParams // model parameters
+	socketPath     string            // unix socket for Docker Model Runner
+	systemPrompt   string            // active system prompt
+	memoriesPrompt string            // formatted <memories> block (injected prominently)
+	params         docker.ChatParams // model parameters
 	modelName    string            // display name (e.g. "ai/mistral")
 	modelTag     string            // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
 	messages     []docker.ChatMessage
@@ -72,6 +75,9 @@ type ChatModel struct {
 
 	searchFallbackUsed bool // prevents infinite search fallback loops (once per turn)
 
+	// Model hints
+	modelHints docker.ModelHints // detected model family parameters
+
 	// Skills (lazy loading with auto-activation)
 	skillIndex  []config.Skill    // lightweight index (name + description only)
 	activeSkills map[string]bool  // tracks which skills have been activated
@@ -90,12 +96,13 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey string) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, modelName, modelTag, searchProvider, searchAPIKey string) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(modelName, modelTag)
 	return ChatModel{
 		socketPath:     socketPath,
 		systemPrompt:   systemPrompt,
+		memoriesPrompt: memoriesPrompt,
 		params:         params,
 		modelName:      modelName,
 		modelTag:       modelTag,
@@ -108,11 +115,12 @@ func NewChat(socketPath, systemPrompt string, params docker.ChatParams, modelNam
 		searchAPIKey:    searchAPIKey,
 		skillIndex:      config.SkillIndex(),
 		activeSkills:    make(map[string]bool),
+		modelHints:      docker.DetectModelHints(modelTag),
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey string) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey string) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -126,6 +134,7 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 	cm := ChatModel{
 		socketPath:     socketPath,
 		systemPrompt:   systemPrompt,
+		memoriesPrompt: memoriesPrompt,
 		params:         params,
 		modelName:      sess.ModelName,
 		modelTag:       sess.ModelTag,
@@ -140,6 +149,7 @@ func NewChatFromSession(socketPath, systemPrompt string, params docker.ChatParam
 		searchAPIKey:    searchAPIKey,
 		skillIndex:      config.SkillIndex(),
 		activeSkills:    make(map[string]bool),
+		modelHints:      docker.DetectModelHints(sess.ModelTag),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -440,6 +450,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
+			// Auto-remember: if user agrees after model suggested /remember
+			if m.isRememberAgreement(text) {
+				fact := m.extractRememberFact()
+				if fact != "" {
+					m.history = append(m.history, chatEntry{
+						role:    "user",
+						content: text,
+					})
+					return m.handleRemember(fact)
+				}
+			}
+
 			// Process @mentions — inject file contents as context
 			_, fileContexts, mentionErrors := m.processAtMentions(text)
 			for _, fc := range fileContexts {
@@ -484,22 +506,14 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			hasSkill := m.hasActiveScripts()
 			wantsTools := needsTools(text)
-			if hasSkill || wantsTools {
+			hasTools := hasSkill || wantsTools
+			if hasTools {
 				toolDefs = toDockerToolDefs(tools.AllDefinitions())
 			}
 
-			// Lower temperature for structured tool output when a skill is active
-			// and the user hasn't explicitly set a temperature.
-			chatParams := m.params
-			if hasSkill && m.params.Temperature == nil {
-				low := 0.3
-				chatParams = docker.ChatParams{
-					Temperature: &low,
-					TopP:        m.params.TopP,
-					MaxTokens:   m.params.MaxTokens,
-				}
-			}
-			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessages(), chatParams, toolDefs, executor)
+			// Apply model hints and temperature adjustments.
+			chatParams := m.applyModelHints(hasTools, hasSkill)
+			m.eventCh = docker.StreamChatWithTools(ctx, m.socketPath, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
 
 			m.updateViewport()
 			return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -562,6 +576,20 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.turnContent += cleaned
 			}
 			m.thinking = false
+
+			// Post-processing guardrail: strip hallucinated tool calls from
+			// responses that weren't supposed to have tools.
+			if m.turnContent != "" && containsHallucinatedToolCall(m.turnContent) {
+				cleaned := stripHallucinatedToolCalls(m.turnContent)
+				if cleaned != m.turnContent {
+					m.turnContent = cleaned
+					// Update the last history entry to show the cleaned text.
+					if len(m.history) > 0 && m.history[len(m.history)-1].role == "assistant" {
+						m.history[len(m.history)-1].content = cleaned
+					}
+				}
+			}
+
 			// Commit the full turn as one assistant message (avoids consecutive assistant roles).
 			if m.turnContent != "" {
 				m.messages = append(m.messages, docker.NewChatMessage("assistant", m.turnContent))
@@ -642,6 +670,24 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					(strings.Contains(tc, "search tool") && (strings.Contains(tc, "fail") || strings.Contains(tc, "error") || strings.Contains(tc, "issue") || strings.Contains(tc, "unavailable"))) ||
 					(strings.Contains(tc, "cannot") && strings.Contains(tc, "search")))
 				if failedSearch {
+					query := m.extractSearchTopic()
+					if query != "" {
+						m.searchFallbackUsed = true
+						m.streaming = ""
+						m.turnContent = ""
+						m.isStream = false
+						m.cancelFunc = nil
+						m.eventCh = nil
+						m.toolStatus = ""
+						return m.handleSearch(query)
+					}
+				}
+			}
+
+			// Auto-search: if model admitted it doesn't have info and suggested /search,
+			// automatically trigger the search instead of making the user type it.
+			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" {
+				if m.suggestsSearch(m.turnContent) {
 					query := m.extractSearchTopic()
 					if query != "" {
 						m.searchFallbackUsed = true
@@ -767,8 +813,13 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.searchCompactAt = len(m.messages) // remember where to compact later
 		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
 
-		// Instruct model to summarize the results
+		// Instruct model to summarize the results.
+		// Inject memories directly into the summarize prompt so the model
+		// sees user preferences (e.g. APA style) right next to the instructions.
 		summarizePrompt := fmt.Sprintf(searchPromptTemplate, msg.Query)
+		if m.memoriesPrompt != "" {
+			summarizePrompt = m.memoriesPrompt + "\n\n" + summarizePrompt
+		}
 		m.messages = append(m.messages, docker.NewChatMessage("user", summarizePrompt))
 
 		m.history = append(m.history, chatEntry{
@@ -1131,6 +1182,18 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleSkillActivate(strings.TrimPrefix(text, "/skill "))
 		}
 
+		if trimmed == "/memories" {
+			return m.handleMemories()
+		}
+
+		if strings.HasPrefix(text, "/remember ") {
+			return m.handleRemember(strings.TrimPrefix(text, "/remember "))
+		}
+
+		if strings.HasPrefix(text, "/forget ") {
+			return m.handleForget(strings.TrimPrefix(text, "/forget "))
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
 			content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", text),
@@ -1176,16 +1239,100 @@ func estimateTokens(messages []docker.ChatMessage) int {
 
 // buildMessages prepends the system prompt to the conversation messages.
 func (m *ChatModel) buildMessages() []docker.ChatMessage {
-	msgs := make([]docker.ChatMessage, 0, len(m.messages)+2)
+	return m.buildMessagesWithToolGating(false)
+}
 
-	// Directives first (short, high-priority), then skills, then user/project context.
-	sysPrompt := toolSystemPrompt + "\n\n" + defaultSkillsPrompt
+// buildMessagesWithToolGating prepends the system prompt to the conversation
+// messages. When hasTools is true, the tool-call example is injected; when false,
+// a notice telling the model not to use tools is appended instead.
+func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMessage {
+	msgs := make([]docker.ChatMessage, 0, len(m.messages)+3)
+
+	// Build system prompt with memories injected prominently right after rules.
+	// Order: tools.md (rules) → memories → skills.md → tool gating → user context
+	sysPrompt := toolSystemPrompt
+
+	// Inject memories immediately after rules for maximum visibility to small models.
+	// This is the most important position — small models pay most attention to
+	// the beginning of the system prompt and tend to ignore content at the end.
+	if m.memoriesPrompt != "" {
+		sysPrompt += "\n\n" + m.memoriesPrompt
+	}
+
+	sysPrompt += "\n\n" + defaultSkillsPrompt
+
+	// Inject tool-call example only when tools are actually available.
+	if hasTools {
+		sysPrompt += toolCallExample
+	} else {
+		sysPrompt += noToolsNotice
+	}
+
+	// Qwen3: append /no_think for tool tasks to save tokens.
+	if hasTools && m.modelHints.DisableThink {
+		sysPrompt += "\n\n/no_think"
+	}
+
 	if m.systemPrompt != "" {
-		sysPrompt = sysPrompt + "\n\n" + m.systemPrompt
+		sysPrompt += "\n\n" + m.systemPrompt
 	}
 	msgs = append(msgs, docker.NewChatMessage("system", sysPrompt))
+
+	// Long conversation reminder: inject before last user message to counteract
+	// "lost in the middle" effect in small models.
+	if len(m.messages) > 10 {
+		// Find the index of the last user message.
+		lastUserIdx := -1
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].Role == "user" {
+				lastUserIdx = i
+				break
+			}
+		}
+		if lastUserIdx > 0 {
+			msgs = append(msgs, m.messages[:lastUserIdx]...)
+			msgs = append(msgs, docker.NewChatMessage("system", longConversationReminder))
+			msgs = append(msgs, m.messages[lastUserIdx:]...)
+			return msgs
+		}
+	}
+
 	msgs = append(msgs, m.messages...)
 	return msgs
+}
+
+// applyModelHints builds ChatParams with model-family-specific defaults applied.
+// User-set values always take priority over hints.
+func (m *ChatModel) applyModelHints(hasTools, hasSkill bool) docker.ChatParams {
+	p := m.params
+
+	// If user hasn't set temperature, apply contextual defaults.
+	if p.Temperature == nil {
+		if hasSkill {
+			// Low temperature for structured tool output.
+			low := 0.3
+			p.Temperature = &low
+		} else if hasTools {
+			// Slightly low for tool-calling tasks.
+			low := 0.3
+			p.Temperature = &low
+		} else if m.modelHints.Temperature != nil {
+			// Model family default for general chat.
+			p.Temperature = m.modelHints.Temperature
+		}
+	}
+
+	// Apply model-specific TopK if user hasn't set one.
+	if p.TopK == nil && m.modelHints.TopK != nil {
+		p.TopK = m.modelHints.TopK
+	}
+
+	// Apply model-specific stop tokens.
+	if len(p.Stop) == 0 && len(m.modelHints.StopTokens) > 0 {
+		p.Stop = m.modelHints.StopTokens
+	}
+
+	return p
 }
 
 func (m *ChatModel) formatParams() string {
@@ -1201,7 +1348,16 @@ func (m *ChatModel) formatParams() string {
 	if m.params.MaxTokens != nil {
 		maxTok = strconv.Itoa(*m.params.MaxTokens)
 	}
-	return fmt.Sprintf("temperature: %s\ntop_p: %s\nmax_tokens: %s\n\nUsage: /params temperature=0.8 top_p=0.9 max_tokens=2048", temp, topP, maxTok)
+	topK := "(default)"
+	if m.params.TopK != nil {
+		topK = strconv.Itoa(*m.params.TopK)
+	}
+	result := fmt.Sprintf("temperature: %s\ntop_p: %s\nmax_tokens: %s\ntop_k: %s", temp, topP, maxTok, topK)
+	if m.modelHints.Family != "unknown" {
+		result += fmt.Sprintf("\nmodel family: %s", m.modelHints.Family)
+	}
+	result += "\n\nUsage: /params temperature=0.8 top_p=0.9 max_tokens=2048 top_k=40"
+	return result
 }
 
 func (m *ChatModel) parseParams(input string) error {
@@ -1229,8 +1385,14 @@ func (m *ChatModel) parseParams(input string) error {
 				return fmt.Errorf("invalid max_tokens: %v", err)
 			}
 			m.params.MaxTokens = &n
+		case "top_k":
+			n, err := strconv.Atoi(kv[1])
+			if err != nil {
+				return fmt.Errorf("invalid top_k: %v", err)
+			}
+			m.params.TopK = &n
 		default:
-			return fmt.Errorf("unknown parameter %q (available: temperature, top_p, max_tokens)", kv[0])
+			return fmt.Errorf("unknown parameter %q (available: temperature, top_p, max_tokens, top_k)", kv[0])
 		}
 	}
 	return nil
@@ -1518,6 +1680,78 @@ func (m *ChatModel) extractSearchTopic() string {
 	return ""
 }
 
+// suggestsSearch returns true if the model's response admits it doesn't have
+// current information and suggests using /search. Used to auto-trigger search
+// instead of making the user type the command manually.
+func (m *ChatModel) suggestsSearch(response string) bool {
+	lower := strings.ToLower(response)
+	// Model admitted it doesn't know
+	admitsNoInfo := strings.Contains(lower, "don't have current") ||
+		strings.Contains(lower, "don't have real-time") ||
+		strings.Contains(lower, "don't have access to current") ||
+		strings.Contains(lower, "no current information") ||
+		strings.Contains(lower, "not have current") ||
+		strings.Contains(lower, "let me search")
+	// Either mentioned /search or said it would search
+	suggestsCmd := strings.Contains(lower, "/search") ||
+		strings.Contains(lower, "search for you") ||
+		strings.Contains(lower, "let me search")
+	return admitsNoInfo || suggestsCmd
+}
+
+// isRememberAgreement returns true if the user's input is an affirmative
+// and the last assistant message suggested using /remember.
+func (m *ChatModel) isRememberAgreement(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+
+	affirmatives := []string{
+		"yes", "yeah", "yep", "sure", "ok", "okay",
+		"go ahead", "please", "do it", "go for it", "y",
+		"remember", "save it", "save that",
+	}
+	hasAffirmative := false
+	for _, a := range affirmatives {
+		if lower == a || strings.HasPrefix(lower, a+" ") || strings.HasPrefix(lower, a+",") {
+			hasAffirmative = true
+			break
+		}
+	}
+	if !hasAffirmative {
+		return false
+	}
+
+	// Check if last assistant message suggested /remember
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i].role == "assistant" {
+			content := strings.ToLower(m.history[i].content)
+			return strings.Contains(content, "/remember") ||
+				strings.Contains(content, "remember that") ||
+				strings.Contains(content, "save that for future")
+		}
+	}
+	return false
+}
+
+// extractRememberFact finds the user's original preference statement to save as a memory.
+// Walks backwards past the assistant's /remember suggestion to find the user's message.
+func (m *ChatModel) extractRememberFact() string {
+	foundAssistant := false
+	for i := len(m.history) - 1; i >= 0; i-- {
+		entry := m.history[i]
+		if entry.role == "assistant" {
+			foundAssistant = true
+			continue
+		}
+		if foundAssistant && entry.role == "user" {
+			fact := strings.TrimSpace(entry.content)
+			if len(fact) > 2 && !strings.HasPrefix(fact, "/") {
+				return fact
+			}
+		}
+	}
+	return ""
+}
+
 func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -1555,6 +1789,9 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /fetch <url>       Fetch and display a web page
   /skills            List available skills
   /skill <name>      Activate a skill (loads full instructions)
+  /remember <fact>   Save a memory (persists across sessions)
+  /forget <text>     Remove a memory by substring match
+  /memories          List all saved memories
   /clear             Start a fresh conversation
   /sessions          List saved sessions
   /models            Browse and switch models
@@ -1982,6 +2219,111 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m ChatModel) handleMemories() (ChatModel, tea.Cmd) {
+	global, project := config.ListMemories()
+
+	if len(global) == 0 && len(project) == 0 {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "No saved memories.\nUse /remember <fact> to save one.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	var b strings.Builder
+	if len(project) > 0 {
+		b.WriteString(fmt.Sprintf("Project memories (%d):\n", len(project)))
+		for _, mem := range project {
+			b.WriteString(fmt.Sprintf("  - %s\n", mem.Fact))
+		}
+	}
+	if len(global) > 0 {
+		if len(project) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("Global memories (%d):\n", len(global)))
+		for _, mem := range global {
+			b.WriteString(fmt.Sprintf("  - %s\n", mem.Fact))
+		}
+	}
+	b.WriteString("\nUse /forget <text> to remove a memory.")
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: b.String(),
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleRemember(fact string) (ChatModel, tea.Cmd) {
+	fact = strings.TrimSpace(fact)
+	if fact == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /remember <fact>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Default to project scope if .baryo/ dir exists, otherwise global
+	global := true
+	if _, err := os.Stat(".baryo"); err == nil {
+		global = false
+	}
+
+	if err := config.AddMemory(fact, global); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    "error",
+			content: fmt.Sprintf("Failed to save memory: %v", err),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	scope := "global"
+	if !global {
+		scope = "project"
+	}
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: fmt.Sprintf("Remembered (%s): %s", scope, fact),
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleForget(substring string) (ChatModel, tea.Cmd) {
+	substring = strings.TrimSpace(substring)
+	if substring == "" {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Usage: /forget <text>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	removed, err := config.RemoveMemory(substring)
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: fmt.Sprintf("No memory matching %q found.", substring),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: fmt.Sprintf("Forgot: %s", removed),
+	})
+	m.updateViewport()
+	return m, nil
+}
+
 // needsTools returns true if the user's message likely requires tool access.
 // This prevents local models from calling tools for general questions.
 func needsTools(text string) bool {
@@ -2002,6 +2344,46 @@ func needsTools(text string) bool {
 		}
 	}
 	return false
+}
+
+// toolCallExample is the tool-call syntax example injected into the system prompt
+// ONLY when tools are actually available. Keeping it out of the base prompt prevents
+// small models from hallucinating tool calls when tools aren't passed.
+const toolCallExample = `
+
+When a skill is active and the user asks you to create something, write the code and execute it IMMEDIATELY. Do NOT describe what you would do — just write the code and call the tool. The ONLY tool names that exist are run_code and run_script. Example:
+<tool_call>{"name": "run_code", "arguments": {"code": "print('hello')", "language": "python"}}</tool_call>`
+
+// noToolsNotice is appended to the system prompt when tools are NOT available,
+// telling the model to answer directly without attempting tool calls.
+const noToolsNotice = "\n\nTools are NOT available for this message. Answer the user's question directly. Do NOT output <tool_call> tags or attempt to call any tools. If the question is about news or current events, say you don't have current data and suggest /search."
+
+// longConversationReminder is injected as a system message before the last user
+// message when conversation exceeds 10 messages. Counteracts the "lost in the
+// middle" effect where small models forget system instructions.
+const longConversationReminder = "[System: Answer the user's question directly. Only use tools if asked about files/code. Do NOT hallucinate tool calls.]"
+
+// reHallucinatedToolCall matches <tool_call>...</tool_call> blocks in text.
+var reHallucinatedToolCall = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
+
+// reToolUseLine matches lines like "I'll use the X tool to..." followed by JSON-like content.
+var reToolUseLine = regexp.MustCompile(`(?m)^.*(?:I'll use|Let me use|Using) the \w+ tool.*$`)
+
+// containsHallucinatedToolCall returns true if text contains tool call patterns
+// that shouldn't be there (when tools weren't provided).
+func containsHallucinatedToolCall(text string) bool {
+	return reHallucinatedToolCall.MatchString(text) || reToolUseLine.MatchString(text)
+}
+
+// stripHallucinatedToolCalls removes hallucinated tool call text from a response.
+func stripHallucinatedToolCalls(text string) string {
+	text = reHallucinatedToolCall.ReplaceAllString(text, "")
+	text = reToolUseLine.ReplaceAllString(text, "")
+	// Clean up leftover blank lines
+	for strings.Contains(text, "\n\n\n") {
+		text = strings.ReplaceAll(text, "\n\n\n", "\n\n")
+	}
+	return strings.TrimSpace(text)
 }
 
 // stripThinkBlock removes <think>...</think> content from streamed text.

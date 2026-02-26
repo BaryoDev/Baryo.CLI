@@ -76,6 +76,8 @@ func streamChatRaw(ctx context.Context, socketPath, model string, messages []Cha
 			Temperature: params.Temperature,
 			TopP:        params.TopP,
 			MaxTokens:   params.MaxTokens,
+			TopK:        params.TopK,
+			Stop:        params.Stop,
 			Tools:       tools,
 		}
 		if len(tools) > 0 {

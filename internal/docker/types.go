@@ -110,6 +110,8 @@ type ChatParams struct {
 	Temperature *float64 `json:"temperature,omitempty" yaml:"temperature"`
 	TopP        *float64 `json:"top_p,omitempty"       yaml:"top_p"`
 	MaxTokens   *int     `json:"max_tokens,omitempty"  yaml:"max_tokens"`
+	TopK        *int     `json:"top_k,omitempty"        yaml:"top_k"`
+	Stop        []string `json:"stop,omitempty"         yaml:"stop"`
 }
 
 // ChatRequest is the body sent to /v1/chat/completions.
@@ -120,6 +122,8 @@ type ChatRequest struct {
 	Temperature *float64         `json:"temperature,omitempty"`
 	TopP        *float64         `json:"top_p,omitempty"`
 	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	TopK        *int             `json:"top_k,omitempty"`
+	Stop        []string         `json:"stop,omitempty"`
 	Tools       []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice  interface{}      `json:"tool_choice,omitempty"`
 }

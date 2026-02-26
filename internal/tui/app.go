@@ -31,9 +31,10 @@ const (
 type AppModel struct {
 	screen       screen
 	spinner      spinner.Model
-	socketPath   string
-	systemPrompt string
-	params       docker.ChatParams
+	socketPath     string
+	systemPrompt   string
+	memoriesPrompt string
+	params         docker.ChatParams
 
 	searchProvider string
 	searchAPIKey   string
@@ -83,6 +84,13 @@ func WithSession(sess *session.Session) AppOption {
 func WithSystemPrompt(prompt string) AppOption {
 	return func(a *AppModel) {
 		a.systemPrompt = prompt
+	}
+}
+
+// WithMemories sets the formatted memories prompt for prominent injection.
+func WithMemories(memories string) AppOption {
+	return func(a *AppModel) {
+		a.memoriesPrompt = memories
 	}
 }
 
@@ -158,7 +166,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -346,7 +354,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model.Name, model.Tag, m.searchProvider, m.searchAPIKey)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

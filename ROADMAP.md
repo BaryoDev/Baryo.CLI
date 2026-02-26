@@ -213,6 +213,19 @@ Track token usage per session. Inspired by Claude Code.
 
 ## Completed
 
+### Small Model Optimization (v0.2.2)
+- XML-structured system prompts with sandwich pattern for better instruction following
+- Model family detection (Qwen, Llama, Mistral, Phi, Gemma) with optimized parameter presets
+- Qwen3 `/no_think` auto-injection for tool tasks to save tokens
+- Dynamic tool gating — tool-call examples only injected when tools are active
+- Post-processing guardrails to strip hallucinated `<tool_call>` blocks
+- Long conversation reminder injection (>10 messages) to counter "lost in the middle" effect
+- Prominent memory injection — user preferences placed right after rules for small model visibility
+- Memories injected directly into search summarization prompt for reliable style compliance
+- Auto-search on "I don't know" — model automatically triggers web search instead of just suggesting `/search`
+- Reduced system prompt token count (~30% fewer tokens in skills.md)
+- TopK and Stop token support in ChatParams/ChatRequest
+
 ### Skills Integration (v0.2.1)
 - 16 Anthropic Agent Skills ported (pdf, docx, pptx, xlsx, slack-gif-creator, frontend-design, etc.)
 - Auto-activation by trigger keyword matching
