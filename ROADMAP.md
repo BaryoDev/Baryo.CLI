@@ -16,22 +16,6 @@ End-to-end GitHub workflow via the `gh` CLI.
 - Respond to PR review comments and push fixes
 - Branch management: create, switch, merge, delete
 
-### DevOps Toolkit
-Purpose-built tools for infrastructure, deployment, and container management.
-
-- `/deploy` — generate deployment files for the current project:
-  - Dockerfile / docker-compose.yml
-  - GitHub Actions workflows (.github/workflows/)
-  - Kubernetes manifests (deployment, service, ingress)
-  - Terraform / CloudFormation templates
-- `/docker` — manage local Docker containers:
-  - List running containers, images, volumes
-  - Build, run, stop, remove containers
-  - View logs, inspect, exec into containers
-- Docker Compose awareness: detect `docker-compose.yml` and offer relevant commands
-- CI/CD pipeline generation based on project type detection (Go, Node, Python, Rust)
-- Infrastructure-as-Code generation with security best practices
-
 ### Plan Mode
 Read-only analysis and planning before coding. Inspired by Claude Code and Copilot CLI.
 
@@ -109,6 +93,13 @@ Index project files and auto-retrieve relevant context.
 ---
 
 ## Additive — Polish & Quality of Life
+
+### DevOps Toolkit
+Purpose-built tools for infrastructure, deployment, and container management.
+
+- `/deploy` — generate deployment files (Dockerfile, docker-compose, GitHub Actions, K8s, Terraform)
+- `/docker` — manage local containers (list, build, run, stop, logs, exec)
+- Docker Compose awareness and CI/CD pipeline generation by project type
 
 ### Project Scaffolding
 Generate new projects from templates.
