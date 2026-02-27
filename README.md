@@ -663,6 +663,8 @@ The `gh` tool requires the [GitHub CLI](https://cli.github.com/) to be installed
 
 Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
 
+If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models), Baryo automatically retries the request without tools and disables them for the rest of the session. You'll see an info message in the chat and subsequent messages skip tools entirely — no repeated errors.
+
 ### Plan mode
 
 Enter a read-only analysis mode where the model explores your codebase and produces an implementation plan before any code changes happen.

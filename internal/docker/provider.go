@@ -15,17 +15,30 @@ import (
 	"time"
 )
 
-// Providers maps provider names to their OpenAI-compatible base URLs.
+// Providers maps provider names to their base URLs.
 var Providers = map[string]string{
 	"gemini":     "https://generativelanguage.googleapis.com/v1beta/openai",
 	"openrouter": "https://openrouter.ai/api/v1",
+	"openai":     "https://api.openai.com/v1",
+	"anthropic":  "https://api.anthropic.com/v1",
+	"groq":       "https://api.groq.com/openai/v1",
+	"mistral":    "https://api.mistral.ai/v1",
+	"together":   "https://api.together.xyz/v1",
+	"fireworks":  "https://api.fireworks.ai/inference/v1",
+	"deepseek":   "https://api.deepseek.com",
+	"xai":        "https://api.x.ai/v1",
+	"cerebras":   "https://api.cerebras.ai/v1",
+	"perplexity": "https://api.perplexity.ai",
+	"sambanova":  "https://api.sambanova.ai/v1",
+	"cohere":     "https://api.cohere.ai/compatibility/v1",
 }
 
 // ProviderEndpoint returns an Endpoint for the named provider.
 func ProviderEndpoint(provider, apiKey string) Endpoint {
 	return Endpoint{
-		BaseURL: Providers[provider],
-		APIKey:  apiKey,
+		BaseURL:  Providers[provider],
+		APIKey:   apiKey,
+		Provider: provider,
 	}
 }
 
@@ -55,6 +68,11 @@ type providerModelEntry struct {
 // ListProviderModels queries a remote provider's /models endpoint and returns
 // the available models, each tagged with the provider name.
 func ListProviderModels(provider, apiKey string) ([]DockerModel, error) {
+	// Anthropic uses a hardcoded model list (no /models endpoint with pricing).
+	if provider == "anthropic" {
+		return listAnthropicModels(), nil
+	}
+
 	baseURL, ok := Providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", provider)
@@ -158,6 +176,35 @@ func filterProviderModel(provider, id string, entry providerModelEntry) bool {
 		}
 		return true
 
+	case "openai":
+		// Keep chat models; skip embedding, tts, dall-e, whisper, moderation.
+		for _, skip := range []string{"embedding", "tts", "dall-e", "whisper", "moderation", "davinci", "babbage"} {
+			if strings.Contains(id, skip) {
+				return false
+			}
+		}
+		return true
+
+	case "mistral":
+		// Skip embedding models.
+		if strings.Contains(id, "embed") {
+			return false
+		}
+		return true
+
+	case "deepseek":
+		// Only keep chat and reasoner models.
+		return id == "deepseek-chat" || id == "deepseek-reasoner"
+
+	case "cohere":
+		// Skip non-chat models (embeddings, reranking); keep everything else.
+		for _, skip := range []string{"embed", "rerank"} {
+			if strings.Contains(id, skip) {
+				return false
+			}
+		}
+		return true
+
 	default:
 		return true
 	}
@@ -206,6 +253,149 @@ func parseProviderPricing(provider string, entry providerModelEntry, modelID str
 		prompt, _ = strconv.ParseFloat(entry.Pricing.Prompt, 64)
 		completion, _ = strconv.ParseFloat(entry.Pricing.Completion, 64)
 		return prompt, completion
+	case "openai":
+		p := LookupOpenAIPricing(modelID)
+		return p.PromptPrice, p.CompletionPrice
+	case "groq", "mistral", "together", "fireworks", "deepseek", "xai", "cerebras", "perplexity", "sambanova", "cohere":
+		p := lookupProviderPricing(provider, modelID)
+		return p.PromptPrice, p.CompletionPrice
 	}
 	return 0, 0
+}
+
+// openaiPricing maps OpenAI model prefixes to their per-token pricing.
+var openaiPricing = map[string]ModelPricing{
+	"gpt-4o":      {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+	"gpt-4o-mini": {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+	"gpt-4.1":     {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
+	"gpt-4.1-mini":{PromptPrice: 0.40 / 1_000_000, CompletionPrice: 1.60 / 1_000_000},
+	"gpt-4.1-nano":{PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.40 / 1_000_000},
+	"o3":          {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
+	"o3-mini":     {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
+	"o1":          {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 60.0 / 1_000_000},
+	"o1-mini":     {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
+}
+
+// LookupOpenAIPricing returns pricing for an OpenAI model ID by matching prefixes.
+func LookupOpenAIPricing(modelID string) ModelPricing {
+	// Try longest prefix first for specificity (e.g. "gpt-4o-mini" before "gpt-4o").
+	best := ""
+	var bestPricing ModelPricing
+	for prefix, p := range openaiPricing {
+		if strings.HasPrefix(modelID, prefix) && len(prefix) > len(best) {
+			best = prefix
+			bestPricing = p
+		}
+	}
+	return bestPricing
+}
+
+// anthropicPricing maps Anthropic model prefixes to their per-token pricing.
+var anthropicPricing = map[string]ModelPricing{
+	"claude-opus-4":      {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 75.0 / 1_000_000},
+	"claude-sonnet-4":    {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+	"claude-3-5-haiku":   {PromptPrice: 0.80 / 1_000_000, CompletionPrice: 4.0 / 1_000_000},
+	"claude-3-5-sonnet":  {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+}
+
+// LookupAnthropicPricing returns pricing for an Anthropic model ID by matching prefixes.
+func LookupAnthropicPricing(modelID string) ModelPricing {
+	best := ""
+	var bestPricing ModelPricing
+	for prefix, p := range anthropicPricing {
+		if strings.HasPrefix(modelID, prefix) && len(prefix) > len(best) {
+			best = prefix
+			bestPricing = p
+		}
+	}
+	return bestPricing
+}
+
+// providerPricingTables maps provider names to their model pricing tables.
+var providerPricingTables = map[string]map[string]ModelPricing{
+	"groq": {
+		"llama-3.3-70b":  {PromptPrice: 0.59 / 1_000_000, CompletionPrice: 0.79 / 1_000_000},
+		"llama-3.1-8b":   {PromptPrice: 0.05 / 1_000_000, CompletionPrice: 0.08 / 1_000_000},
+		"gemma2-9b":      {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.20 / 1_000_000},
+		"mistral-saba":   {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+	},
+	"mistral": {
+		"mistral-large":  {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
+		"mistral-small":  {PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.30 / 1_000_000},
+		"codestral":      {PromptPrice: 0.30 / 1_000_000, CompletionPrice: 0.90 / 1_000_000},
+		"mistral-nemo":   {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
+		"pixtral-large":  {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
+	},
+	"deepseek": {
+		"deepseek-chat":     {PromptPrice: 0.27 / 1_000_000, CompletionPrice: 1.10 / 1_000_000},
+		"deepseek-reasoner": {PromptPrice: 0.55 / 1_000_000, CompletionPrice: 2.19 / 1_000_000},
+	},
+	"xai": {
+		"grok-3":      {PromptPrice: 3.00 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+		"grok-3-mini": {PromptPrice: 0.30 / 1_000_000, CompletionPrice: 0.50 / 1_000_000},
+		"grok-2":      {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+	},
+	"perplexity": {
+		"sonar-pro":       {PromptPrice: 3.00 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+		"sonar":           {PromptPrice: 1.00 / 1_000_000, CompletionPrice: 1.00 / 1_000_000},
+		"sonar-reasoning": {PromptPrice: 1.00 / 1_000_000, CompletionPrice: 5.00 / 1_000_000},
+	},
+	"cohere": {
+		"command-a":    {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+		"command-r-plus": {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+		"command-r7b":  {PromptPrice: 0.0375 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
+		"command-r":    {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+	},
+}
+
+// lookupProviderPricing returns pricing for a model by matching prefixes
+// in the provider-specific pricing table.
+func lookupProviderPricing(provider, modelID string) ModelPricing {
+	table, ok := providerPricingTables[provider]
+	if !ok {
+		return ModelPricing{}
+	}
+	best := ""
+	var bestPricing ModelPricing
+	for prefix, p := range table {
+		if strings.HasPrefix(modelID, prefix) && len(prefix) > len(best) {
+			best = prefix
+			bestPricing = p
+		}
+	}
+	return bestPricing
+}
+
+// LookupProviderPricing is the exported version for session restore.
+func LookupProviderPricing(provider, modelID string) ModelPricing {
+	return lookupProviderPricing(provider, modelID)
+}
+
+// anthropicModelDef describes a hardcoded Anthropic model for the picker.
+type anthropicModelDef struct {
+	ID         string
+	ContextLen int
+}
+
+// listAnthropicModels returns the hardcoded list of Anthropic chat models.
+func listAnthropicModels() []DockerModel {
+	defs := []anthropicModelDef{
+		{"claude-opus-4-20250514", 200000},
+		{"claude-sonnet-4-20250514", 200000},
+		{"claude-3-5-haiku-20241022", 200000},
+		{"claude-3-5-sonnet-20241022", 200000},
+	}
+	models := make([]DockerModel, len(defs))
+	for i, d := range defs {
+		p := LookupAnthropicPricing(d.ID)
+		models[i] = DockerModel{
+			Name:            d.ID,
+			Tag:             d.ID,
+			Provider:        "anthropic",
+			Params:          formatContextLen(d.ContextLen),
+			PromptPrice:     p.PromptPrice,
+			CompletionPrice: p.CompletionPrice,
+		}
+	}
+	return models
 }

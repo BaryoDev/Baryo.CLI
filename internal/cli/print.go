@@ -70,6 +70,10 @@ func runPrintText(opts PrintOptions) int {
 	ch := docker.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
 
 	for evt := range ch {
+		if evt.ToolsDisabled {
+			fmt.Fprintf(os.Stderr, "warning: tools not supported by this model — responding without tools\n")
+			continue
+		}
 		if evt.Error != "" {
 			fmt.Fprintf(os.Stderr, "error: %s\n", evt.Error)
 			return 1
@@ -163,6 +167,10 @@ func runPrintJSON(opts PrintOptions) int {
 	var pendingTool *jsonToolCall
 
 	for evt := range ch {
+		if evt.ToolsDisabled {
+			fmt.Fprintf(os.Stderr, "warning: tools not supported by this model — responding without tools\n")
+			continue
+		}
 		if evt.Error != "" {
 			out.ExitCode = 1
 			out.Content = evt.Error

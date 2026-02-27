@@ -33,6 +33,16 @@ func sanitizeToolCallID(id string) string {
 	return hex.EncodeToString(b)[:9]
 }
 
+// isToolUnsupportedError returns true if the error text indicates the model
+// does not support tool calling (e.g. Cohere's aya models).
+func isToolUnsupportedError(errText string) bool {
+	lower := strings.ToLower(errText)
+	return strings.Contains(lower, "tool use is not supported") ||
+		strings.Contains(lower, "tools is not supported") ||
+		strings.Contains(lower, "tool_use is not supported") ||
+		strings.Contains(lower, "does not support tools")
+}
+
 // StreamChatWithTools streams a conversation that may include tool calls.
 // The model can call tools up to maxToolRounds times before the final response.
 func StreamChatWithTools(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor) <-chan StreamEvent {
@@ -55,12 +65,16 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 		for round := 0; round < maxRounds; round++ {
 			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, toolDefs)
 
-			// Forward all streaming events (tokens, errors).
+			// Forward all streaming events (tokens). Buffer errors so we can
+			// inspect them before forwarding (tool-unsupported errors trigger a retry).
 			var contentBuf string
 			var hadError bool
+			var errEvt StreamEvent
 			for evt := range evtCh {
 				if evt.Error != "" {
 					hadError = true
+					errEvt = evt
+					continue // don't forward yet — inspect after loop
 				}
 				if evt.Token != "" {
 					contentBuf += evt.Token
@@ -73,6 +87,35 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 			}
 
 			if hadError {
+				// If the error indicates tool use is unsupported and we sent tools,
+				// retry the request without tools and stream the plain response.
+				if len(toolDefs) > 0 && isToolUnsupportedError(errEvt.Error) {
+					select {
+					case out <- StreamEvent{ToolsDisabled: true}:
+					case <-ctx.Done():
+						return
+					}
+
+					retryCh, retryResCh := streamChatRaw(ctx, ep, model, msgs, params, nil)
+					for evt := range retryCh {
+						select {
+						case out <- evt:
+						case <-ctx.Done():
+							return
+						}
+					}
+					if res, ok := <-retryResCh; ok && res.Usage != nil {
+						lastUsage = res.Usage
+					}
+					out <- StreamEvent{Done: true, Usage: lastUsage}
+					return
+				}
+				// Forward the original error for non-retryable cases.
+				select {
+				case out <- errEvt:
+				case <-ctx.Done():
+					return
+				}
 				out <- StreamEvent{Done: true, Usage: lastUsage}
 				return
 			}

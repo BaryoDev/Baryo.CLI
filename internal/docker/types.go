@@ -33,6 +33,7 @@ type Endpoint struct {
 	SocketPath string // for local Docker/Ollama (unix socket or tcp://)
 	BaseURL    string // for remote HTTPS providers
 	APIKey     string // bearer token for authenticated providers
+	Provider   string // provider name for routing (e.g. "anthropic", "openai")
 }
 
 // IsRemote returns true if this endpoint targets an HTTPS provider.
@@ -87,6 +88,7 @@ type StreamEvent struct {
 	Done           bool             // stream finished
 	ContentReplace *string          // replaces accumulated streaming text (strips tool-call syntax)
 	Usage          *UsageStats      // token usage from the API (present on Done)
+	ToolsDisabled  bool             // signals that tools were dropped (model doesn't support them)
 }
 
 // ToolStartEvent signals the beginning of a tool execution.

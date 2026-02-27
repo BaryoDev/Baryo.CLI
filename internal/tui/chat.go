@@ -38,8 +38,7 @@ type ChatModel struct {
 	systemPrompt     string            // active system prompt
 	memoriesPrompt   string            // formatted <memories> block (injected prominently)
 	params           docker.ChatParams // model parameters
-	geminiAPIKey     string            // for model switching via /models
-	openRouterAPIKey string            // for model switching via /models
+	providerKeys     map[string]string // API keys for cloud providers (for model switching via /models)
 	modelName    string            // display name (e.g. "ai/mistral")
 	modelTag     string            // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
 	messages     []docker.ChatMessage
@@ -84,7 +83,8 @@ type ChatModel struct {
 	researchCompactAt  int       // index in m.messages for post-report compaction
 
 	// Model hints
-	modelHints docker.ModelHints // detected model family parameters
+	modelHints    docker.ModelHints // detected model family parameters
+	supportsTools bool              // false after a model reports tool use unsupported
 
 	// Skills (lazy loading with auto-activation)
 	skillIndex  []config.Skill    // lightweight index (name + description only)
@@ -134,18 +134,17 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string, mcpMgr MCPManager) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(model.Name, model.Tag)
-	ep := endpointForModel(socketPath, model, geminiAPIKey, openRouterAPIKey)
+	ep := endpointForModel(socketPath, model, providerKeys)
 	return ChatModel{
 		endpoint:         ep,
 		localSocketPath:  socketPath,
 		systemPrompt:     systemPrompt,
 		memoriesPrompt:   memoriesPrompt,
 		params:           params,
-		geminiAPIKey:     geminiAPIKey,
-		openRouterAPIKey: openRouterAPIKey,
+		providerKeys:     providerKeys,
 		modelName:        model.Name,
 		modelTag:         model.Tag,
 		textarea:         ta,
@@ -158,6 +157,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 		skillIndex:       config.SkillIndex(),
 		activeSkills:     make(map[string]bool),
 		modelHints:       docker.DetectModelHints(model.Tag),
+		supportsTools:   true,
 		permissionMode:   permissionMode,
 		confirmCh:        make(chan confirmRequest, 1),
 		promptPrice:      model.PromptPrice,
@@ -167,7 +167,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string, mcpMgr MCPManager) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -181,22 +181,35 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 	// Detect provider from model tag for session restore.
 	model := docker.DockerModel{Name: sess.ModelName, Tag: sess.ModelTag}
 	model.Provider = detectProviderFromTag(sess.ModelTag)
-	// Restore pricing for Gemini models (OpenRouter pricing requires API call,
-	// so cost tracking starts fresh for restored OpenRouter sessions).
-	if model.Provider == "gemini" {
+	// Restore pricing for known providers.
+	switch model.Provider {
+	case "gemini":
 		p := docker.LookupGeminiPricing(model.Tag)
 		model.PromptPrice = p.PromptPrice
 		model.CompletionPrice = p.CompletionPrice
+	case "openai":
+		p := docker.LookupOpenAIPricing(model.Tag)
+		model.PromptPrice = p.PromptPrice
+		model.CompletionPrice = p.CompletionPrice
+	case "anthropic":
+		p := docker.LookupAnthropicPricing(model.Tag)
+		model.PromptPrice = p.PromptPrice
+		model.CompletionPrice = p.CompletionPrice
+	default:
+		if model.Provider != "" {
+			p := docker.LookupProviderPricing(model.Provider, model.Tag)
+			model.PromptPrice = p.PromptPrice
+			model.CompletionPrice = p.CompletionPrice
+		}
 	}
-	ep := endpointForModel(socketPath, model, geminiAPIKey, openRouterAPIKey)
+	ep := endpointForModel(socketPath, model, providerKeys)
 	cm := ChatModel{
 		endpoint:         ep,
 		localSocketPath:  socketPath,
 		systemPrompt:     systemPrompt,
 		memoriesPrompt:   memoriesPrompt,
 		params:           params,
-		geminiAPIKey:     geminiAPIKey,
-		openRouterAPIKey: openRouterAPIKey,
+		providerKeys:     providerKeys,
 		modelName:        sess.ModelName,
 		modelTag:         sess.ModelTag,
 		messages:         msgs,
@@ -211,6 +224,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		skillIndex:       config.SkillIndex(),
 		activeSkills:     make(map[string]bool),
 		modelHints:       docker.DetectModelHints(sess.ModelTag),
+		supportsTools:   true,
 		permissionMode:   permissionMode,
 		confirmCh:        make(chan confirmRequest, 1),
 		promptPrice:      model.PromptPrice,
@@ -222,22 +236,36 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 }
 
 // endpointForModel returns the appropriate endpoint based on a model's provider.
-func endpointForModel(socketPath string, model docker.DockerModel, geminiKey, openRouterKey string) docker.Endpoint {
-	switch model.Provider {
-	case "gemini":
-		return docker.ProviderEndpoint("gemini", geminiKey)
-	case "openrouter":
-		return docker.ProviderEndpoint("openrouter", openRouterKey)
-	default:
-		return docker.LocalEndpoint(socketPath)
+func endpointForModel(socketPath string, model docker.DockerModel, keys map[string]string) docker.Endpoint {
+	if model.Provider != "" {
+		if key, ok := keys[model.Provider]; ok {
+			return docker.ProviderEndpoint(model.Provider, key)
+		}
 	}
+	return docker.LocalEndpoint(socketPath)
 }
 
 // detectProviderFromTag guesses the provider from a model tag string.
 func detectProviderFromTag(tag string) string {
 	lower := strings.ToLower(tag)
-	if strings.HasPrefix(lower, "gemini-") {
+	switch {
+	case strings.HasPrefix(lower, "gemini-"):
 		return "gemini"
+	case strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1") ||
+		strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "chatgpt-"):
+		return "openai"
+	case strings.HasPrefix(lower, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(lower, "deepseek-"):
+		return "deepseek"
+	case strings.HasPrefix(lower, "grok-"):
+		return "xai"
+	case strings.HasPrefix(lower, "mistral-") || strings.HasPrefix(lower, "codestral") || strings.HasPrefix(lower, "pixtral"):
+		return "mistral"
+	case strings.HasPrefix(lower, "sonar"):
+		return "perplexity"
+	case strings.HasPrefix(lower, "command-"):
+		return "cohere"
 	}
 	// OpenRouter models typically contain a slash like "meta-llama/llama-3..."
 	// but we can't reliably detect them from tag alone.
@@ -922,6 +950,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if evt.ToolsDisabled {
+			m.supportsTools = false
+			m.history = append(m.history, chatEntry{
+				role:    "info",
+				content: "tools not supported by this model — responding without tools",
+			})
+			m.updateViewport()
+			return m, waitForEvent(m.eventCh)
+		}
+
 		if evt.Error != "" {
 			// If we had partial content, keep it in history
 			if m.streaming != "" {
@@ -1261,8 +1299,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 	case "/models":
 		socketPath := m.localSocketPath
-		geminiKey := m.geminiAPIKey
-		openRouterKey := m.openRouterAPIKey
+		keys := m.providerKeys
 		return m, func() tea.Msg {
 			var downloaded []docker.DockerModel
 			var dlErr error
@@ -1276,13 +1313,11 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			}
 
 			// Append cloud provider models.
-			if geminiKey != "" {
-				if pm, e := docker.ListProviderModels("gemini", geminiKey); e == nil {
-					downloaded = append(downloaded, pm...)
+			for provider, key := range keys {
+				if key == "" {
+					continue
 				}
-			}
-			if openRouterKey != "" {
-				if pm, e := docker.ListProviderModels("openrouter", openRouterKey); e == nil {
+				if pm, e := docker.ListProviderModels(provider, key); e == nil {
 					downloaded = append(downloaded, pm...)
 				}
 			}
@@ -1774,6 +1809,12 @@ func (m *ChatModel) formatParams() string {
 // startToolStream sets up streaming state and starts StreamChatWithTools.
 // Used by both the enter handler (direct path) and RewriteDoneMsg handler.
 func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatModel, tea.Cmd) {
+	// If the model reported tool use as unsupported, skip tools for the rest
+	// of the session to avoid repeated 400 errors.
+	if !m.supportsTools {
+		hasTools = false
+	}
+
 	m.isStream = true
 	m.streaming = ""
 	m.turnContent = ""
@@ -3445,6 +3486,8 @@ func (m *ChatModel) updateViewport() {
 				}
 				b.WriteString(prefixWrap(rendered, border, m.width))
 			}
+		case "info":
+			b.WriteString(prefixWrap(DimStyle.Render(entry.content), border, m.width))
 		case "assistant":
 			if m.markdown {
 				rendered := RenderMarkdown(entry.content, m.width-2)
