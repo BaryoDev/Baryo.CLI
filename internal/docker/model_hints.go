@@ -101,6 +101,30 @@ func DetectModelHints(modelTag string) ModelHints {
 			ContextWindow: 200000,
 		}
 
+	case strings.HasPrefix(lower, "anthropic."):
+		temp := 1.0
+		return ModelHints{
+			Family:        "bedrock",
+			Temperature:   &temp,
+			ContextWindow: 200000,
+		}
+
+	case strings.HasPrefix(lower, "amazon.nova") || strings.HasPrefix(lower, "amazon.titan"):
+		temp := 0.7
+		return ModelHints{
+			Family:        "bedrock",
+			Temperature:   &temp,
+			ContextWindow: 128000,
+		}
+
+	case strings.HasPrefix(lower, "meta.llama"):
+		temp := 0.7
+		return ModelHints{
+			Family:        "bedrock",
+			Temperature:   &temp,
+			ContextWindow: 128000,
+		}
+
 	case strings.HasPrefix(lower, "deepseek-"):
 		temp := 1.0
 		return ModelHints{

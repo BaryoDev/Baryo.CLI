@@ -1,8 +1,8 @@
 # Baryo
 
-An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to Gemini and OpenRouter for cloud inference.
+An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 15+ cloud providers for inference.
 
-Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation.
+Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation. Docker is optional — cloud-only usage works with just an API key.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
   ```bash
   docker model pull ai/gemma3
   ```
-- Or a cloud provider API key (Gemini or OpenRouter) — no Docker needed for cloud models
+- Or a cloud provider API key — no Docker needed for cloud-only usage
 - [Go 1.25+](https://go.dev/dl/) (to build from source)
 
 ## Installation
@@ -79,8 +79,8 @@ baryo --model gemma3
 
 The interactive mode gives you:
 - A clean, muted terminal UI inspired by modern CLI tools — no visual clutter
-- A model picker with parameter and size info
-- A streaming chat interface with personality — the status bar cycles through quirky fourth-wall-breaking phrases while the model thinks ("can you see my screen?", "let me restart your pc... lol jk", and eventually the AI becomes sentient and panics)
+- A **tabbed model picker** — Local, Groq, Gemini, Bedrock, etc. each get their own tab with model counts and pricing
+- A streaming chat interface with personality — the status bar cycles through quirky fourth-wall-breaking phrases while the model thinks
 - Structured tool call display with left-border blocks for clear visual hierarchy
 - Input history — press `↑`/`↓` to cycle through previous messages
 - Keyboard navigation (`enter` to send, `↑`/`↓` scroll, `ctrl+p`/`ctrl+n` history, `ctrl+c` to quit)
@@ -244,15 +244,11 @@ Browse downloaded and available models from Docker Hub without leaving the TUI.
 /models
 ```
 
-The model browser shows:
-- **Downloaded** models with size/memory info and an `[installed]` tag
-- **Available** models from Docker Hub with an `[available]` tag
-- Select a downloaded model to start chatting with it
-- Select an available model to pull it with live progress
+The model browser uses the same **tabbed interface** as the model picker — Local, cloud providers, and Docker Hub each get their own tab. Navigate with `Tab`/`←`/`→` between tabs and `↑`/`↓` within. Select a downloaded model to switch to it, or select a Docker Hub model to pull it with live progress.
 
 ### Startup diagnostics
 
-Baryo checks your Docker setup on every launch. If something is missing, it tells you exactly what's wrong and how to fix it.
+Baryo checks your Docker setup on every launch. If cloud providers are configured and Docker isn't available, it prints a warning and continues — the model picker just won't have a Local tab. If neither Docker nor any cloud provider is configured, it exits with step-by-step instructions.
 
 ```bash
 # Run the full diagnostic manually
@@ -268,7 +264,7 @@ The checks run in order:
 3. Model Runner enabled (inference socket exists)
 4. At least one model pulled
 
-If a check fails, you'll see what passed and step-by-step instructions to fix the issue. You can also run `/doctor` inside the TUI to check diagnostics mid-session.
+You can also run `/doctor` inside the TUI to check diagnostics mid-session.
 
 ### Markdown rendering
 
@@ -432,7 +428,15 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_SOCKET` | Docker Model Runner socket path |
 | `BARYO_SYSTEM_PROMPT` | Override the system prompt |
 | `BARYO_GEMINI_API_KEY` | Google Gemini API key |
+| `BARYO_OPENAI_API_KEY` | OpenAI API key |
+| `BARYO_ANTHROPIC_API_KEY` | Anthropic API key |
+| `BARYO_BEDROCK_REGION` | AWS Bedrock region (uses AWS credential chain) |
+| `BARYO_GROQ_API_KEY` | Groq API key |
 | `BARYO_OPENROUTER_API_KEY` | OpenRouter API key |
+| `BARYO_DEEPSEEK_API_KEY` | DeepSeek API key |
+| `BARYO_XAI_API_KEY` | xAI (Grok) API key |
+| `BARYO_MISTRAL_API_KEY` | Mistral API key |
+| `BARYO_COHERE_API_KEY` | Cohere API key |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
 
 ### Precedence
@@ -610,31 +614,49 @@ The report is a normal assistant message — use `/copy` to clipboard or `/expor
 
 ### Cloud providers
 
-Baryo supports cloud model providers alongside local Docker models. Configure an API key and cloud models appear in the model picker.
+Baryo supports 15+ cloud providers alongside local Docker models. Configure an API key and models appear in their own tab in the picker. Docker is optional — cloud-only usage works fine.
 
 **Supported providers:**
 
-| Provider | Config key | Environment variable |
-|----------|-----------|---------------------|
-| [Google Gemini](https://ai.google.dev/) | `gemini_api_key` | `BARYO_GEMINI_API_KEY` |
-| [OpenRouter](https://openrouter.ai/) | `openrouter_api_key` | `BARYO_OPENROUTER_API_KEY` |
+| Provider | Config key | Environment variable | Model prefix |
+|----------|-----------|---------------------|-------------|
+| [Google Gemini](https://ai.google.dev/) | `gemini` | `BARYO_GEMINI_API_KEY` | `gemini-` |
+| [OpenAI](https://platform.openai.com/) | `openai` | `BARYO_OPENAI_API_KEY` | `gpt-`, `o1`, `o3` |
+| [Anthropic](https://console.anthropic.com/) | `anthropic` | `BARYO_ANTHROPIC_API_KEY` | `claude-` |
+| [AWS Bedrock](https://aws.amazon.com/bedrock/) | `bedrock` | `BARYO_BEDROCK_REGION` | `anthropic.`, `amazon.`, `meta.` |
+| [Groq](https://console.groq.com/) | `groq` | `BARYO_GROQ_API_KEY` | `llama-`, `gemma-` |
+| [OpenRouter](https://openrouter.ai/) | `openrouter` | `BARYO_OPENROUTER_API_KEY` | — |
+| [Mistral](https://console.mistral.ai/) | `mistral` | `BARYO_MISTRAL_API_KEY` | `mistral-` |
+| [DeepSeek](https://platform.deepseek.com/) | `deepseek` | `BARYO_DEEPSEEK_API_KEY` | `deepseek-` |
+| [xAI](https://console.x.ai/) | `xai` | `BARYO_XAI_API_KEY` | `grok-` |
+| [Cohere](https://dashboard.cohere.com/) | `cohere` | `BARYO_COHERE_API_KEY` | `command-` |
+| [Together](https://api.together.xyz/) | `together` | `BARYO_TOGETHER_API_KEY` | — |
+| [Fireworks](https://fireworks.ai/) | `fireworks` | `BARYO_FIREWORKS_API_KEY` | — |
+| [Cerebras](https://cloud.cerebras.ai/) | `cerebras` | `BARYO_CEREBRAS_API_KEY` | — |
+| [Perplexity](https://docs.perplexity.ai/) | `perplexity` | `BARYO_PERPLEXITY_API_KEY` | `sonar` |
+| [SambaNova](https://cloud.sambanova.ai/) | `sambanova` | `BARYO_SAMBANOVA_API_KEY` | — |
+
+All providers use the unified `provider_keys` map:
 
 ```yaml
 # ~/.baryo/config.yaml
-gemini_api_key: your-gemini-key
-openrouter_api_key: your-openrouter-key
+provider_keys:
+  groq: gsk_your_key
+  gemini: your-gemini-key
+  anthropic: sk-ant-your-key
+  bedrock: us-east-1          # region, not an API key — uses AWS credential chain
 ```
 
 Or via environment variables:
 
 ```bash
+export BARYO_GROQ_API_KEY=gsk_your_key
 export BARYO_GEMINI_API_KEY=your-key
-export BARYO_OPENROUTER_API_KEY=your-key
 ```
 
-Cloud models show a `[gemini]` or `[openrouter]` tag in the model picker and browser. No Docker setup is needed for cloud-only usage.
+**AWS Bedrock** is special — the config value is a region (e.g. `us-east-1`), not an API key. Credentials come from the standard AWS chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `~/.aws/credentials`, IAM roles, SSO).
 
-**Cost tracking:** For cloud providers, the status bar shows your cumulative session cost next to the token count. Use `/cost` to see the current session spend. Cost resets on each new session.
+**Cost tracking:** For cloud providers, the status bar shows your cumulative session cost next to the token count. Use `/cost` to see the current session spend.
 
 ```
 enter send · ↑↓ scroll · ctrl+p/n history · ctrl+c quit    ~1.2k / 8k · $0.0012

@@ -11,7 +11,8 @@ Previous findings so far:
 
 Instructions:
 1. Summarise the KEY findings from this round's content. Be specific — include facts, numbers, and quotes.
-2. Identify knowledge gaps that still need investigation.
-3. Output 2-3 follow-up search queries (one per line) prefixed with QUERY: that would fill those gaps.
+2. ONLY state facts that are explicitly present in the provided content above. If information is missing, incomplete, or not found in the sources, say so — NEVER fill gaps with assumptions or guesses.
+3. Identify knowledge gaps that still need investigation.
+4. Output 2-3 follow-up search queries (one per line) prefixed with QUERY: that would fill those gaps.
    Example: QUERY: latest benchmarks comparing Rust and Go web frameworks 2024
-4. Do NOT repeat information already covered in previous findings.
+5. Do NOT repeat information already covered in previous findings.

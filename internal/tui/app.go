@@ -397,14 +397,14 @@ func (m AppModel) loadModels() tea.Cmd {
 	keys := m.providerKeys
 	return func() tea.Msg {
 		var models []docker.DockerModel
-		var err error
 		if isRemoteSocket(socketPath) {
-			models, err = docker.ListRemoteModels(socketPath)
+			if m, err := docker.ListRemoteModels(socketPath); err == nil {
+				models = append(models, m...)
+			}
 		} else {
-			models, err = docker.ListModels()
-		}
-		if err != nil {
-			return ModelsLoadedMsg{Err: err}
+			if m, err := docker.ListModels(); err == nil {
+				models = append(models, m...)
+			}
 		}
 
 		// Append cloud provider models (non-fatal on error).
@@ -415,6 +415,10 @@ func (m AppModel) loadModels() tea.Cmd {
 			if pm, e := docker.ListProviderModels(provider, key); e == nil {
 				models = append(models, pm...)
 			}
+		}
+
+		if len(models) == 0 {
+			return ModelsLoadedMsg{Err: fmt.Errorf("no models available — configure a cloud provider or install Docker")}
 		}
 
 		return ModelsLoadedMsg{Models: models}

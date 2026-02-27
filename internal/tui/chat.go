@@ -1934,30 +1934,30 @@ func formatConfirmPrompt(name, argsJSON string) string {
 	switch name {
 	case "write_file":
 		if p, ok := args["path"].(string); ok {
-			return fmt.Sprintf("Allow write to %s? [y/n]", p)
+			return fmt.Sprintf("Allow write to %s?", p)
 		}
 	case "edit_file":
 		if p, ok := args["path"].(string); ok {
-			return fmt.Sprintf("Allow edit to %s? [y/n]", p)
+			return fmt.Sprintf("Allow edit to %s?", p)
 		}
 	case "delete_file":
 		if p, ok := args["path"].(string); ok {
-			return fmt.Sprintf("Allow delete %s? [y/n]", p)
+			return fmt.Sprintf("Allow delete %s?", p)
 		}
 	case "run_code":
 		if lang, ok := args["language"].(string); ok {
-			return fmt.Sprintf("Allow running %s code? [y/n]", lang)
+			return fmt.Sprintf("Allow running %s code?", lang)
 		}
 	case "run_script":
 		if p, ok := args["path"].(string); ok {
-			return fmt.Sprintf("Allow running script %s? [y/n]", p)
+			return fmt.Sprintf("Allow running script %s?", p)
 		}
 	case "shell":
 		if cmd, ok := args["command"].(string); ok {
-			return fmt.Sprintf("Allow shell: %s? [y/n]", cmd)
+			return fmt.Sprintf("Allow shell: %s?", cmd)
 		}
 	}
-	return fmt.Sprintf("Allow %s? [y/n]", name)
+	return fmt.Sprintf("Allow %s?", name)
 }
 
 func (m *ChatModel) parseParams(input string) error {
@@ -3557,7 +3557,29 @@ func (m ChatModel) View() string {
 
 	var status string
 	if m.confirmPending {
-		status = lipgloss.NewStyle().Foreground(lipgloss.Color("179")).Bold(true).Render("⚡ " + m.confirmPrompt)
+		// Render a prominent confirmation bar that's hard to miss.
+		confirmStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("214")).
+			Padding(0, 1)
+		keyStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("108")).
+			Padding(0, 1)
+		denyStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("167")).
+			Padding(0, 1)
+		prompt := confirmStyle.Render(" " + m.confirmPrompt + " ")
+		keys := keyStyle.Render("y accept") + " " + denyStyle.Render("n deny")
+		gap := m.width - lipgloss.Width(prompt) - lipgloss.Width(keys)
+		if gap < 2 {
+			gap = 2
+		}
+		status = prompt + strings.Repeat(" ", gap) + keys
 	} else if m.toolStatus != "" {
 		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
 	} else if m.isStream && m.thinking {

@@ -82,10 +82,22 @@ func main() {
 	if !skipDoctor {
 		results := doctor.RunChecks(cfg.SocketPath)
 		if !doctor.AllPassed(results) {
-			fmt.Fprintf(os.Stderr, "Baryo — startup check failed\n\n")
-			fmt.Fprint(os.Stderr, doctor.FormatResults(results))
-			fmt.Fprintf(os.Stderr, "\nRun 'baryo doctor' for full diagnostics or use --skip-checks to bypass.\n")
-			os.Exit(1)
+			// If cloud providers are configured, just warn instead of exiting.
+			hasProviders := false
+			for _, key := range cfg.ProviderKeys {
+				if key != "" {
+					hasProviders = true
+					break
+				}
+			}
+			if hasProviders {
+				fmt.Fprintf(os.Stderr, "Baryo — local Docker not available (cloud providers will still work)\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "Baryo — startup check failed\n\n")
+				fmt.Fprint(os.Stderr, doctor.FormatResults(results))
+				fmt.Fprintf(os.Stderr, "\nRun 'baryo doctor' for full diagnostics or use --skip-checks to bypass.\n")
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -258,6 +270,7 @@ var prefixToProvider = []struct {
 	prefixes []string
 	provider string
 }{
+	{[]string{"anthropic.", "amazon.", "meta.", "mistral.", "cohere.", "ai21."}, "bedrock"},
 	{[]string{"gemini-"}, "gemini"},
 	{[]string{"gpt-", "o1", "o3", "chatgpt-"}, "openai"},
 	{[]string{"claude-"}, "anthropic"},
@@ -293,6 +306,10 @@ func tryProviderModel(cfg *config.Config) (docker.DockerModel, bool) {
 						dm.CompletionPrice = p.CompletionPrice
 					case "anthropic":
 						p := docker.LookupAnthropicPricing(cfg.Model)
+						dm.PromptPrice = p.PromptPrice
+						dm.CompletionPrice = p.CompletionPrice
+					case "bedrock":
+						p := docker.LookupBedrockPricing(cfg.Model)
 						dm.PromptPrice = p.PromptPrice
 						dm.CompletionPrice = p.CompletionPrice
 					default:

@@ -7,6 +7,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -15,7 +16,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/docker"
 )
 
-// modelItem represents a single entry in the flat list.
+// modelItem represents a single entry in a browser tab.
 type modelItem struct {
 	name       string
 	detail     string
@@ -25,13 +26,20 @@ type modelItem struct {
 	search     docker.SearchModel
 }
 
-// ModelBrowserModel is the model browser screen.
+// browserTab groups items under a named tab.
+type browserTab struct {
+	label string
+	items []modelItem
+}
+
+// ModelBrowserModel is the tabbed model browser screen.
 type ModelBrowserModel struct {
 	downloaded []docker.DockerModel
 	available  []docker.SearchModel
-	items      []modelItem
-	cursor     int
-	offset     int // scroll offset (first visible item index)
+	tabs      []browserTab
+	activeTab int
+	cursor    int
+	offset    int // scroll offset within the active tab
 
 	pulling    bool
 	pullName   string
@@ -45,7 +53,7 @@ type ModelBrowserModel struct {
 	height int
 }
 
-// NewModelBrowser creates a new model browser from the fetched lists.
+// NewModelBrowser creates a new tabbed model browser from the fetched lists.
 func NewModelBrowser(downloaded []docker.DockerModel, available []docker.SearchModel) ModelBrowserModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
@@ -56,53 +64,99 @@ func NewModelBrowser(downloaded []docker.DockerModel, available []docker.SearchM
 		available:  available,
 		spinner:    s,
 	}
-	m.buildItems()
+	m.buildTabs()
 	return m
 }
 
-func (m *ModelBrowserModel) buildItems() {
+func (m *ModelBrowserModel) buildTabs() {
 	downloadedNames := make(map[string]bool, len(m.downloaded))
 	for _, d := range m.downloaded {
 		downloadedNames[d.Name] = true
 	}
 
-	m.items = nil
+	// Group downloaded models: local vs providers.
+	var localItems []modelItem
+	providerItems := make(map[string][]modelItem)
 
 	for _, d := range m.downloaded {
-		detail := fmt.Sprintf("params: %s  quantized size: %s", d.Params, d.Size)
-		if d.Provider != "" {
-			detail = "cloud model"
-		}
-		m.items = append(m.items, modelItem{
+		item := modelItem{
 			name:       d.Name,
-			detail:     detail,
-			size:       d.Size,
 			downloaded: true,
 			model:      d,
-		})
+		}
+		if d.Provider != "" {
+			if d.PromptPrice > 0 {
+				item.detail = formatPricing(d.PromptPrice, d.CompletionPrice)
+			} else {
+				item.detail = "cloud model"
+			}
+			if d.Params != "" {
+				item.detail = d.Params + "  " + item.detail
+			}
+			providerItems[d.Provider] = append(providerItems[d.Provider], item)
+		} else {
+			item.detail = fmt.Sprintf("params: %s  size: %s", d.Params, d.Size)
+			item.size = d.Size
+			localItems = append(localItems, item)
+		}
 	}
 
+	// Available Docker Hub models.
+	var hubItems []modelItem
 	for _, s := range m.available {
 		if downloadedNames[s.Name] {
 			continue
 		}
-		m.items = append(m.items, modelItem{
+		hubItems = append(hubItems, modelItem{
 			name:       s.Name,
 			detail:     s.Description,
 			downloaded: false,
 			search:     s,
 		})
 	}
+
+	m.tabs = nil
+
+	if len(localItems) > 0 {
+		m.tabs = append(m.tabs, browserTab{label: "Local", items: localItems})
+	}
+
+	// Sort provider names.
+	providerNames := make([]string, 0, len(providerItems))
+	for p := range providerItems {
+		providerNames = append(providerNames, p)
+	}
+	sort.Strings(providerNames)
+
+	for _, p := range providerNames {
+		label := strings.ToUpper(p[:1]) + p[1:]
+		m.tabs = append(m.tabs, browserTab{label: label, items: providerItems[p]})
+	}
+
+	if len(hubItems) > 0 {
+		m.tabs = append(m.tabs, browserTab{label: "Docker Hub", items: hubItems})
+	}
+
+	if len(m.tabs) == 0 {
+		m.tabs = append(m.tabs, browserTab{label: "Local"})
+	}
 }
 
-// pageSize returns how many items fit on screen (minimum 5).
+// activeItems returns the items in the currently active tab.
+func (m *ModelBrowserModel) activeItems() []modelItem {
+	if m.activeTab >= 0 && m.activeTab < len(m.tabs) {
+		return m.tabs[m.activeTab].items
+	}
+	return nil
+}
+
+// pageSize returns how many items fit on screen (minimum 3).
 func (m *ModelBrowserModel) pageSize() int {
-	// title(2) + section header(2) + help bar(1) + scroll indicators(2) = ~7 overhead
-	// each item takes ~3 lines (name + detail + blank)
+	// title(1) + tabs(2) + help bar(1) + scroll indicators(2) + spacing = ~7 overhead
 	usable := m.height - 7
 	n := usable / 3
-	if n < 5 {
-		return 5
+	if n < 3 {
+		return 3
 	}
 	return n
 }
@@ -129,29 +183,48 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 		m.adjustScroll()
 
 	case tea.KeyMsg:
+		if m.pulling {
+			if msg.String() == "esc" && m.pullCancel != nil {
+				m.pullCancel()
+			}
+			break
+		}
+		items := m.activeItems()
 		switch msg.String() {
+		case "tab", "right", "l":
+			if m.activeTab < len(m.tabs)-1 {
+				m.activeTab++
+				m.cursor = 0
+				m.offset = 0
+			}
+		case "shift+tab", "left", "h":
+			if m.activeTab > 0 {
+				m.activeTab--
+				m.cursor = 0
+				m.offset = 0
+			}
 		case "up", "k":
-			if !m.pulling && m.cursor > 0 {
+			if m.cursor > 0 {
 				m.cursor--
 				m.adjustScroll()
 			}
 		case "down", "j":
-			if !m.pulling && m.cursor < len(m.items)-1 {
+			if m.cursor < len(items)-1 {
 				m.cursor++
 				m.adjustScroll()
 			}
 		case "enter":
-			if m.pulling || len(m.items) == 0 {
+			if len(items) == 0 {
 				break
 			}
-			item := m.items[m.cursor]
+			item := items[m.cursor]
 			if item.downloaded {
 				selected := item.model
 				return m, func() tea.Msg {
 					return ModelSelectedMsg{Model: selected}
 				}
 			}
-			// Start streaming pull
+			// Start streaming pull.
 			ctx, cancel := context.WithCancel(context.Background())
 			m.pulling = true
 			m.pullName = item.name
@@ -160,13 +233,8 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 			m.pullCh = docker.StreamPull(ctx, item.name)
 			return m, tea.Batch(m.spinner.Tick, waitForPullLine(m.pullCh))
 		case "esc":
-			if m.pulling && m.pullCancel != nil {
-				m.pullCancel()
-			}
-			if !m.pulling {
-				return m, func() tea.Msg {
-					return ModelBrowserCancelMsg{}
-				}
+			return m, func() tea.Msg {
+				return ModelBrowserCancelMsg{}
 			}
 		}
 
@@ -184,7 +252,7 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 				m.err = fmt.Errorf("pull failed for %s", m.pullName)
 				return m, nil
 			}
-			// Refresh lists after successful pull
+			// Refresh lists after successful pull.
 			avail := m.available
 			return m, func() tea.Msg {
 				downloaded, err := docker.ListModels()
@@ -211,11 +279,6 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 func (m ModelBrowserModel) View() string {
 	var b strings.Builder
 
-	installedTag := lipgloss.NewStyle().Foreground(lipgloss.Color("108")).Render("[installed]")
-	availableTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[available]")
-	sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	providerTagStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-
 	b.WriteString(TitleStyle.Render("baryo") + DimStyle.Render(" · ") + HelpStyle.Render("model browser"))
 	b.WriteString("\n\n")
 
@@ -235,77 +298,75 @@ func (m ModelBrowserModel) View() string {
 		return b.String()
 	}
 
-	if len(m.items) == 0 {
-		b.WriteString(HelpStyle.Render("  No models found."))
+	// Render tab bar.
+	activeTabStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("75")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 2)
+
+	inactiveTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("243")).
+		Padding(0, 1)
+
+	var tabParts []string
+	for i, tab := range m.tabs {
+		text := fmt.Sprintf("%s (%d)", tab.label, len(tab.items))
+		if i == m.activeTab {
+			tabParts = append(tabParts, activeTabStyle.Render(text))
+		} else {
+			tabParts = append(tabParts, inactiveTabStyle.Render(text))
+		}
+	}
+	b.WriteString("  " + strings.Join(tabParts, DimStyle.Render(" │ ")))
+	b.WriteString("\n\n")
+
+	// Render items for the active tab.
+	items := m.activeItems()
+
+	if len(items) == 0 {
+		b.WriteString(HelpStyle.Render("  No models in this tab."))
 		b.WriteString("\n\n")
-		b.WriteString(HelpStyle.Render("esc back · ctrl+c quit"))
-		return b.String()
-	}
+	} else {
+		sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
-	// Determine visible window
-	ps := m.pageSize()
-	end := m.offset + ps
-	if end > len(m.items) {
-		end = len(m.items)
-	}
+		ps := m.pageSize()
+		end := m.offset + ps
+		if end > len(items) {
+			end = len(items)
+		}
 
-	// Show scroll indicator at top
-	if m.offset > 0 {
-		b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↑ %d more above", m.offset)))
-		b.WriteString("\n\n")
-	}
-
-	// Render section headers + items in the visible window
-	shownDownloadedHeader := false
-	shownAvailableHeader := false
-
-	for i := m.offset; i < end; i++ {
-		item := m.items[i]
-
-		if item.downloaded && !shownDownloadedHeader {
-			// Only show header if there are downloaded items in or before the window
-			shownDownloadedHeader = true
-			b.WriteString(SectionHeaderStyle.Render("── Downloaded ──"))
+		if m.offset > 0 {
+			b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↑ %d more above", m.offset)))
 			b.WriteString("\n\n")
 		}
-		if !item.downloaded && !shownAvailableHeader {
-			shownAvailableHeader = true
-			b.WriteString(SectionHeaderStyle.Render("── Available (Docker Hub) ──"))
+
+		for i := m.offset; i < end; i++ {
+			item := items[i]
+			cursor := "  "
+			style := NormalModelStyle
+			if i == m.cursor {
+				cursor = "▸ "
+				style = SelectedModelStyle
+			}
+
+			sizeInfo := ""
+			if item.size != "" {
+				sizeInfo = " " + sizeTag.Render(item.size)
+			}
+
+			b.WriteString(fmt.Sprintf("%s%s%s\n", cursor, style.Render(item.name), sizeInfo))
+			b.WriteString("    " + ModelDetailStyle.Render(item.detail) + "\n\n")
+		}
+
+		remaining := len(items) - end
+		if remaining > 0 {
+			b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
 			b.WriteString("\n\n")
 		}
-
-		cursor := "  "
-		style := NormalModelStyle
-		if i == m.cursor {
-			cursor = "▸ "
-			style = SelectedModelStyle
-		}
-
-		tag := availableTag
-		if item.downloaded {
-			tag = installedTag
-		}
-		if item.model.Provider != "" {
-			tag = providerTagStyle.Render("[" + item.model.Provider + "]")
-		}
-
-		sizeInfo := ""
-		if item.size != "" {
-			sizeInfo = " " + sizeTag.Render(item.size)
-		}
-
-		b.WriteString(fmt.Sprintf("%s%s %s%s\n", cursor, style.Render(item.name), tag, sizeInfo))
-		b.WriteString("    " + ModelDetailStyle.Render(item.detail) + "\n\n")
 	}
 
-	// Show scroll indicator at bottom
-	remaining := len(m.items) - end
-	if remaining > 0 {
-		b.WriteString(HelpStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		b.WriteString("\n\n")
-	}
-
-	b.WriteString(HelpStyle.Render("↑/↓ navigate · enter select/pull · esc back · ctrl+c quit"))
+	b.WriteString(HelpStyle.Render("tab/←/→ switch tab · ↑/↓ navigate · enter select/pull · esc back · ctrl+c quit"))
 
 	return b.String()
 }

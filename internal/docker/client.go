@@ -70,6 +70,11 @@ type streamResult struct {
 // The channel is closed when streaming ends. On completion the streamResult is
 // sent via the result channel so callers can inspect accumulated tool calls.
 func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
+	// Bedrock uses the AWS ConverseStream API — delegate to native adapter.
+	if ep.Provider == "bedrock" {
+		return streamChatBedrock(ctx, ep, model, messages, params, tools)
+	}
+
 	// Anthropic uses a completely different API format — delegate to native adapter.
 	if ep.Provider == "anthropic" {
 		return streamChatAnthropic(ctx, ep, model, messages, params, tools)
@@ -89,9 +94,13 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 			Temperature: params.Temperature,
 			TopP:        params.TopP,
 			MaxTokens:   params.MaxTokens,
-			TopK:        params.TopK,
 			Stop:        params.Stop,
 			Tools:       tools,
+		}
+		// top_k is not part of the OpenAI chat completions spec — only send
+		// it for local models (Docker Model Runner / Ollama) which accept it.
+		if !ep.IsRemote() {
+			reqBody.TopK = params.TopK
 		}
 		if len(tools) > 0 {
 			reqBody.ToolChoice = "auto"

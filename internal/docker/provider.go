@@ -73,6 +73,11 @@ func ListProviderModels(provider, apiKey string) ([]DockerModel, error) {
 		return listAnthropicModels(), nil
 	}
 
+	// Bedrock uses the AWS SDK to list foundation models.
+	if provider == "bedrock" {
+		return listBedrockModels(apiKey)
+	}
+
 	baseURL, ok := Providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", provider)
@@ -205,6 +210,10 @@ func filterProviderModel(provider, id string, entry providerModelEntry) bool {
 		}
 		return true
 
+	case "bedrock":
+		// Bedrock filtering is done in listBedrockModels; accept everything here.
+		return true
+
 	default:
 		return true
 	}
@@ -256,6 +265,9 @@ func parseProviderPricing(provider string, entry providerModelEntry, modelID str
 	case "openai":
 		p := LookupOpenAIPricing(modelID)
 		return p.PromptPrice, p.CompletionPrice
+	case "bedrock":
+		p := LookupBedrockPricing(modelID)
+		return p.PromptPrice, p.CompletionPrice
 	case "groq", "mistral", "together", "fireworks", "deepseek", "xai", "cerebras", "perplexity", "sambanova", "cohere":
 		p := lookupProviderPricing(provider, modelID)
 		return p.PromptPrice, p.CompletionPrice
@@ -282,6 +294,33 @@ func LookupOpenAIPricing(modelID string) ModelPricing {
 	best := ""
 	var bestPricing ModelPricing
 	for prefix, p := range openaiPricing {
+		if strings.HasPrefix(modelID, prefix) && len(prefix) > len(best) {
+			best = prefix
+			bestPricing = p
+		}
+	}
+	return bestPricing
+}
+
+// bedrockPricing maps Bedrock model prefixes to their per-token pricing.
+var bedrockPricing = map[string]ModelPricing{
+	"anthropic.claude-opus-4":     {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 75.0 / 1_000_000},
+	"anthropic.claude-sonnet-4":   {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+	"anthropic.claude-3-5-sonnet": {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+	"anthropic.claude-3-5-haiku":  {PromptPrice: 0.80 / 1_000_000, CompletionPrice: 4.0 / 1_000_000},
+	"amazon.nova-pro":             {PromptPrice: 0.80 / 1_000_000, CompletionPrice: 3.20 / 1_000_000},
+	"amazon.nova-lite":            {PromptPrice: 0.06 / 1_000_000, CompletionPrice: 0.24 / 1_000_000},
+	"amazon.nova-micro":           {PromptPrice: 0.035 / 1_000_000, CompletionPrice: 0.14 / 1_000_000},
+	"meta.llama3-1-70b":           {PromptPrice: 0.72 / 1_000_000, CompletionPrice: 0.72 / 1_000_000},
+	"meta.llama3-1-8b":            {PromptPrice: 0.22 / 1_000_000, CompletionPrice: 0.22 / 1_000_000},
+	"mistral.mistral-large":       {PromptPrice: 2.0 / 1_000_000, CompletionPrice: 6.0 / 1_000_000},
+}
+
+// LookupBedrockPricing returns pricing for a Bedrock model ID by matching prefixes.
+func LookupBedrockPricing(modelID string) ModelPricing {
+	best := ""
+	var bestPricing ModelPricing
+	for prefix, p := range bedrockPricing {
 		if strings.HasPrefix(modelID, prefix) && len(prefix) > len(best) {
 			best = prefix
 			bestPricing = p

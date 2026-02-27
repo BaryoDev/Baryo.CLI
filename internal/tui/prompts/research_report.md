@@ -11,4 +11,4 @@ Write a well-structured report with these sections:
 3. **Analysis** — your synthesis, connections between findings, and implications.
 4. **Sources** — numbered list matching the citations above (Title — URL).
 
-Be thorough, specific, and cite sources for all factual claims. Use markdown formatting.
+CRITICAL: ONLY include facts explicitly found in the research content above. Every claim MUST have a source citation. If information was not found for a requested field, write "N/A" or "Not found" — NEVER invent, guess, or fill in missing data. Accuracy is more important than completeness. Use markdown formatting.
