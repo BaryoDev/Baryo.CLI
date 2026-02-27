@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // modelItem represents a single entry in a browser tab.
@@ -22,8 +22,8 @@ type modelItem struct {
 	detail     string
 	size       string // memory/disk size (e.g. "4.07 GiB"), empty if unknown
 	downloaded bool
-	model      docker.DockerModel
-	search     docker.SearchModel
+	model      llm.Model
+	search     llm.SearchModel
 }
 
 // browserTab groups items under a named tab.
@@ -34,8 +34,8 @@ type browserTab struct {
 
 // ModelBrowserModel is the tabbed model browser screen.
 type ModelBrowserModel struct {
-	downloaded []docker.DockerModel
-	available  []docker.SearchModel
+	downloaded []llm.Model
+	available  []llm.SearchModel
 	tabs      []browserTab
 	activeTab int
 	cursor    int
@@ -54,7 +54,7 @@ type ModelBrowserModel struct {
 }
 
 // NewModelBrowser creates a new tabbed model browser from the fetched lists.
-func NewModelBrowser(downloaded []docker.DockerModel, available []docker.SearchModel) ModelBrowserModel {
+func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) ModelBrowserModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
@@ -152,27 +152,12 @@ func (m *ModelBrowserModel) activeItems() []modelItem {
 
 // pageSize returns how many items fit on screen (minimum 3).
 func (m *ModelBrowserModel) pageSize() int {
-	// title(1) + tabs(2) + help bar(1) + scroll indicators(2) + spacing = ~7 overhead
-	usable := m.height - 7
-	n := usable / 3
-	if n < 3 {
-		return 3
-	}
-	return n
+	return PageSize(m.height, 7, 3, 3)
 }
 
 // adjustScroll ensures the cursor is within the visible window.
 func (m *ModelBrowserModel) adjustScroll() {
-	ps := m.pageSize()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	if m.cursor >= m.offset+ps {
-		m.offset = m.cursor - ps + 1
-	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	m.offset = AdjustScroll(m.cursor, m.offset, m.pageSize())
 }
 
 func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
@@ -230,7 +215,7 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 			m.pullName = item.name
 			m.pullStatus = "Starting pull..."
 			m.pullCancel = cancel
-			m.pullCh = docker.StreamPull(ctx, item.name)
+			m.pullCh = llm.StreamPull(ctx, item.name)
 			return m, tea.Batch(m.spinner.Tick, waitForPullLine(m.pullCh))
 		case "esc":
 			return m, func() tea.Msg {
@@ -255,7 +240,7 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 			// Refresh lists after successful pull.
 			avail := m.available
 			return m, func() tea.Msg {
-				downloaded, err := docker.ListModels()
+				downloaded, err := llm.ListModels()
 				if err != nil {
 					return ShowModelsMsg{Err: err}
 				}
@@ -299,26 +284,11 @@ func (m ModelBrowserModel) View() string {
 	}
 
 	// Render tab bar.
-	activeTabStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("75")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 2)
-
-	inactiveTabStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("243")).
-		Padding(0, 1)
-
-	var tabParts []string
-	for i, tab := range m.tabs {
-		text := fmt.Sprintf("%s (%d)", tab.label, len(tab.items))
-		if i == m.activeTab {
-			tabParts = append(tabParts, activeTabStyle.Render(text))
-		} else {
-			tabParts = append(tabParts, inactiveTabStyle.Render(text))
-		}
+	var tabLabels []string
+	for _, tab := range m.tabs {
+		tabLabels = append(tabLabels, fmt.Sprintf("%s (%d)", tab.label, len(tab.items)))
 	}
-	b.WriteString("  " + strings.Join(tabParts, DimStyle.Render(" │ ")))
+	b.WriteString(RenderTabBar(tabLabels, m.activeTab))
 	b.WriteString("\n\n")
 
 	// Render items for the active tab.
@@ -328,7 +298,7 @@ func (m ModelBrowserModel) View() string {
 		b.WriteString(HelpStyle.Render("  No models in this tab."))
 		b.WriteString("\n\n")
 	} else {
-		sizeTag := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+		sizeTag := SizeTagStyle
 
 		ps := m.pageSize()
 		end := m.offset + ps

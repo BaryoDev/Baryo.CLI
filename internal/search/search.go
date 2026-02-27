@@ -7,6 +7,8 @@ package search
 import (
 	"fmt"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 )
 
 const (
@@ -25,6 +27,7 @@ type SearchResult struct {
 // QueryResults dispatches a web search to the configured provider and returns
 // structured results.
 func QueryResults(provider, apiKey, query string) ([]SearchResult, error) {
+	logger.Debug("search query", "provider", provider, "query", query)
 	switch strings.ToLower(provider) {
 	case "brave":
 		if apiKey == "" {

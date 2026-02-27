@@ -8,16 +8,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // MatchModel finds a model by query using three-pass matching:
 // 1. Exact name match
 // 2. Short name match (after last '/')
 // 3. Case-insensitive substring match
-func MatchModel(query string, models []docker.DockerModel) (docker.DockerModel, error) {
+func MatchModel(query string, models []llm.Model) (llm.Model, error) {
 	if len(models) == 0 {
-		return docker.DockerModel{}, fmt.Errorf("no models available")
+		return llm.Model{}, fmt.Errorf("no models available")
 	}
 
 	lower := strings.ToLower(query)
@@ -39,7 +39,7 @@ func MatchModel(query string, models []docker.DockerModel) (docker.DockerModel, 
 	}
 
 	// Pass 3: case-insensitive substring
-	var matches []docker.DockerModel
+	var matches []llm.Model
 	for _, m := range models {
 		if strings.Contains(strings.ToLower(m.Name), lower) {
 			matches = append(matches, m)
@@ -52,7 +52,7 @@ func MatchModel(query string, models []docker.DockerModel) (docker.DockerModel, 
 		for i, m := range models {
 			names[i] = m.Name
 		}
-		return docker.DockerModel{}, fmt.Errorf("no model matching %q\navailable models: %s", query, strings.Join(names, ", "))
+		return llm.Model{}, fmt.Errorf("no model matching %q\navailable models: %s", query, strings.Join(names, ", "))
 	case 1:
 		return matches[0], nil
 	default:
@@ -60,6 +60,6 @@ func MatchModel(query string, models []docker.DockerModel) (docker.DockerModel, 
 		for i, m := range matches {
 			names[i] = m.Name
 		}
-		return docker.DockerModel{}, fmt.Errorf("ambiguous model %q matches: %s", query, strings.Join(names, ", "))
+		return llm.Model{}, fmt.Errorf("ambiguous model %q matches: %s", query, strings.Join(names, ", "))
 	}
 }

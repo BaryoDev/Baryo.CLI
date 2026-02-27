@@ -10,14 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 // braveSearch queries the Brave Search API and returns structured results.
 func braveSearch(apiKey, query string) ([]SearchResult, error) {
 	endpoint := "https://api.search.brave.com/res/v1/web/search?q=" + url.QueryEscape(query)
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -25,7 +23,7 @@ func braveSearch(apiKey, query string) ([]SearchResult, error) {
 	req.Header.Set("X-Subscription-Token", apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := searchClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching Brave results: %w", err)
 	}

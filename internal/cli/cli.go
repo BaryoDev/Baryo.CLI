@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // Version is set at build time via ldflags.
@@ -33,7 +33,7 @@ type Config struct {
 	Prompt       string
 	Model        string
 	SystemPrompt string
-	Params       docker.ChatParams
+	Params       llm.ChatParams
 	Tunnel       string // user@host for dynamic SSH tunnel
 	Continue     bool
 	Resume       bool
@@ -47,6 +47,7 @@ type Config struct {
 	MaxTurns     int
 	Output       string
 	NoTools      bool
+	Debug        bool
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -76,6 +77,7 @@ func Parse() Config {
 	fs.IntVar(&cfg.MaxTurns, "max-turns", 0, "max tool-call rounds in print mode (0 = default 5)")
 	fs.StringVar(&cfg.Output, "output", "text", "output format for print mode: text or json")
 	fs.BoolVar(&cfg.NoTools, "no-tools", false, "disable tool calling in print mode")
+	fs.BoolVar(&cfg.Debug, "debug", false, "enable debug logging to ~/.baryo/debug.log")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
@@ -105,6 +107,13 @@ func Parse() Config {
 	}
 	if maxTokens >= 0 {
 		cfg.Params.MaxTokens = &maxTokens
+	}
+
+	// BARYO_DEBUG=1 env var also enables debug mode.
+	if !cfg.Debug {
+		if v := os.Getenv("BARYO_DEBUG"); v == "1" || v == "true" {
+			cfg.Debug = true
+		}
 	}
 
 	// Read piped stdin (non-TTY)
@@ -176,6 +185,7 @@ Flags:
   --max-turns <n>       Max tool-call rounds in print mode (default: 5)
   --output <fmt>        Output format for print mode: text or json
   --no-tools            Disable tool calling in print mode
+  --debug               Enable debug logging to ~/.baryo/debug.log
   --skip-checks         Skip startup health checks
   --version             Print version and exit
   --help                Print this help message

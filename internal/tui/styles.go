@@ -85,4 +85,19 @@ var (
 	MentionSelectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("75")).
 				Bold(true)
+
+	// Tab bar styles
+	ActiveTabStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("75")).
+			Background(lipgloss.Color("236")).
+			Padding(0, 2)
+
+	InactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("243")).
+				Padding(0, 1)
+
+	// Model size tag style (used in model browser)
+	SizeTagStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243"))
 )

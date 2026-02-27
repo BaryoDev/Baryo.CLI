@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 )
 
 // startupTimeout is the maximum time to wait for an MCP server to initialize.
@@ -28,12 +30,12 @@ type Client struct {
 	name    string
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
-	stdout  *bufio.Reader
+	stdout  io.Reader
 	tools   []MCPToolDef
 	nextID  atomic.Int64
 	pending sync.Map // map[int]chan JSONRPCResponse
 	mu      sync.Mutex
-	closed  bool
+	closed  atomic.Bool
 }
 
 // NewClient starts an MCP server process and performs the initialization handshake.
@@ -56,12 +58,13 @@ func NewClient(ctx context.Context, name, command string, args, env []string) (*
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", command, err)
 	}
+	logger.Debug("mcp server started", "name", name, "command", command)
 
 	c := &Client{
 		name:   name,
 		cmd:    cmd,
 		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		stdout: stdout,
 	}
 
 	go c.readLoop()
@@ -152,10 +155,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 // Close kills the child process.
 func (c *Client) Close() {
-	if c.closed {
+	if !c.closed.CompareAndSwap(false, true) {
 		return
 	}
-	c.closed = true
+	logger.Debug("mcp server closing", "name", c.name)
 	c.stdin.Close()
 	if c.cmd.Process != nil {
 		c.cmd.Process.Kill()
@@ -187,6 +190,9 @@ func (c *Client) readLoop() {
 
 // call sends a JSON-RPC request and waits for the response.
 func (c *Client) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	if c.closed.Load() {
+		return nil, fmt.Errorf("client closed")
+	}
 	id := int(c.nextID.Add(1))
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -224,6 +230,9 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (j
 
 // notify sends a JSON-RPC notification (no id, no response expected).
 func (c *Client) notify(method string, params interface{}) {
+	if c.closed.Load() {
+		return
+	}
 	notif := JSONRPCNotification{
 		JSONRPC: "2.0",
 		Method:  method,

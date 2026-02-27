@@ -10,6 +10,18 @@ import (
 	"strings"
 )
 
+// sendProgress safely sends a status update to the progress channel.
+// It is a no-op if ch is nil and respects context cancellation.
+func sendProgress(ctx context.Context, ch chan<- string, msg string) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- msg:
+	case <-ctx.Done():
+	}
+}
+
 // ResearchDepth controls how many search rounds to run.
 type ResearchDepth int
 
@@ -49,7 +61,6 @@ type ResearchResult struct {
 	AccumulatedContext  string // all round findings concatenated
 	Sources            []ResearchSource
 	Rounds             int
-	Err                error
 }
 
 // ModelCallFunc is the signature for a blocking model call used during
@@ -71,7 +82,7 @@ type ResearchConfig struct {
 // RunResearch executes the multi-round research pipeline. It searches,
 // fetches pages, asks the model to analyse findings, and extracts follow-up
 // queries for subsequent rounds.
-func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
+func RunResearch(ctx context.Context, cfg ResearchConfig) (ResearchResult, error) {
 	maxRounds := int(cfg.Depth)
 	var allFindings strings.Builder
 	var sources []ResearchSource
@@ -93,27 +104,27 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
 		case <-ctx.Done():
 			// Timeout — return partial findings if we have any
 			if allFindings.Len() > 0 {
-				cfg.Progress <- fmt.Sprintf("Timeout after %d rounds — compiling partial results...", completedRounds)
-				return ResearchResult{Topic: cfg.Topic, AccumulatedContext: allFindings.String(), Sources: sources, Rounds: completedRounds}
+				sendProgress(ctx, cfg.Progress, fmt.Sprintf("Timeout after %d rounds — compiling partial results...", completedRounds))
+				return ResearchResult{Topic: cfg.Topic, AccumulatedContext: allFindings.String(), Sources: sources, Rounds: completedRounds}, nil
 			}
-			return ResearchResult{Topic: cfg.Topic, Err: fmt.Errorf("research timed out with no results for %q", query)}
+			return ResearchResult{}, fmt.Errorf("research timed out with no results for %q", query)
 		default:
 		}
 
 		// --- search ---
-		cfg.Progress <- fmt.Sprintf("Round %d/%d: searching %q...", round, maxRounds, query)
+		sendProgress(ctx, cfg.Progress, fmt.Sprintf("Round %d/%d: searching %q...", round, maxRounds, query))
 
 		results, err := QueryResults(cfg.Provider, cfg.APIKey, query)
 		if err != nil || len(results) == 0 {
 			if round == 1 && len(sources) == 0 {
 				// First round with zero results is fatal.
-				return ResearchResult{Topic: cfg.Topic, Err: fmt.Errorf("search returned no results for %q", query)}
+				return ResearchResult{}, fmt.Errorf("search returned no results for %q", query)
 			}
 			continue // skip this round
 		}
 
 		// --- fetch pages ---
-		cfg.Progress <- fmt.Sprintf("Round %d/%d: reading pages...", round, maxRounds)
+		sendProgress(ctx, cfg.Progress, fmt.Sprintf("Round %d/%d: reading pages...", round, maxRounds))
 
 		var roundContent strings.Builder
 		roundContent.WriteString(formatResults(results))
@@ -138,7 +149,7 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
 		}
 
 		// --- model analysis (blocking) ---
-		cfg.Progress <- fmt.Sprintf("Round %d/%d: analysing findings...", round, maxRounds)
+		sendProgress(ctx, cfg.Progress, fmt.Sprintf("Round %d/%d: analysing findings...", round, maxRounds))
 
 		analysisPrompt := fmt.Sprintf(
 			"You are a research analyst. The user is researching: %s\n\n"+
@@ -162,7 +173,7 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
 			if ctx.Err() != nil {
 				allFindings.WriteString(fmt.Sprintf("\n\n## Round %d\n\n%s", round, compactContent(roundContent.String(), perRoundBudget)))
 				completedRounds = round
-				cfg.Progress <- fmt.Sprintf("Timeout during round %d — compiling partial results...", round)
+				sendProgress(ctx, cfg.Progress, fmt.Sprintf("Timeout during round %d — compiling partial results...", round))
 				break
 			}
 			// Other model error — keep raw content, continue to next round
@@ -183,7 +194,7 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
 	}
 
 	if allFindings.Len() == 0 {
-		return ResearchResult{Topic: cfg.Topic, Err: fmt.Errorf("research produced no findings for %q", cfg.Topic)}
+		return ResearchResult{}, fmt.Errorf("research produced no findings for %q", cfg.Topic)
 	}
 
 	return ResearchResult{
@@ -191,7 +202,7 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) ResearchResult {
 		AccumulatedContext: allFindings.String(),
 		Sources:           sources,
 		Rounds:            completedRounds,
-	}
+	}, nil
 }
 
 // extractFollowUpQueries parses lines prefixed with "QUERY:" from model output.

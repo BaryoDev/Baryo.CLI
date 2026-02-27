@@ -10,14 +10,13 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // modelTab groups models under a named tab.
 type modelTab struct {
 	label  string // display label (e.g. "Local", "Groq", "Bedrock")
-	models []docker.DockerModel
+	models []llm.Model
 }
 
 // ModelSelectModel is the tabbed model picker screen.
@@ -31,16 +30,16 @@ type ModelSelectModel struct {
 }
 
 // NewModelSelect creates a new tabbed model selection screen.
-func NewModelSelect(models []docker.DockerModel) ModelSelectModel {
+func NewModelSelect(models []llm.Model) ModelSelectModel {
 	m := ModelSelectModel{}
 	m.tabs = buildTabs(models)
 	return m
 }
 
 // buildTabs groups models into tabs: "Local" first, then one tab per provider.
-func buildTabs(models []docker.DockerModel) []modelTab {
-	var local []docker.DockerModel
-	providerMap := make(map[string][]docker.DockerModel)
+func buildTabs(models []llm.Model) []modelTab {
+	var local []llm.Model
+	providerMap := make(map[string][]llm.Model)
 
 	for _, m := range models {
 		if m.Provider == "" {
@@ -84,32 +83,16 @@ func (m ModelSelectModel) Init() tea.Cmd {
 
 // pageSize returns how many items fit on screen.
 func (m *ModelSelectModel) pageSize() int {
-	// title(1) + tabs(2) + help bar(1) + scroll indicators(2) + spacing = ~7 overhead
-	// each item takes 2 lines (name + detail) + 1 blank
-	usable := m.height - 7
-	n := usable / 3
-	if n < 3 {
-		return 3
-	}
-	return n
+	return PageSize(m.height, 7, 3, 3)
 }
 
 // adjustScroll ensures the cursor is within the visible window.
 func (m *ModelSelectModel) adjustScroll() {
-	ps := m.pageSize()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	if m.cursor >= m.offset+ps {
-		m.offset = m.cursor - ps + 1
-	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	m.offset = AdjustScroll(m.cursor, m.offset, m.pageSize())
 }
 
 // activeModels returns the models in the currently active tab.
-func (m *ModelSelectModel) activeModels() []docker.DockerModel {
+func (m *ModelSelectModel) activeModels() []llm.Model {
 	if m.activeTab >= 0 && m.activeTab < len(m.tabs) {
 		return m.tabs[m.activeTab].models
 	}
@@ -168,28 +151,11 @@ func (m ModelSelectModel) View() string {
 	b.WriteString("\n\n")
 
 	// Render tab bar.
-	activeTabStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("75")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 2)
-
-	inactiveTabStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("243")).
-		Padding(0, 1)
-
-	var tabParts []string
-	for i, tab := range m.tabs {
-		label := tab.label
-		count := len(tab.models)
-		text := fmt.Sprintf("%s (%d)", label, count)
-		if i == m.activeTab {
-			tabParts = append(tabParts, activeTabStyle.Render(text))
-		} else {
-			tabParts = append(tabParts, inactiveTabStyle.Render(text))
-		}
+	var tabLabels []string
+	for _, tab := range m.tabs {
+		tabLabels = append(tabLabels, fmt.Sprintf("%s (%d)", tab.label, len(tab.models)))
 	}
-	b.WriteString("  " + strings.Join(tabParts, DimStyle.Render(" │ ")))
+	b.WriteString(RenderTabBar(tabLabels, m.activeTab))
 	b.WriteString("\n\n")
 
 	// Render models for the active tab.

@@ -5,18 +5,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net"
 	"os"
-	"strings"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"context"
 
 	"github.com/arnelirobles/baryo-cli/internal/cli"
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
@@ -25,6 +25,17 @@ import (
 
 func main() {
 	flags := cli.Parse()
+
+	if flags.Debug {
+		home, _ := os.UserHomeDir()
+		logPath := filepath.Join(home, ".baryo", "debug.log")
+		if err := logger.Init(logPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot open debug log: %v\n", err)
+		} else {
+			defer logger.Close()
+			logger.Info("baryo starting", "version", cli.Version)
+		}
+	}
 
 	switch flags.Mode() {
 	case cli.ModeVersion:
@@ -35,7 +46,7 @@ func main() {
 		return
 	case cli.ModeDoctor:
 		cfg := config.Load()
-		cfg.ApplyCLI("", "", flags.Tunnel, docker.ChatParams{}, flags.Yolo)
+		cfg.ApplyCLI("", "", flags.Tunnel, llm.ChatParams{}, flags.Yolo)
 		tun := startTunnel(&cfg)
 		if tun != nil {
 			defer tun.Close()
@@ -227,7 +238,7 @@ func startTunnel(cfg *config.Config) *tunnel.Tunnel {
 // resolveModel lists available models and matches the query.
 // For TCP connections, it queries the remote server's API for available models.
 // Also checks provider models when no local match is found.
-func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
+func resolveModel(cfg *config.Config) (llm.Model, error) {
 	// Try provider models first if model name has a known prefix.
 	if cfg.Model != "" {
 		if pm, ok := tryProviderModel(cfg); ok {
@@ -235,16 +246,16 @@ func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
 		}
 	}
 
-	if isRemoteSocket(cfg.SocketPath) {
-		models, err := docker.ListRemoteModels(cfg.SocketPath)
+	if llm.IsRemoteSocket(cfg.SocketPath) {
+		models, err := llm.ListRemoteModels(cfg.SocketPath)
 		if err != nil {
 			if cfg.Model != "" {
-				return docker.DockerModel{Name: cfg.Model, Tag: cfg.Model}, nil
+				return llm.Model{Name: cfg.Model, Tag: cfg.Model}, nil
 			}
-			return docker.DockerModel{}, fmt.Errorf("cannot list remote models: %w", err)
+			return llm.Model{}, fmt.Errorf("cannot list remote models: %w", err)
 		}
 		if len(models) == 0 {
-			return docker.DockerModel{}, fmt.Errorf("no models available on the remote server")
+			return llm.Model{}, fmt.Errorf("no models available on the remote server")
 		}
 		if cfg.Model == "" {
 			return models[0], nil
@@ -252,12 +263,12 @@ func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
 		return cli.MatchModel(cfg.Model, models)
 	}
 
-	models, err := docker.ListModels()
+	models, err := llm.ListModels()
 	if err != nil {
-		return docker.DockerModel{}, err
+		return llm.Model{}, err
 	}
 	if len(models) == 0 {
-		return docker.DockerModel{}, fmt.Errorf("no models available — pull a model with: docker model pull <name>")
+		return llm.Model{}, fmt.Errorf("no models available — pull a model with: docker model pull <name>")
 	}
 	if cfg.Model == "" {
 		return models[0], nil
@@ -265,86 +276,40 @@ func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
 	return cli.MatchModel(cfg.Model, models)
 }
 
-// prefixToProvider maps model name prefixes to provider names for quick detection.
-var prefixToProvider = []struct {
-	prefixes []string
-	provider string
-}{
-	{[]string{"anthropic.", "amazon.", "meta.", "mistral.", "cohere.", "ai21."}, "bedrock"},
-	{[]string{"gemini-"}, "gemini"},
-	{[]string{"gpt-", "o1", "o3", "chatgpt-"}, "openai"},
-	{[]string{"claude-"}, "anthropic"},
-	{[]string{"deepseek-"}, "deepseek"},
-	{[]string{"grok-"}, "xai"},
-	{[]string{"mistral-", "codestral", "pixtral"}, "mistral"},
-	{[]string{"sonar"}, "perplexity"},
-	{[]string{"command-"}, "cohere"},
-}
-
 // tryProviderModel checks if the model name matches a known provider prefix
 // and returns the model directly without listing.
-func tryProviderModel(cfg *config.Config) (docker.DockerModel, bool) {
-	lower := strings.ToLower(cfg.Model)
-	for _, entry := range prefixToProvider {
-		for _, prefix := range entry.prefixes {
-			if strings.HasPrefix(lower, prefix) {
-				if key, ok := cfg.ProviderKeys[entry.provider]; ok && key != "" {
-					dm := docker.DockerModel{
-						Name:     cfg.Model,
-						Tag:      cfg.Model,
-						Provider: entry.provider,
-					}
-					// Restore pricing.
-					switch entry.provider {
-					case "gemini":
-						p := docker.LookupGeminiPricing(cfg.Model)
-						dm.PromptPrice = p.PromptPrice
-						dm.CompletionPrice = p.CompletionPrice
-					case "openai":
-						p := docker.LookupOpenAIPricing(cfg.Model)
-						dm.PromptPrice = p.PromptPrice
-						dm.CompletionPrice = p.CompletionPrice
-					case "anthropic":
-						p := docker.LookupAnthropicPricing(cfg.Model)
-						dm.PromptPrice = p.PromptPrice
-						dm.CompletionPrice = p.CompletionPrice
-					case "bedrock":
-						p := docker.LookupBedrockPricing(cfg.Model)
-						dm.PromptPrice = p.PromptPrice
-						dm.CompletionPrice = p.CompletionPrice
-					default:
-						p := docker.LookupProviderPricing(entry.provider, cfg.Model)
-						dm.PromptPrice = p.PromptPrice
-						dm.CompletionPrice = p.CompletionPrice
-					}
-					return dm, true
-				}
-			}
-		}
+func tryProviderModel(cfg *config.Config) (llm.Model, bool) {
+	provider := llm.DetectProvider(cfg.Model)
+	if provider == "" {
+		return llm.Model{}, false
 	}
-	return docker.DockerModel{}, false
+	key, ok := cfg.ProviderKeys[provider]
+	if !ok || key == "" {
+		return llm.Model{}, false
+	}
+	p := llm.LookupPricing(provider, cfg.Model)
+	dm := llm.Model{
+		Name:            cfg.Model,
+		Tag:             cfg.Model,
+		Provider:        provider,
+		PromptPrice:     p.PromptPrice,
+		CompletionPrice: p.CompletionPrice,
+	}
+	return dm, true
 }
 
 // endpointForModel returns the appropriate endpoint for a model.
-func endpointForModel(cfg config.Config, model docker.DockerModel) docker.Endpoint {
+func endpointForModel(cfg config.Config, model llm.Model) llm.Endpoint {
 	if model.Provider != "" {
 		if key, ok := cfg.ProviderKeys[model.Provider]; ok {
-			return docker.ProviderEndpoint(model.Provider, key)
+			return llm.ProviderEndpoint(model.Provider, key)
 		}
 	}
-	return docker.LocalEndpoint(cfg.SocketPath)
+	return llm.LocalEndpoint(cfg.SocketPath)
 }
 
 // isProviderModel returns true if the model is a cloud provider model.
-func isProviderModel(model docker.DockerModel) bool {
+func isProviderModel(model llm.Model) bool {
 	return model.Provider != ""
 }
 
-func isRemoteSocket(socketPath string) bool {
-	if strings.HasPrefix(socketPath, "tcp://") {
-		return true
-	}
-	// Bare host:port like "localhost:11434"
-	_, _, err := net.SplitHostPort(socketPath)
-	return err == nil
-}

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
 // tavilySearch queries the Tavily API and returns structured results.
@@ -26,14 +25,13 @@ func tavilySearch(apiKey, query string) ([]SearchResult, error) {
 		return nil, fmt.Errorf("encoding request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := searchClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching Tavily results: %w", err)
 	}

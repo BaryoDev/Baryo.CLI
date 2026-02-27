@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
 import (
 	"bufio"
@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 )
 
 // newHTTPClient creates an HTTP client for the given endpoint.
@@ -47,6 +49,15 @@ func newHTTPClient(ep Endpoint) *http.Client {
 	}
 }
 
+// IsRemoteSocket returns true if the socket path is a TCP endpoint.
+func IsRemoteSocket(socketPath string) bool {
+	if strings.HasPrefix(socketPath, "tcp://") {
+		return true
+	}
+	_, _, err := net.SplitHostPort(socketPath)
+	return err == nil
+}
+
 // parseSocketAddr determines the network type and address from a socket path.
 func parseSocketAddr(socketPath string) (network, addr string) {
 	if strings.HasPrefix(socketPath, "tcp://") {
@@ -70,6 +81,8 @@ type streamResult struct {
 // The channel is closed when streaming ends. On completion the streamResult is
 // sent via the result channel so callers can inspect accumulated tool calls.
 func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
+	logger.Debug("streamChatRaw", "provider", ep.Provider, "model", model, "messages", len(messages), "tools", len(tools))
+
 	// Bedrock uses the AWS ConverseStream API — delegate to native adapter.
 	if ep.Provider == "bedrock" {
 		return streamChatBedrock(ctx, ep, model, messages, params, tools)

@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // Session represents a saved conversation.
@@ -22,7 +22,7 @@ type Session struct {
 	ID        string                 `json:"id"`
 	ModelName string                 `json:"model_name"`
 	ModelTag  string                 `json:"model_tag"`
-	Messages  []docker.ChatMessage   `json:"messages"`
+	Messages  []llm.ChatMessage   `json:"messages"`
 	CWD       string                 `json:"cwd"`
 	CreatedAt time.Time              `json:"created_at"`
 	UpdatedAt time.Time              `json:"updated_at"`

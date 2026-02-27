@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
 import (
 	"encoding/json"
@@ -33,13 +33,47 @@ var Providers = map[string]string{
 	"cohere":     "https://api.cohere.ai/compatibility/v1",
 }
 
+// prefixToProvider maps model name prefixes to provider names for quick detection.
+var prefixToProvider = []struct {
+	prefixes []string
+	provider string
+}{
+	{[]string{"anthropic.", "amazon.", "meta.", "mistral.", "cohere.", "ai21."}, "bedrock"},
+	{[]string{"gemini-"}, "gemini"},
+	{[]string{"gpt-", "o1", "o3", "chatgpt-"}, "openai"},
+	{[]string{"claude-"}, "anthropic"},
+	{[]string{"deepseek-"}, "deepseek"},
+	{[]string{"grok-"}, "xai"},
+	{[]string{"mistral-", "codestral", "pixtral"}, "mistral"},
+	{[]string{"sonar"}, "perplexity"},
+	{[]string{"command-"}, "cohere"},
+}
+
+// DetectProvider guesses the provider from a model tag string.
+func DetectProvider(modelTag string) string {
+	lower := strings.ToLower(modelTag)
+	for _, entry := range prefixToProvider {
+		for _, prefix := range entry.prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				return entry.provider
+			}
+		}
+	}
+	return ""
+}
+
 // ProviderEndpoint returns an Endpoint for the named provider.
 func ProviderEndpoint(provider, apiKey string) Endpoint {
-	return Endpoint{
+	ep := Endpoint{
 		BaseURL:  Providers[provider],
 		APIKey:   apiKey,
 		Provider: provider,
 	}
+	if provider == "bedrock" {
+		ep.Region = apiKey
+		ep.APIKey = ""
+	}
+	return ep
 }
 
 // LocalEndpoint wraps a socket path into an Endpoint.
@@ -67,7 +101,7 @@ type providerModelEntry struct {
 
 // ListProviderModels queries a remote provider's /models endpoint and returns
 // the available models, each tagged with the provider name.
-func ListProviderModels(provider, apiKey string) ([]DockerModel, error) {
+func ListProviderModels(provider, apiKey string) ([]Model, error) {
 	// Anthropic uses a hardcoded model list (no /models endpoint with pricing).
 	if provider == "anthropic" {
 		return listAnthropicModels(), nil
@@ -112,14 +146,14 @@ func ListProviderModels(provider, apiKey string) ([]DockerModel, error) {
 		return nil, fmt.Errorf("failed to parse model list: %w", err)
 	}
 
-	var models []DockerModel
+	var models []Model
 	for _, m := range result.Data {
 		id := normalizeModelID(provider, m.ID)
 		if !filterProviderModel(provider, id, m) {
 			continue
 		}
 		promptPrice, completionPrice := parseProviderPricing(provider, m, id)
-		dm := DockerModel{
+		dm := Model{
 			Name:            id,
 			Tag:             id,
 			Provider:        provider,
@@ -405,9 +439,21 @@ func lookupProviderPricing(provider, modelID string) ModelPricing {
 	return bestPricing
 }
 
-// LookupProviderPricing is the exported version for session restore.
-func LookupProviderPricing(provider, modelID string) ModelPricing {
-	return lookupProviderPricing(provider, modelID)
+// LookupPricing returns pricing for a model by dispatching to the correct
+// provider-specific table. This is the single entry point for all pricing lookups.
+func LookupPricing(provider, modelID string) ModelPricing {
+	switch provider {
+	case "gemini":
+		return LookupGeminiPricing(modelID)
+	case "openai":
+		return LookupOpenAIPricing(modelID)
+	case "anthropic":
+		return LookupAnthropicPricing(modelID)
+	case "bedrock":
+		return LookupBedrockPricing(modelID)
+	default:
+		return lookupProviderPricing(provider, modelID)
+	}
 }
 
 // anthropicModelDef describes a hardcoded Anthropic model for the picker.
@@ -417,17 +463,17 @@ type anthropicModelDef struct {
 }
 
 // listAnthropicModels returns the hardcoded list of Anthropic chat models.
-func listAnthropicModels() []DockerModel {
+func listAnthropicModels() []Model {
 	defs := []anthropicModelDef{
 		{"claude-opus-4-20250514", 200000},
 		{"claude-sonnet-4-20250514", 200000},
 		{"claude-3-5-haiku-20241022", 200000},
 		{"claude-3-5-sonnet-20241022", 200000},
 	}
-	models := make([]DockerModel, len(defs))
+	models := make([]Model, len(defs))
 	for i, d := range defs {
 		p := LookupAnthropicPricing(d.ID)
-		models[i] = DockerModel{
+		models[i] = Model{
 			Name:            d.ID,
 			Tag:             d.ID,
 			Provider:        "anthropic",

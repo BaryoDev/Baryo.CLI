@@ -25,7 +25,8 @@ import (
 
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
@@ -33,15 +34,15 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	endpoint         docker.Endpoint   // where to send inference requests
+	endpoint         llm.Endpoint   // where to send inference requests
 	localSocketPath  string            // kept for /models and /doctor (always local)
 	systemPrompt     string            // active system prompt
 	memoriesPrompt   string            // formatted <memories> block (injected prominently)
-	params           docker.ChatParams // model parameters
+	params           llm.ChatParams // model parameters
 	providerKeys     map[string]string // API keys for cloud providers (for model switching via /models)
 	modelName    string            // display name (e.g. "ai/mistral")
-	modelTag     string            // full tag for API calls (e.g. "docker.io/ai/mistral:latest")
-	messages     []docker.ChatMessage
+	modelTag     string            // full tag for API calls (e.g. "llm.io/ai/mistral:latest")
+	messages     []llm.ChatMessage
 	history      []chatEntry // rendered conversation history
 	streaming    string      // current streaming text accumulator
 	turnContent  string      // accumulates all assistant text for one turn (across tool rounds)
@@ -58,7 +59,7 @@ type ChatModel struct {
 	height      int
 	spinFrame   int // current spinner animation frame
 
-	eventCh      <-chan docker.StreamEvent
+	eventCh      <-chan llm.StreamEvent
 	cancelFunc   context.CancelFunc
 	toolStatus   string    // shown in status bar during tool execution
 	initPending  bool      // when true, write streaming result to BARYO.md on completion
@@ -83,7 +84,7 @@ type ChatModel struct {
 	researchCompactAt  int       // index in m.messages for post-report compaction
 
 	// Model hints
-	modelHints    docker.ModelHints // detected model family parameters
+	modelHints    llm.ModelHints // detected model family parameters
 	supportsTools bool              // false after a model reports tool use unsupported
 
 	// Skills (lazy loading with auto-activation)
@@ -118,8 +119,8 @@ type ChatModel struct {
 // MCPManager is the interface for MCP server management.
 // Defined as an interface to avoid import cycles between tui and mcp packages.
 type MCPManager interface {
-	ToolDefinitions() []docker.ToolDefinition
-	CompactToolDefinitions(nativeNames []string, contextWindow int) []docker.ToolDefinition
+	ToolDefinitions() []llm.ToolDefinition
+	CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition
 	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
 	IsMCPTool(name string) bool
 	ServerNames() []string
@@ -127,17 +128,42 @@ type MCPManager interface {
 	Close()
 }
 
+// entryRole is the role of a chat history entry.
+type entryRole string
+
+const (
+	roleUser      entryRole = "user"
+	roleAssistant entryRole = "assistant"
+	roleTool      entryRole = "tool"
+	roleError     entryRole = "error"
+	roleInfo      entryRole = "info"
+)
+
 // chatEntry is a rendered message in the history.
 type chatEntry struct {
-	role    string
+	role    entryRole
 	content string
 }
 
+// resetStreamState clears all fields associated with an active stream.
+func (m *ChatModel) resetStreamState() {
+	m.streaming = ""
+	m.turnContent = ""
+	m.isStream = false
+	m.toolStatus = ""
+	if m.cancelFunc != nil {
+		m.cancelFunc()
+		m.cancelFunc = nil
+	}
+	m.eventCh = nil
+}
+
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, model llm.Model, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(model.Name, model.Tag)
 	ep := endpointForModel(socketPath, model, providerKeys)
+	hints := llm.DetectModelHints(model.Tag)
 	return ChatModel{
 		endpoint:         ep,
 		localSocketPath:  socketPath,
@@ -151,12 +177,12 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 		markdown:         true,
 		historyIdx:       -1,
 		session:          sess,
-		contextLimit:     contextWindowFor(docker.DetectModelHints(model.Tag)),
+		contextLimit:     contextWindowFor(hints),
 		searchProvider:   searchProvider,
 		searchAPIKey:     searchAPIKey,
 		skillIndex:       config.SkillIndex(),
 		activeSkills:     make(map[string]bool),
-		modelHints:       docker.DetectModelHints(model.Tag),
+		modelHints:       hints,
 		supportsTools:   true,
 		permissionMode:   permissionMode,
 		confirmCh:        make(chan confirmRequest, 1),
@@ -167,7 +193,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -175,34 +201,19 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		if m.Content != nil {
 			c = *m.Content
 		}
-		history[i] = chatEntry{role: m.Role, content: c}
+		history[i] = chatEntry{role: entryRole(m.Role), content: c}
 	}
-	msgs := append([]docker.ChatMessage{}, sess.Messages...)
+	msgs := append([]llm.ChatMessage{}, sess.Messages...)
 	// Detect provider from model tag for session restore.
-	model := docker.DockerModel{Name: sess.ModelName, Tag: sess.ModelTag}
-	model.Provider = detectProviderFromTag(sess.ModelTag)
-	// Restore pricing for known providers.
-	switch model.Provider {
-	case "gemini":
-		p := docker.LookupGeminiPricing(model.Tag)
+	model := llm.Model{Name: sess.ModelName, Tag: sess.ModelTag}
+	model.Provider = llm.DetectProvider(sess.ModelTag)
+	if model.Provider != "" {
+		p := llm.LookupPricing(model.Provider, model.Tag)
 		model.PromptPrice = p.PromptPrice
 		model.CompletionPrice = p.CompletionPrice
-	case "openai":
-		p := docker.LookupOpenAIPricing(model.Tag)
-		model.PromptPrice = p.PromptPrice
-		model.CompletionPrice = p.CompletionPrice
-	case "anthropic":
-		p := docker.LookupAnthropicPricing(model.Tag)
-		model.PromptPrice = p.PromptPrice
-		model.CompletionPrice = p.CompletionPrice
-	default:
-		if model.Provider != "" {
-			p := docker.LookupProviderPricing(model.Provider, model.Tag)
-			model.PromptPrice = p.PromptPrice
-			model.CompletionPrice = p.CompletionPrice
-		}
 	}
 	ep := endpointForModel(socketPath, model, providerKeys)
+	hints := llm.DetectModelHints(sess.ModelTag)
 	cm := ChatModel{
 		endpoint:         ep,
 		localSocketPath:  socketPath,
@@ -218,12 +229,12 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		markdown:         true,
 		historyIdx:       -1,
 		session:          sess,
-		contextLimit:     contextWindowFor(docker.DetectModelHints(model.Tag)),
+		contextLimit:     contextWindowFor(hints),
 		searchProvider:   searchProvider,
 		searchAPIKey:     searchAPIKey,
 		skillIndex:       config.SkillIndex(),
 		activeSkills:     make(map[string]bool),
-		modelHints:       docker.DetectModelHints(sess.ModelTag),
+		modelHints:       hints,
 		supportsTools:   true,
 		permissionMode:   permissionMode,
 		confirmCh:        make(chan confirmRequest, 1),
@@ -236,41 +247,15 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 }
 
 // endpointForModel returns the appropriate endpoint based on a model's provider.
-func endpointForModel(socketPath string, model docker.DockerModel, keys map[string]string) docker.Endpoint {
+func endpointForModel(socketPath string, model llm.Model, keys map[string]string) llm.Endpoint {
 	if model.Provider != "" {
 		if key, ok := keys[model.Provider]; ok {
-			return docker.ProviderEndpoint(model.Provider, key)
+			return llm.ProviderEndpoint(model.Provider, key)
 		}
 	}
-	return docker.LocalEndpoint(socketPath)
+	return llm.LocalEndpoint(socketPath)
 }
 
-// detectProviderFromTag guesses the provider from a model tag string.
-func detectProviderFromTag(tag string) string {
-	lower := strings.ToLower(tag)
-	switch {
-	case strings.HasPrefix(lower, "gemini-"):
-		return "gemini"
-	case strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1") ||
-		strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "chatgpt-"):
-		return "openai"
-	case strings.HasPrefix(lower, "claude-"):
-		return "anthropic"
-	case strings.HasPrefix(lower, "deepseek-"):
-		return "deepseek"
-	case strings.HasPrefix(lower, "grok-"):
-		return "xai"
-	case strings.HasPrefix(lower, "mistral-") || strings.HasPrefix(lower, "codestral") || strings.HasPrefix(lower, "pixtral"):
-		return "mistral"
-	case strings.HasPrefix(lower, "sonar"):
-		return "perplexity"
-	case strings.HasPrefix(lower, "command-"):
-		return "cohere"
-	}
-	// OpenRouter models typically contain a slash like "meta-llama/llama-3..."
-	// but we can't reliably detect them from tag alone.
-	return ""
-}
 
 // spinnerFrames are the animation frames for the inline spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -508,7 +493,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.pendingConfirm <- true
 				m.pendingConfirm = nil
 				m.history = append(m.history, chatEntry{
-					role:    "tool",
+					role:    roleTool,
 					content: "Approved",
 				})
 				m.updateViewport()
@@ -519,7 +504,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.pendingConfirm <- false
 				m.pendingConfirm = nil
 				m.history = append(m.history, chatEntry{
-					role:    "tool",
+					role:    roleTool,
 					content: "Denied",
 				})
 				m.updateViewport()
@@ -604,7 +589,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				query := m.extractSearchTopic()
 				if query != "" {
 					m.history = append(m.history, chatEntry{
-						role:    "user",
+						role:    roleUser,
 						content: text,
 					})
 					return m.handleSearch(query)
@@ -614,7 +599,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Natural language research: "research X", "deep dive into X", etc.
 			if topic := isResearchIntent(text); topic != "" {
 				m.history = append(m.history, chatEntry{
-					role:    "user",
+					role:    roleUser,
 					content: text,
 				})
 				return m.handleResearch(topic)
@@ -625,7 +610,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				fact := m.extractRememberFact()
 				if fact != "" {
 					m.history = append(m.history, chatEntry{
-						role:    "user",
+						role:    roleUser,
 						content: text,
 					})
 					return m.handleRemember(fact)
@@ -636,15 +621,15 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			_, fileContexts, mentionErrors := m.processAtMentions(text)
 			for _, fc := range fileContexts {
 				contextMsg := fmt.Sprintf("[File: %s]\n\n%s", fc.path, fc.content)
-				m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+				m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
 				m.history = append(m.history, chatEntry{
-					role:    "tool",
+					role:    roleTool,
 					content: fmt.Sprintf("Attached: %s (%d lines)", fc.path, fc.lines),
 				})
 			}
 			for _, errMsg := range mentionErrors {
 				m.history = append(m.history, chatEntry{
-					role:    "error",
+					role:    roleError,
 					content: errMsg,
 				})
 			}
@@ -653,9 +638,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.autoActivateSkill(text)
 
 			// Add user message
-			m.messages = append(m.messages, docker.NewChatMessage("user", text))
+			m.messages = append(m.messages, llm.NewChatMessage("user", text))
 			m.history = append(m.history, chatEntry{
-				role:    "user",
+				role:    roleUser,
 				content: text,
 			})
 
@@ -697,12 +682,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Replace the last user message in m.messages with the rewritten version
 			for i := len(m.messages) - 1; i >= 0; i-- {
 				if m.messages[i].Role == "user" {
-					m.messages[i] = docker.NewChatMessage("user", rewritten)
+					m.messages[i] = llm.NewChatMessage("user", rewritten)
 					break
 				}
 			}
 			m.history = append(m.history, chatEntry{
-				role:    "tool",
+				role:    roleTool,
 				content: fmt.Sprintf("Rewrite: %s", rewritten),
 			})
 		}
@@ -727,25 +712,20 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					summary = m.turnContent
 				}
 				m.compactPending = false
-				m.streaming = ""
-				m.turnContent = ""
-				m.isStream = false
-				m.cancelFunc = nil
-				m.eventCh = nil
-				m.toolStatus = ""
+				m.resetStreamState()
 
 				if summary != "" {
 					m.messages = append(
-						[]docker.ChatMessage{
-							docker.NewChatMessage("user", "[Conversation summary]\n\n"+summary),
-							docker.NewChatMessage("assistant", "Understood, I have the context from our earlier conversation."),
+						[]llm.ChatMessage{
+							llm.NewChatMessage("user", "[Conversation summary]\n\n"+summary),
+							llm.NewChatMessage("assistant", "Understood, I have the context from our earlier conversation."),
 						},
 						m.messages[m.compactKeep:]...,
 					)
 				}
 				m.contextTokens = estimateTokens(m.buildMessages())
 				m.history = append(m.history, chatEntry{
-					role:    "assistant",
+					role:    roleAssistant,
 					content: fmt.Sprintf("Context compacted. ~%s / %s tokens", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit)),
 				})
 				m.saveSession()
@@ -758,7 +738,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				cleaned, _ := stripThinkBlock(m.streaming)
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
-						role:    "assistant",
+						role:    roleAssistant,
 						content: cleaned,
 					})
 				}
@@ -773,7 +753,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if cleaned != m.turnContent {
 					m.turnContent = cleaned
 					// Update the last history entry to show the cleaned text.
-					if len(m.history) > 0 && m.history[len(m.history)-1].role == "assistant" {
+					if len(m.history) > 0 && m.history[len(m.history)-1].role == roleAssistant {
 						m.history[len(m.history)-1].content = cleaned
 					}
 				}
@@ -781,7 +761,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			// Commit the full turn as one assistant message (avoids consecutive assistant roles).
 			if m.turnContent != "" {
-				m.messages = append(m.messages, docker.NewChatMessage("assistant", m.turnContent))
+				m.messages = append(m.messages, llm.NewChatMessage("assistant", m.turnContent))
 			}
 
 			// Write BARYO.md if /init was pending
@@ -789,12 +769,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.initPending = false
 				if err := os.WriteFile("BARYO.md", []byte(m.turnContent), 0644); err != nil {
 					m.history = append(m.history, chatEntry{
-						role:    "error",
+						role:    roleError,
 						content: fmt.Sprintf("Failed to write BARYO.md: %v", err),
 					})
 				} else {
 					m.history = append(m.history, chatEntry{
-						role:    "assistant",
+						role:    roleAssistant,
 						content: "Saved to BARYO.md",
 					})
 				}
@@ -817,12 +797,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				out, err := cmd.CombinedOutput()
 				if err != nil {
 					m.history = append(m.history, chatEntry{
-						role:    "error",
+						role:    roleError,
 						content: fmt.Sprintf("Commit failed: %v\n%s", err, string(out)),
 					})
 				} else {
 					m.history = append(m.history, chatEntry{
-						role:    "assistant",
+						role:    roleAssistant,
 						content: fmt.Sprintf("Committed: %s", commitMsg),
 					})
 				}
@@ -838,7 +818,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					if len(content) > 500 {
 						content = content[:500] + "\n... (full content summarized by assistant above)"
 					}
-					m.messages[idx] = docker.NewChatMessage("user", content)
+					m.messages[idx] = llm.NewChatMessage("user", content)
 				}
 				// Remove the summarize instruction (idx+1) — it was a one-shot prompt
 				promptIdx := idx + 1
@@ -856,7 +836,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					if len(content) > 500 {
 						content = content[:500] + "\n... (full research context summarized by assistant above)"
 					}
-					m.messages[idx] = docker.NewChatMessage("user", content)
+					m.messages[idx] = llm.NewChatMessage("user", content)
 				}
 				promptIdx := idx + 1
 				if promptIdx < len(m.messages) && m.messages[promptIdx].Role == "user" {
@@ -879,12 +859,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					query := m.extractSearchTopic()
 					if query != "" {
 						m.searchFallbackUsed = true
-						m.streaming = ""
-						m.turnContent = ""
-						m.isStream = false
-						m.cancelFunc = nil
-						m.eventCh = nil
-						m.toolStatus = ""
+						m.resetStreamState()
 						return m.handleSearch(query)
 					}
 				}
@@ -896,12 +871,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					query := m.extractSearchTopic()
 					if query != "" {
 						m.searchFallbackUsed = true
-						m.streaming = ""
-						m.turnContent = ""
-						m.isStream = false
-						m.cancelFunc = nil
-						m.eventCh = nil
-						m.toolStatus = ""
+						m.resetStreamState()
 						return m.handleResearch(query)
 					}
 				}
@@ -914,12 +884,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					query := m.extractSearchTopic()
 					if query != "" {
 						m.searchFallbackUsed = true
-						m.streaming = ""
-						m.turnContent = ""
-						m.isStream = false
-						m.cancelFunc = nil
-						m.eventCh = nil
-						m.toolStatus = ""
+						m.resetStreamState()
 						return m.handleSearch(query)
 					}
 				}
@@ -933,12 +898,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					float64(evt.Usage.CompletionTokens)*m.completionPrice
 			}
 
-			m.streaming = ""
-			m.turnContent = ""
-			m.isStream = false
-			m.cancelFunc = nil
-			m.eventCh = nil
-			m.toolStatus = ""
+			m.resetStreamState()
 			m.contextTokens = estimateTokens(m.buildMessages())
 			m.saveSession()
 			m.updateViewport()
@@ -954,7 +914,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if evt.ToolsDisabled {
 			m.supportsTools = false
 			m.history = append(m.history, chatEntry{
-				role:    "info",
+				role:    roleInfo,
 				content: "tools not supported by this model — responding without tools",
 			})
 			m.updateViewport()
@@ -967,23 +927,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				cleaned, _ := stripThinkBlock(m.streaming)
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
-						role:    "assistant",
+						role:    roleAssistant,
 						content: cleaned,
 					})
 				}
 			}
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: evt.Error,
 			})
-			m.streaming = ""
-			m.isStream = false
-			if m.cancelFunc != nil {
-				m.cancelFunc()
-			}
-			m.cancelFunc = nil
-			m.eventCh = nil
-			m.toolStatus = ""
+			m.resetStreamState()
 			// Remove the user message from conversation so it can be retried
 			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "user" {
 				m.messages = m.messages[:len(m.messages)-1]
@@ -1004,7 +957,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				cleaned, _ := stripThinkBlock(m.streaming)
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
-						role:    "assistant",
+						role:    roleAssistant,
 						content: cleaned,
 					})
 					m.turnContent += cleaned
@@ -1014,7 +967,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			m.toolStatus = fmt.Sprintf("Running %s...", evt.ToolStart.Name)
 			m.history = append(m.history, chatEntry{
-				role:    "tool",
+				role:    roleTool,
 				content: fmt.Sprintf("Tool: %s(%s)", evt.ToolStart.Name, summarizeToolArgs(evt.ToolStart.Args)),
 			})
 			m.updateViewport()
@@ -1025,7 +978,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			status := summarizeToolResult(evt.ToolResult.Content, evt.ToolResult.IsError)
 			m.toolStatus = ""
 			m.history = append(m.history, chatEntry{
-				role:    "tool",
+				role:    roleTool,
 				content: fmt.Sprintf("Result: %s", status),
 			})
 			m.updateViewport()
@@ -1042,7 +995,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case SearchResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: fmt.Sprintf("Search error: %v", msg.Err),
 			})
 			m.updateViewport()
@@ -1051,7 +1004,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		// Inject raw search content as context (not shown to user)
 		contextMsg := fmt.Sprintf("[Web search results for %q]\n\n%s", msg.Query, msg.Results)
 		m.searchCompactAt = len(m.messages) // remember where to compact later
-		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+		m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
 
 		// Instruct model to summarize the results.
 		// Inject memories directly into the summarize prompt so the model
@@ -1060,10 +1013,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if m.memoriesPrompt != "" {
 			summarizePrompt = m.memoriesPrompt + "\n\n" + summarizePrompt
 		}
-		m.messages = append(m.messages, docker.NewChatMessage("user", summarizePrompt))
+		m.messages = append(m.messages, llm.NewChatMessage("user", summarizePrompt))
 
 		m.history = append(m.history, chatEntry{
-			role:    "tool",
+			role:    roleTool,
 			content: fmt.Sprintf("Search: %s — summarizing results...", msg.Query),
 		})
 
@@ -1077,7 +1030,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancelFunc = cancel
-		m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+		m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -1085,21 +1038,21 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case FetchResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: fmt.Sprintf("Fetch error: %v", msg.Err),
 			})
 			m.updateViewport()
 			return m, nil
 		}
 		// Inject into model context as a user message
-		m.messages = append(m.messages, docker.NewChatMessage("user", msg.Content))
+		m.messages = append(m.messages, llm.NewChatMessage("user", msg.Content))
 		// Display results with tool styling
 		preview := msg.Content
 		if len(preview) > 2000 {
 			preview = preview[:2000] + "\n... (truncated in display)"
 		}
 		m.history = append(m.history, chatEntry{
-			role:    "tool",
+			role:    roleTool,
 			content: preview,
 		})
 		m.contextTokens = estimateTokens(m.buildMessages())
@@ -1110,7 +1063,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case ResearchProgressMsg:
 		m.toolStatus = msg.Status
 		m.history = append(m.history, chatEntry{
-			role:    "tool",
+			role:    roleTool,
 			content: msg.Status,
 		})
 		m.updateViewport()
@@ -1118,13 +1071,13 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 	case ResearchDoneMsg:
 		result := msg.Result
-		if result.Err != nil {
+		if msg.Err != nil {
 			m.researchPending = false
 			m.isStream = false
 			m.toolStatus = ""
 			m.history = append(m.history, chatEntry{
-				role:    "error",
-				content: fmt.Sprintf("Research error: %v", result.Err),
+				role:    roleError,
+				content: fmt.Sprintf("Research error: %v", msg.Err),
 			})
 			m.updateViewport()
 			return m, nil
@@ -1151,7 +1104,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		// Inject accumulated research context (findings live here, not in report prompt)
 		contextMsg := fmt.Sprintf("[Deep research on %q — %d rounds]\n\n%s", result.Topic, result.Rounds, findings)
 		m.researchCompactAt = len(m.messages)
-		m.messages = append(m.messages, docker.NewChatMessage("user", contextMsg))
+		m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
 
 		// Build the report prompt (references findings above, does not duplicate them)
 		memoriesBlock := ""
@@ -1164,10 +1117,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			sourceList.String(),
 			memoriesBlock,
 		)
-		m.messages = append(m.messages, docker.NewChatMessage("user", reportPrompt))
+		m.messages = append(m.messages, llm.NewChatMessage("user", reportPrompt))
 
 		m.history = append(m.history, chatEntry{
-			role:    "tool",
+			role:    roleTool,
 			content: fmt.Sprintf("Research complete — %d rounds, %d sources. Compiling report...", result.Rounds, len(result.Sources)),
 		})
 
@@ -1180,7 +1133,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancelFunc = cancel
-		m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+		m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -1188,17 +1141,17 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case DiffResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: fmt.Sprintf("Diff error: %v", msg.Err),
 			})
 		} else if msg.Output == "" {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "No changes detected.",
 			})
 		} else {
 			m.history = append(m.history, chatEntry{
-				role:    "tool",
+				role:    roleTool,
 				content: msg.Output,
 			})
 		}
@@ -1208,7 +1161,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case RunResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: fmt.Sprintf("Command failed: %v\n%s", msg.Err, msg.Output),
 			})
 		} else {
@@ -1217,7 +1170,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				output = "(no output)"
 			}
 			m.history = append(m.history, chatEntry{
-				role:    "tool",
+				role:    roleTool,
 				content: fmt.Sprintf("$ %s\n%s", msg.Command, output),
 			})
 		}
@@ -1227,12 +1180,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case CommitResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "error",
+				role:    roleError,
 				content: fmt.Sprintf("Commit failed: %v", msg.Err),
 			})
 		} else {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: msg.Message,
 			})
 		}
@@ -1263,6 +1216,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 }
 
 func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
+	logger.Debug("command dispatch", "command", text)
 	trimmed := strings.TrimSpace(text)
 
 	switch trimmed {
@@ -1283,7 +1237,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.planMode = false
 		m.contextTokens = estimateTokens(m.buildMessages())
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Session cleared. Starting fresh.",
 		})
 		m.updateViewport()
@@ -1302,12 +1256,12 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		socketPath := m.localSocketPath
 		keys := m.providerKeys
 		return m, func() tea.Msg {
-			var downloaded []docker.DockerModel
+			var downloaded []llm.Model
 			var dlErr error
-			if isRemoteSocket(socketPath) {
-				downloaded, dlErr = docker.ListRemoteModels(socketPath)
+			if llm.IsRemoteSocket(socketPath) {
+				downloaded, dlErr = llm.ListRemoteModels(socketPath)
 			} else {
-				downloaded, dlErr = docker.ListModels()
+				downloaded, dlErr = llm.ListModels()
 			}
 			if dlErr != nil {
 				return ShowModelsMsg{Err: dlErr}
@@ -1318,15 +1272,15 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 				if key == "" {
 					continue
 				}
-				if pm, e := docker.ListProviderModels(provider, key); e == nil {
+				if pm, e := llm.ListProviderModels(provider, key); e == nil {
 					downloaded = append(downloaded, pm...)
 				}
 			}
 
-			if isRemoteSocket(socketPath) {
+			if llm.IsRemoteSocket(socketPath) {
 				return ShowModelsMsg{Downloaded: downloaded}
 			}
-			available, srErr := docker.SearchModels()
+			available, srErr := llm.SearchModels()
 			if srErr != nil {
 				return ShowModelsMsg{Downloaded: downloaded}
 			}
@@ -1353,7 +1307,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			b.WriteString("\nAll checks passed.")
 		}
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: b.String(),
 		})
 		m.updateViewport()
@@ -1366,7 +1320,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			msg = "Markdown rendering disabled."
 		}
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: msg,
 		})
 		m.updateViewport()
@@ -1402,12 +1356,12 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 	case "/cost":
 		if m.promptPrice == 0 {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "Cost tracking is not available for local models.",
 			})
 		} else {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: fmt.Sprintf("Session cost: $%.4f", m.sessionCost),
 			})
 		}
@@ -1420,24 +1374,24 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 	case "/copy":
 		var lastAssistant string
 		for i := len(m.history) - 1; i >= 0; i-- {
-			if m.history[i].role == "assistant" {
+			if m.history[i].role == roleAssistant {
 				lastAssistant = m.history[i].content
 				break
 			}
 		}
 		if lastAssistant == "" {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "Nothing to copy.",
 			})
 		} else if err := clipboard.WriteAll(lastAssistant); err != nil {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: fmt.Sprintf("Clipboard error: %v", err),
 			})
 		} else {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "Copied to clipboard.",
 			})
 		}
@@ -1450,7 +1404,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			prompt = "(none)"
 		}
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("System prompt:\n%s\n\nTo change: /system <new prompt>", prompt),
 		})
 		m.updateViewport()
@@ -1458,7 +1412,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 	case "/params":
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: m.formatParams(),
 		})
 		m.updateViewport()
@@ -1468,7 +1422,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		if strings.HasPrefix(text, "/system ") {
 			m.systemPrompt = strings.TrimPrefix(text, "/system ")
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "System prompt updated.",
 			})
 			m.updateViewport()
@@ -1482,12 +1436,12 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		if strings.HasPrefix(text, "/params ") {
 			if err := m.parseParams(strings.TrimPrefix(text, "/params ")); err != nil {
 				m.history = append(m.history, chatEntry{
-					role:    "assistant",
+					role:    roleAssistant,
 					content: fmt.Sprintf("Error: %v", err),
 				})
 			} else {
 				m.history = append(m.history, chatEntry{
-					role:    "assistant",
+					role:    roleAssistant,
 					content: "Parameters updated.\n" + m.formatParams(),
 				})
 			}
@@ -1550,12 +1504,12 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		if trimmed == "/plan" {
 			if m.planMode {
 				m.history = append(m.history, chatEntry{
-					role:    "assistant",
+					role:    roleAssistant,
 					content: "Already in plan mode. Type your questions or /plan done to exit.",
 				})
 			} else {
 				m.history = append(m.history, chatEntry{
-					role:    "assistant",
+					role:    roleAssistant,
 					content: "Usage: /plan <prompt> to enter plan mode, /plan done to exit.",
 				})
 			}
@@ -1568,7 +1522,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		}
 
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", text),
 		})
 		m.updateViewport()
@@ -1621,7 +1575,7 @@ var planModePrompt string
 // Uses the chars/4 heuristic plus per-message overhead.
 // contextWindowFor returns the context window size from model hints,
 // defaulting to 8192 if not specified.
-func contextWindowFor(hints docker.ModelHints) int {
+func contextWindowFor(hints llm.ModelHints) int {
 	if hints.ContextWindow > 0 {
 		return hints.ContextWindow
 	}
@@ -1639,7 +1593,7 @@ func (m *ChatModel) mcpContextWindow() int {
 	return m.contextLimit
 }
 
-func estimateTokens(messages []docker.ChatMessage) int {
+func estimateTokens(messages []llm.ChatMessage) int {
 	total := 0
 	for _, m := range messages {
 		if m.Content != nil {
@@ -1652,15 +1606,15 @@ func estimateTokens(messages []docker.ChatMessage) int {
 }
 
 // buildMessages prepends the system prompt to the conversation messages.
-func (m *ChatModel) buildMessages() []docker.ChatMessage {
+func (m *ChatModel) buildMessages() []llm.ChatMessage {
 	return m.buildMessagesWithToolGating(false)
 }
 
 // buildMessagesWithToolGating prepends the system prompt to the conversation
 // messages. When hasTools is true, the tool-call example is injected; when false,
 // a notice telling the model not to use tools is appended instead.
-func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMessage {
-	msgs := make([]docker.ChatMessage, 0, len(m.messages)+3)
+func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage {
+	msgs := make([]llm.ChatMessage, 0, len(m.messages)+3)
 
 	// Build system prompt with memories injected prominently right after rules.
 	// Order: tools.md (rules) → memories → skills.md → tool gating → user context
@@ -1700,7 +1654,7 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMess
 	if m.systemPrompt != "" {
 		sysPrompt += "\n\n" + m.systemPrompt
 	}
-	msgs = append(msgs, docker.NewChatMessage("system", sysPrompt))
+	msgs = append(msgs, llm.NewChatMessage("system", sysPrompt))
 
 	// Long conversation reminder: inject before last user message to counteract
 	// "lost in the middle" effect in small models.
@@ -1715,7 +1669,7 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMess
 		}
 		if lastUserIdx > 0 {
 			msgs = append(msgs, m.messages[:lastUserIdx]...)
-			msgs = append(msgs, docker.NewChatMessage("system", longConversationReminder))
+			msgs = append(msgs, llm.NewChatMessage("system", longConversationReminder))
 			msgs = append(msgs, m.messages[lastUserIdx:]...)
 			return msgs
 		}
@@ -1750,7 +1704,7 @@ func (m *ChatModel) buildMCPGuidance() string {
 
 // applyModelHints builds ChatParams with model-family-specific defaults applied.
 // User-set values always take priority over hints.
-func (m *ChatModel) applyModelHints(hasTools, hasSkill bool) docker.ChatParams {
+func (m *ChatModel) applyModelHints(hasTools, hasSkill bool) llm.ChatParams {
 	p := m.params
 
 	// If user hasn't set temperature, apply contextual defaults.
@@ -1810,6 +1764,7 @@ func (m *ChatModel) formatParams() string {
 // startToolStream sets up streaming state and starts StreamChatWithTools.
 // Used by both the enter handler (direct path) and RewriteDoneMsg handler.
 func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatModel, tea.Cmd) {
+	logger.Debug("stream start", "model", m.modelTag, "tools", hasTools, "skill", hasSkill)
 	// If the model reported tool use as unsupported, skip tools for the rest
 	// of the session to avoid repeated 400 errors.
 	if !m.supportsTools {
@@ -1825,8 +1780,8 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	var toolDefs []docker.ToolDefinition
-	var executor docker.ToolExecutor
+	var toolDefs []llm.ToolDefinition
+	var executor llm.ToolExecutor
 
 	if m.planMode {
 		// Plan mode: read-only tools only, no confirm prompts
@@ -1846,7 +1801,7 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	}
 
 	chatParams := m.applyModelHints(hasTools || m.planMode, hasSkill)
-	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools || m.planMode), chatParams, toolDefs, executor)
+	m.eventCh = llm.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools || m.planMode), chatParams, toolDefs, executor)
 
 	m.updateViewport()
 	cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
@@ -2010,7 +1965,7 @@ func (m ChatModel) handleInit() (ChatModel, tea.Cmd) {
 	// Check if BARYO.md already exists
 	if _, err := os.Stat("BARYO.md"); err == nil {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "BARYO.md already exists. Edit it directly or delete it and run /init again.",
 		})
 		m.updateViewport()
@@ -2038,9 +1993,9 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 </project-context>`, projectContext)
 
 	// Inject as a user message and start streaming
-	m.messages = append(m.messages, docker.NewChatMessage("user", prompt))
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
 	m.history = append(m.history, chatEntry{
-		role:    "user",
+		role:    roleUser,
 		content: "/init",
 	})
 
@@ -2055,7 +2010,7 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 
 	toolDefs := tools.DockerDefinitions()
 	executor := m.makeExecutor()
-	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
+	m.eventCh = llm.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
 	m.updateViewport()
 	initCmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
@@ -2175,12 +2130,12 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 
 	if err != nil {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Export failed: %v", err),
 		})
 	} else {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Exported to %s", filename),
 		})
 	}
@@ -2192,7 +2147,7 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /search <query>",
 		})
 		m.updateViewport()
@@ -2200,7 +2155,7 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: fmt.Sprintf("Searching and reading pages: %s...", query),
 	})
 	m.updateViewport()
@@ -2218,7 +2173,7 @@ func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
 	args = strings.TrimSpace(args)
 	if args == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /research [quick|deep] <topic>",
 		})
 		m.updateViewport()
@@ -2235,7 +2190,7 @@ func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: fmt.Sprintf("Starting %s research: %s", depthLabel, topic),
 	})
 	m.researchPending = true
@@ -2260,7 +2215,11 @@ func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
 		contextBudget = 4000
 	}
 
-	doneCh := make(chan search.ResearchResult, 1)
+	type researchOutcome struct {
+		result search.ResearchResult
+		err    error
+	}
+	doneCh := make(chan researchOutcome, 1)
 
 	// Use a cancellable context (no global timeout — web calls have their own
 	// HTTP timeouts, and model inference runs as long as needed).
@@ -2277,12 +2236,12 @@ func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
 			ContextBudget: contextBudget,
 			Progress:      progressCh,
 			ModelCall: func(callCtx context.Context, prompt string) (string, error) {
-				msgs := []docker.ChatMessage{
-					docker.NewChatMessage("user", prompt),
+				msgs := []llm.ChatMessage{
+					llm.NewChatMessage("user", prompt),
 				}
 				lowTemp := 0.3
-				params := docker.ChatParams{Temperature: &lowTemp}
-				ch := docker.StreamChat(callCtx, ep, modelTag, msgs, params)
+				params := llm.ChatParams{Temperature: &lowTemp}
+				ch := llm.StreamChat(callCtx, ep, modelTag, msgs, params)
 
 				var result strings.Builder
 				for evt := range ch {
@@ -2300,14 +2259,14 @@ func (m ChatModel) handleResearch(args string) (ChatModel, tea.Cmd) {
 			},
 		}
 
-		result := search.RunResearch(pipelineCtx, cfg)
+		result, err := search.RunResearch(pipelineCtx, cfg)
 		close(progressCh)
-		doneCh <- result
+		doneCh <- researchOutcome{result: result, err: err}
 	}()
 
 	waitDone := func() tea.Msg {
-		result := <-doneCh
-		return ResearchDoneMsg{Result: result}
+		out := <-doneCh
+		return ResearchDoneMsg{Result: out.result, Err: out.err}
 	}
 
 	return m, tea.Batch(waitForResearchProgress(m.researchProgressCh), waitDone, doSpinTick())
@@ -2359,7 +2318,7 @@ func (m *ChatModel) isSearchAgreement(text string) bool {
 
 	// Check if last assistant message suggested searching
 	for i := len(m.history) - 1; i >= 0; i-- {
-		if m.history[i].role == "assistant" {
+		if m.history[i].role == roleAssistant {
 			content := strings.ToLower(m.history[i].content)
 			return strings.Contains(content, "search for") ||
 				strings.Contains(content, "search the") ||
@@ -2378,11 +2337,11 @@ func (m *ChatModel) extractSearchTopic() string {
 	foundAssistant := false
 	for i := len(m.history) - 1; i >= 0; i-- {
 		entry := m.history[i]
-		if entry.role == "assistant" {
+		if entry.role == roleAssistant {
 			foundAssistant = true
 			continue
 		}
-		if foundAssistant && entry.role == "user" {
+		if foundAssistant && entry.role == roleUser {
 			q := strings.TrimSpace(entry.content)
 			// Skip very short or command-like inputs
 			if len(q) > 2 && !strings.HasPrefix(q, "/") {
@@ -2440,8 +2399,7 @@ func isResearchIntent(text string) string {
 	}
 
 	// Pattern: "can you research X", "please research X"
-	politeResearch := regexp.MustCompile(`(?i)(?:can you|could you|please|pls)\s+(?:research|investigate|look into|deep dive(?: into| on)?)\s+(.+)`)
-	if m := politeResearch.FindStringSubmatch(text); len(m) > 1 {
+	if m := rePoliteResearch.FindStringSubmatch(text); len(m) > 1 {
 		topic := strings.TrimSpace(m[1])
 		if topic != "" {
 			return topic
@@ -2502,7 +2460,7 @@ func (m *ChatModel) isRememberAgreement(text string) bool {
 
 	// Check if last assistant message suggested /remember
 	for i := len(m.history) - 1; i >= 0; i-- {
-		if m.history[i].role == "assistant" {
+		if m.history[i].role == roleAssistant {
 			content := strings.ToLower(m.history[i].content)
 			return strings.Contains(content, "/remember") ||
 				strings.Contains(content, "remember that") ||
@@ -2518,11 +2476,11 @@ func (m *ChatModel) extractRememberFact() string {
 	foundAssistant := false
 	for i := len(m.history) - 1; i >= 0; i-- {
 		entry := m.history[i]
-		if entry.role == "assistant" {
+		if entry.role == roleAssistant {
 			foundAssistant = true
 			continue
 		}
-		if foundAssistant && entry.role == "user" {
+		if foundAssistant && entry.role == roleUser {
 			fact := strings.TrimSpace(entry.content)
 			if len(fact) > 2 && !strings.HasPrefix(fact, "/") {
 				return fact
@@ -2536,7 +2494,7 @@ func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /fetch <url>",
 		})
 		m.updateViewport()
@@ -2544,7 +2502,7 @@ func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: fmt.Sprintf("Fetching: %s...", rawURL),
 	})
 	m.updateViewport()
@@ -2591,7 +2549,7 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /doctor            Run diagnostic checks`
 
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: help,
 	})
 	m.updateViewport()
@@ -2605,7 +2563,7 @@ func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 	if lower == "done" || lower == "exit" {
 		if !m.planMode {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "Not in plan mode.",
 			})
 			m.updateViewport()
@@ -2613,7 +2571,7 @@ func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 		}
 		m.planMode = false
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Exited plan mode. Tools are now unrestricted.",
 		})
 		m.updateViewport()
@@ -2623,15 +2581,15 @@ func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 	// Enter plan mode with the given prompt
 	m.planMode = true
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: "Entering plan mode (read-only tools)...",
 	})
 
 	// Add user message with [plan] prefix so model knows it's a planning request
 	prompt := "[plan] " + arg
-	m.messages = append(m.messages, docker.NewChatMessage("user", prompt))
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
 	m.history = append(m.history, chatEntry{
-		role:    "user",
+		role:    roleUser,
 		content: arg,
 	})
 
@@ -2662,7 +2620,7 @@ Add servers to ~/.baryo/config.yaml:
 	servers := m.mcpManager.ServerNames()
 	if len(servers) == 0 {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "No MCP servers connected.",
 		})
 		m.updateViewport()
@@ -2680,7 +2638,7 @@ Add servers to ~/.baryo/config.yaml:
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: b.String(),
 	})
 	m.updateViewport()
@@ -2689,7 +2647,7 @@ Add servers to ~/.baryo/config.yaml:
 
 func (m ChatModel) handleDiff() (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: "Running git diff...",
 	})
 	m.updateViewport()
@@ -2717,7 +2675,7 @@ func (m ChatModel) handleUndo() (ChatModel, tea.Cmd) {
 	log, err := gitOutput("log", "--oneline", "-1")
 	if err != nil || log == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "error",
+			role:    roleError,
 			content: "No commits to undo.",
 		})
 		m.updateViewport()
@@ -2728,12 +2686,12 @@ func (m ChatModel) handleUndo() (ChatModel, tea.Cmd) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		m.history = append(m.history, chatEntry{
-			role:    "error",
+			role:    roleError,
 			content: fmt.Sprintf("Undo failed: %v\n%s", err, string(out)),
 		})
 	} else {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Undone: %s\nChanges are now staged (soft reset).", log),
 		})
 	}
@@ -2745,7 +2703,7 @@ func (m ChatModel) handleRun(command string) (ChatModel, tea.Cmd) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /run <command>",
 		})
 		m.updateViewport()
@@ -2753,7 +2711,7 @@ func (m ChatModel) handleRun(command string) (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: fmt.Sprintf("Running: %s...", command),
 	})
 	m.updateViewport()
@@ -2770,7 +2728,7 @@ func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /ask <question>",
 		})
 		m.updateViewport()
@@ -2778,9 +2736,9 @@ func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
 	}
 
 	// Add to conversation history
-	m.messages = append(m.messages, docker.NewChatMessage("user", question))
+	m.messages = append(m.messages, llm.NewChatMessage("user", question))
 	m.history = append(m.history, chatEntry{
-		role:    "user",
+		role:    roleUser,
 		content: question,
 	})
 
@@ -2793,7 +2751,7 @@ func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2807,7 +2765,7 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 		status, _ := gitOutput("status", "--porcelain")
 		if status == "" {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "Nothing to commit. Stage changes with `git add` first.",
 			})
 			m.updateViewport()
@@ -2817,7 +2775,7 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 		diff, _ = gitOutput("diff")
 		if diff == "" {
 			m.history = append(m.history, chatEntry{
-				role:    "assistant",
+				role:    roleAssistant,
 				content: "No diff available. Stage your changes with `git add` first.",
 			})
 			m.updateViewport()
@@ -2826,7 +2784,7 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: "Generating commit message...",
 	})
 
@@ -2835,9 +2793,9 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 
 %s`, diff)
 
-	m.messages = append(m.messages, docker.NewChatMessage("user", "/commit"))
+	m.messages = append(m.messages, llm.NewChatMessage("user", "/commit"))
 	m.history = append(m.history, chatEntry{
-		role:    "user",
+		role:    roleUser,
 		content: "/commit",
 	})
 
@@ -2851,11 +2809,11 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 
 	// Build messages with the commit prompt injected
 	msgs := m.buildMessages()
-	msgs = append(msgs, docker.NewChatMessage("user", prompt))
+	msgs = append(msgs, llm.NewChatMessage("user", prompt))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, msgs, m.params)
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, msgs, m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2872,7 +2830,7 @@ func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
 	}
 	if diff == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "No changes to review.",
 		})
 		m.updateViewport()
@@ -2884,9 +2842,9 @@ func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
 
 %s`, diff)
 
-	m.messages = append(m.messages, docker.NewChatMessage("user", prompt))
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
 	m.history = append(m.history, chatEntry{
-		role:    "user",
+		role:    roleUser,
 		content: "/review",
 	})
 
@@ -2900,7 +2858,7 @@ func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -2947,8 +2905,8 @@ func (m *ChatModel) autoActivateSkill(text string) {
 
 	// Inject the skill into conversation context
 	skillPrompt := config.FormatActivatedSkill(skill)
-	m.messages = append(m.messages, docker.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
-	m.messages = append(m.messages, docker.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill and will follow its instructions."))
+	m.messages = append(m.messages, llm.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
+	m.messages = append(m.messages, llm.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill and will follow its instructions."))
 	m.activeSkills[skill.Name] = len(skill.Scripts) > 0
 
 	summary := fmt.Sprintf("Auto-activated skill: %s", skill.Name)
@@ -2956,7 +2914,7 @@ func (m *ChatModel) autoActivateSkill(text string) {
 		summary += fmt.Sprintf(" (%d scripts available)", len(skill.Scripts))
 	}
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: summary,
 	})
 	m.contextTokens = estimateTokens(m.buildMessages())
@@ -3003,7 +2961,7 @@ func (m *ChatModel) installSkillDeps(skill config.Skill) string {
 func (m ChatModel) handleSkillsList() (ChatModel, tea.Cmd) {
 	if len(m.skillIndex) == 0 {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "No skills found.\nPlace skills in ~/.baryo/skills/, .baryo/skills/, or skills/ (each as a directory with SKILL.md).",
 		})
 		m.updateViewport()
@@ -3022,7 +2980,7 @@ func (m ChatModel) handleSkillsList() (ChatModel, tea.Cmd) {
 	b.WriteString("\nActivate with: /skill <name>")
 
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: b.String(),
 	})
 	m.updateViewport()
@@ -3033,7 +2991,7 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /skill <name>\nList skills with /skills",
 		})
 		m.updateViewport()
@@ -3043,7 +3001,7 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 	skill, err := config.LoadSkill(name, m.skillIndex)
 	if err != nil {
 		m.history = append(m.history, chatEntry{
-			role:    "error",
+			role:    roleError,
 			content: fmt.Sprintf("Skill not found: %s\nList skills with /skills", name),
 		})
 		m.updateViewport()
@@ -3053,7 +3011,7 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 	// Check if already active
 	if _, alreadyActive := m.activeSkills[skill.Name]; alreadyActive {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Skill %q is already active.", skill.Name),
 		})
 		m.updateViewport()
@@ -3074,8 +3032,8 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 
 	// Inject the full skill content into the conversation as context
 	skillPrompt := config.FormatActivatedSkill(skill)
-	m.messages = append(m.messages, docker.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
-	m.messages = append(m.messages, docker.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill. I'm ready to help with "+skill.Description))
+	m.messages = append(m.messages, llm.NewChatMessage("user", "[Skill activated: "+skill.Name+"]\n\n"+skillPrompt))
+	m.messages = append(m.messages, llm.NewChatMessage("assistant", "I've loaded the "+skill.Name+" skill. I'm ready to help with "+skill.Description))
 	m.activeSkills[skill.Name] = len(skill.Scripts) > 0
 
 	summary := fmt.Sprintf("Skill activated: %s", skill.Name)
@@ -3083,7 +3041,7 @@ func (m ChatModel) handleSkillActivate(name string) (ChatModel, tea.Cmd) {
 		summary += fmt.Sprintf(" (%d scripts available)", len(skill.Scripts))
 	}
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: summary,
 	})
 
@@ -3098,7 +3056,7 @@ func (m ChatModel) handleMemories() (ChatModel, tea.Cmd) {
 
 	if len(global) == 0 && len(project) == 0 {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "No saved memories.\nUse /remember <fact> to save one.",
 		})
 		m.updateViewport()
@@ -3124,7 +3082,7 @@ func (m ChatModel) handleMemories() (ChatModel, tea.Cmd) {
 	b.WriteString("\nUse /forget <text> to remove a memory.")
 
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: b.String(),
 	})
 	m.updateViewport()
@@ -3135,7 +3093,7 @@ func (m ChatModel) handleRemember(fact string) (ChatModel, tea.Cmd) {
 	fact = strings.TrimSpace(fact)
 	if fact == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /remember <fact>",
 		})
 		m.updateViewport()
@@ -3150,7 +3108,7 @@ func (m ChatModel) handleRemember(fact string) (ChatModel, tea.Cmd) {
 
 	if err := config.AddMemory(fact, global); err != nil {
 		m.history = append(m.history, chatEntry{
-			role:    "error",
+			role:    roleError,
 			content: fmt.Sprintf("Failed to save memory: %v", err),
 		})
 		m.updateViewport()
@@ -3162,7 +3120,7 @@ func (m ChatModel) handleRemember(fact string) (ChatModel, tea.Cmd) {
 		scope = "project"
 	}
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: fmt.Sprintf("Remembered (%s): %s", scope, fact),
 	})
 	m.updateViewport()
@@ -3173,7 +3131,7 @@ func (m ChatModel) handleForget(substring string) (ChatModel, tea.Cmd) {
 	substring = strings.TrimSpace(substring)
 	if substring == "" {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: "Usage: /forget <text>",
 		})
 		m.updateViewport()
@@ -3183,7 +3141,7 @@ func (m ChatModel) handleForget(substring string) (ChatModel, tea.Cmd) {
 	removed, err := config.RemoveMemory(substring)
 	if err != nil {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("No memory matching %q found.", substring),
 		})
 		m.updateViewport()
@@ -3191,7 +3149,7 @@ func (m ChatModel) handleForget(substring string) (ChatModel, tea.Cmd) {
 	}
 
 	m.history = append(m.history, chatEntry{
-		role:    "assistant",
+		role:    roleAssistant,
 		content: fmt.Sprintf("Forgot: %s", removed),
 	})
 	m.updateViewport()
@@ -3241,7 +3199,7 @@ func rewriteContext(history []chatEntry) string {
 		if len(text) > 120 {
 			text = text[:120] + "..."
 		}
-		sb.WriteString(label)
+		sb.WriteString(string(label))
 		sb.WriteString(": ")
 		sb.WriteString(text)
 		sb.WriteByte('\n')
@@ -3255,19 +3213,19 @@ func rewriteContext(history []chatEntry) string {
 // doRewrite runs a quick rewrite pass: sends the user's vague message through
 // StreamChat (no tools, low temperature) with the rewrite prompt, collects the
 // full response, and returns a RewriteDoneMsg.
-func doRewrite(ep docker.Endpoint, modelTag, contextSummary, userText string, hasTools, hasSkill bool) tea.Cmd {
+func doRewrite(ep llm.Endpoint, modelTag, contextSummary, userText string, hasTools, hasSkill bool) tea.Cmd {
 	return func() tea.Msg {
 		prompt := fmt.Sprintf(rewritePromptTemplate, contextSummary, userText)
-		msgs := []docker.ChatMessage{
-			docker.NewChatMessage("user", prompt),
+		msgs := []llm.ChatMessage{
+			llm.NewChatMessage("user", prompt),
 		}
 		lowTemp := 0.1
-		params := docker.ChatParams{Temperature: &lowTemp}
+		params := llm.ChatParams{Temperature: &lowTemp}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		ch := docker.StreamChat(ctx, ep, modelTag, msgs, params)
+		ch := llm.StreamChat(ctx, ep, modelTag, msgs, params)
 
 		var result strings.Builder
 		for evt := range ch {
@@ -3329,6 +3287,8 @@ const longConversationReminder = "[System: Answer the user's question directly. 
 
 // reHallucinatedToolCall matches hallucinated tool call blocks in text.
 // Covers <tool_call>...</tool_call> (common) and <tool_code>...</tool_code> (Gemini).
+var rePoliteResearch = regexp.MustCompile(`(?i)(?:can you|could you|please|pls)\s+(?:research|investigate|look into|deep dive(?: into| on)?)\s+(.+)`)
+
 var reHallucinatedToolCall = regexp.MustCompile(`(?s)<tool_(?:call|code)>.*?</tool_(?:call|code)>`)
 
 // reToolUseLine matches lines like "I'll use the X tool to..." followed by JSON-like content.
@@ -3389,7 +3349,7 @@ func formatTokenCount(n int) string {
 func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
 	if len(m.messages) <= 8 {
 		m.history = append(m.history, chatEntry{
-			role:    "assistant",
+			role:    roleAssistant,
 			content: fmt.Sprintf("Nothing to compact — conversation is only ~%s tokens (%d messages).", formatTokenCount(m.contextTokens), len(m.messages)),
 		})
 		m.updateViewport()
@@ -3422,17 +3382,17 @@ func (m ChatModel) startCompaction() (ChatModel, tea.Cmd) {
 	m.streamStart = time.Now()
 
 	m.history = append(m.history, chatEntry{
-		role:    "tool",
+		role:    roleTool,
 		content: "Compacting context...",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	compactMsgs := []docker.ChatMessage{
-		docker.NewChatMessage("user", prompt),
+	compactMsgs := []llm.ChatMessage{
+		llm.NewChatMessage("user", prompt),
 	}
-	m.eventCh = docker.StreamChat(ctx, m.endpoint, m.modelTag, compactMsgs, m.params)
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, compactMsgs, m.params)
 
 	m.updateViewport()
 	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
@@ -3465,11 +3425,11 @@ func (m *ChatModel) updateViewport() {
 
 	for _, entry := range m.history {
 		switch entry.role {
-		case "user":
+		case roleUser:
 			b.WriteString(UserLabelStyle.Render("❯") + " " + entry.content)
-		case "error":
+		case roleError:
 			b.WriteString(prefixWrap(ErrorStyle.Render(entry.content), errBorder, m.width))
-		case "tool":
+		case roleTool:
 			if strings.HasPrefix(entry.content, "Result: ") {
 				result := strings.TrimPrefix(entry.content, "Result: ")
 				b.WriteString(prefixWrap(ToolResultStyle.Render(result), border, m.width))
@@ -3487,9 +3447,9 @@ func (m *ChatModel) updateViewport() {
 				}
 				b.WriteString(prefixWrap(rendered, border, m.width))
 			}
-		case "info":
+		case roleInfo:
 			b.WriteString(prefixWrap(DimStyle.Render(entry.content), border, m.width))
-		case "assistant":
+		case roleAssistant:
 			if m.markdown {
 				rendered := RenderMarkdown(entry.content, m.width-2)
 				// Indent each line with 2 spaces
@@ -3617,10 +3577,7 @@ func (m ChatModel) View() string {
 
 		// Right-align the right info.
 		helpWidth := lipgloss.Width(help)
-		rightWidth := lipgloss.Width(tokenInfo)
-		if m.promptPrice > 0 {
-			rightWidth += 3 + len(fmt.Sprintf("$%.4f", m.sessionCost)) // " · " + cost
-		}
+		rightWidth := lipgloss.Width(rightInfo)
 		gap := m.width - helpWidth - rightWidth
 		if gap < 2 {
 			gap = 2
@@ -3638,11 +3595,11 @@ func (m ChatModel) View() string {
 }
 
 // waitForEvent returns a Cmd that waits for the next event from the channel.
-func waitForEvent(ch <-chan docker.StreamEvent) tea.Cmd {
+func waitForEvent(ch <-chan llm.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
 		evt, ok := <-ch
 		if !ok {
-			return StreamTokenMsg{Event: docker.StreamEvent{Done: true}}
+			return StreamTokenMsg{Event: llm.StreamEvent{Done: true}}
 		}
 		return StreamTokenMsg{Event: evt}
 	}

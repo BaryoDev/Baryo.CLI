@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
 import (
 	"context"
@@ -28,7 +28,7 @@ func streamChatBedrock(ctx context.Context, ep Endpoint, model string, messages 
 		defer close(ch)
 		defer close(resCh)
 
-		region := ep.APIKey // region is stored in the APIKey field for Bedrock
+		region := ep.Region
 		cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("failed to load AWS config: %v", err)}
@@ -274,7 +274,7 @@ func convertToBedrockTools(tools []ToolDefinition) *types.ToolConfiguration {
 }
 
 // listBedrockModels queries AWS Bedrock for available foundation models.
-func listBedrockModels(region string) ([]DockerModel, error) {
+func listBedrockModels(region string) ([]Model, error) {
 	ctx := context.Background()
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
@@ -287,7 +287,7 @@ func listBedrockModels(region string) ([]DockerModel, error) {
 		return nil, fmt.Errorf("bedrock ListFoundationModels: %w", err)
 	}
 
-	var models []DockerModel
+	var models []Model
 	for _, m := range output.ModelSummaries {
 		if m.ModelId == nil {
 			continue
@@ -324,7 +324,7 @@ func listBedrockModels(region string) ([]DockerModel, error) {
 
 		id := *m.ModelId
 		p := LookupBedrockPricing(id)
-		models = append(models, DockerModel{
+		models = append(models, Model{
 			Name:            id,
 			Tag:             id,
 			Provider:        "bedrock",

@@ -12,24 +12,24 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
 
 // MCPToolProvider is the interface for MCP tool integration in headless mode.
 type MCPToolProvider interface {
-	CompactToolDefinitions(nativeNames []string, contextWindow int) []docker.ToolDefinition
+	CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition
 	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
 	IsMCPTool(name string) bool
 }
 
 // PrintOptions holds all configuration for headless print mode.
 type PrintOptions struct {
-	Endpoint       docker.Endpoint
+	Endpoint       llm.Endpoint
 	SystemPrompt   string
-	Model          docker.DockerModel
+	Model          llm.Model
 	Prompt         string
-	Params         docker.ChatParams
+	Params         llm.ChatParams
 	PermissionMode string
 	MaxTurns       int
 	OutputFormat   string // "text" or "json"
@@ -67,7 +67,7 @@ func runPrintText(opts PrintOptions) int {
 		maxRounds = 5
 	}
 
-	ch := docker.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
+	ch := llm.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
 
 	for evt := range ch {
 		if evt.ToolsDisabled {
@@ -128,7 +128,7 @@ func runPrintJSON(opts PrintOptions) int {
 	out := jsonOutput{}
 
 	if !opts.EnableTools {
-		ch := docker.StreamChat(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params)
+		ch := llm.StreamChat(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params)
 		for evt := range ch {
 			if evt.Error != "" {
 				out.ExitCode = 1
@@ -161,7 +161,7 @@ func runPrintJSON(opts PrintOptions) int {
 		maxRounds = 5
 	}
 
-	ch := docker.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
+	ch := llm.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
 
 	// Track the current tool call being built (for pairing start → result).
 	var pendingTool *jsonToolCall
@@ -216,18 +216,18 @@ func runPrintJSON(opts PrintOptions) int {
 }
 
 // buildMessages constructs the initial message list for print mode.
-func buildMessages(opts PrintOptions) []docker.ChatMessage {
-	var messages []docker.ChatMessage
+func buildMessages(opts PrintOptions) []llm.ChatMessage {
+	var messages []llm.ChatMessage
 	if opts.SystemPrompt != "" {
-		messages = append(messages, docker.NewChatMessage("system", opts.SystemPrompt))
+		messages = append(messages, llm.NewChatMessage("system", opts.SystemPrompt))
 	}
-	messages = append(messages, docker.NewChatMessage("user", opts.Prompt))
+	messages = append(messages, llm.NewChatMessage("user", opts.Prompt))
 	return messages
 }
 
 // streamSimple streams a simple chat without tools (backward compatible path).
-func streamSimple(ctx context.Context, opts PrintOptions, messages []docker.ChatMessage) int {
-	ch := docker.StreamChat(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params)
+func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMessage) int {
+	ch := llm.StreamChat(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params)
 	for evt := range ch {
 		if evt.Error != "" {
 			fmt.Fprintf(os.Stderr, "error: %s\n", evt.Error)
@@ -244,7 +244,7 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []docker.Chat
 // makeHeadlessExecutor returns a tool executor for headless mode.
 // In "auto" mode, all tools are executed. In other modes, destructive tools
 // are blocked with an error message.
-func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) docker.ToolExecutor {
+func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) llm.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		// Route MCP tools to the MCP manager.
 		if mcpMgr != nil && mcpMgr.IsMCPTool(name) {
@@ -260,7 +260,7 @@ func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) docker.
 
 // contextWindowForModel returns the estimated context window for the model.
 func contextWindowForModel(tag string) int {
-	hints := docker.DetectModelHints(tag)
+	hints := llm.DetectModelHints(tag)
 	if hints.ContextWindow > 0 {
 		return hints.ContextWindow
 	}
@@ -270,7 +270,7 @@ func contextWindowForModel(tag string) int {
 // mcpContextWindow returns the context window used for MCP tool filtering.
 // Cloud/remote endpoints return a large value so all tools are included.
 // Local models return their actual context window for aggressive filtering.
-func mcpContextWindow(ep docker.Endpoint, tag string) int {
+func mcpContextWindow(ep llm.Endpoint, tag string) int {
 	if ep.IsRemote() {
 		return 1_000_000
 	}

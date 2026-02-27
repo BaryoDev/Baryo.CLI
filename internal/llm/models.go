@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
 import (
 	"encoding/json"
@@ -15,19 +15,19 @@ import (
 )
 
 // ListModels runs `docker model list --json` and returns the available models.
-func ListModels() ([]DockerModel, error) {
+func ListModels() ([]Model, error) {
 	cmd := exec.Command("docker", "model", "list", "--json")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker model list failed: %w", err)
 	}
 
-	var raw []dockerModelRaw
+	var raw []modelRaw
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse model list: %w", err)
 	}
 
-	models := make([]DockerModel, 0, len(raw))
+	models := make([]Model, 0, len(raw))
 	for _, r := range raw {
 		if len(r.Tags) == 0 {
 			continue
@@ -40,7 +40,7 @@ func ListModels() ([]DockerModel, error) {
 			name = name[:idx]
 		}
 
-		models = append(models, DockerModel{
+		models = append(models, Model{
 			Name:   name,
 			Tag:    tag,
 			Params: r.Config.Parameters,
@@ -65,7 +65,7 @@ type ollamaTagsResponse struct {
 
 // ListRemoteModels queries a remote Ollama server for available models.
 // socketPath should be a TCP address like "tcp://localhost:11434".
-func ListRemoteModels(socketPath string) ([]DockerModel, error) {
+func ListRemoteModels(socketPath string) ([]Model, error) {
 	client := &http.Client{
 		Transport: newHTTPClient(Endpoint{SocketPath: socketPath}).Transport,
 		Timeout:   15 * time.Second,
@@ -92,7 +92,7 @@ func ListRemoteModels(socketPath string) ([]DockerModel, error) {
 		return nil, fmt.Errorf("failed to parse model list: %w", err)
 	}
 
-	models := make([]DockerModel, 0, len(tags.Models))
+	models := make([]Model, 0, len(tags.Models))
 	for _, m := range tags.Models {
 		name := m.Name
 		// Strip ":latest" for display.
@@ -103,7 +103,7 @@ func ListRemoteModels(socketPath string) ([]DockerModel, error) {
 			size = formatBytes(m.Size)
 		}
 
-		models = append(models, DockerModel{
+		models = append(models, Model{
 			Name:   displayName,
 			Tag:    name,
 			Params: m.Details.ParameterSize,
@@ -122,7 +122,7 @@ type openAIModelsResponse struct {
 }
 
 // listRemoteModelsOpenAI queries via the OpenAI-compatible /v1/models endpoint.
-func listRemoteModelsOpenAI(client *http.Client) ([]DockerModel, error) {
+func listRemoteModelsOpenAI(client *http.Client) ([]Model, error) {
 	resp, err := client.Get("http://localhost/v1/models")
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach server: %w", err)
@@ -139,9 +139,9 @@ func listRemoteModelsOpenAI(client *http.Client) ([]DockerModel, error) {
 		return nil, fmt.Errorf("failed to parse model list: %w", err)
 	}
 
-	models := make([]DockerModel, 0, len(result.Data))
+	models := make([]Model, 0, len(result.Data))
 	for _, m := range result.Data {
-		models = append(models, DockerModel{
+		models = append(models, Model{
 			Name: m.ID,
 			Tag:  m.ID,
 		})

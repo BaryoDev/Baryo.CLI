@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"golang.org/x/net/html"
 )
@@ -18,14 +17,13 @@ import (
 func duckduckgoSearch(query string) ([]SearchResult, error) {
 	endpoint := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Baryo/1.0)")
 
-	resp, err := client.Do(req)
+	resp, err := searchClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching DuckDuckGo results: %w", err)
 	}

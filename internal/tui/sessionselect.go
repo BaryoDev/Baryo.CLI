@@ -30,28 +30,12 @@ func NewSessionSelect(sessions []session.Summary) SessionSelectModel {
 
 // pageSize returns how many items fit on screen (minimum 5).
 func (m *SessionSelectModel) pageSize() int {
-	// title(2) + help bar(1) + scroll indicators(2) = ~5 overhead
-	// each session takes ~3 lines (label + detail + blank)
-	usable := m.height - 5
-	n := usable / 3
-	if n < 5 {
-		return 5
-	}
-	return n
+	return PageSize(m.height, 5, 3, 5)
 }
 
 // adjustScroll ensures the cursor is within the visible window.
 func (m *SessionSelectModel) adjustScroll() {
-	ps := m.pageSize()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	if m.cursor >= m.offset+ps {
-		m.offset = m.cursor - ps + 1
-	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
+	m.offset = AdjustScroll(m.cursor, m.offset, m.pageSize())
 }
 
 func (m SessionSelectModel) Update(msg tea.Msg) (SessionSelectModel, tea.Cmd) {

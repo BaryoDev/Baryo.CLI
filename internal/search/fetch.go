@@ -20,6 +20,12 @@ const (
 	fetchMaxChars = 8000    // truncate extracted text
 )
 
+// Package-level HTTP clients (reused across calls to avoid per-call overhead).
+var (
+	fetchClient  = &http.Client{Timeout: 10 * time.Second}
+	searchClient = &http.Client{Timeout: 15 * time.Second}
+)
+
 // FetchContent downloads a URL and returns the extracted text content only.
 // Uses a shorter timeout suitable for batch fetching multiple pages.
 func FetchContent(rawURL string) (string, error) {
@@ -31,14 +37,13 @@ func FetchContent(rawURL string) (string, error) {
 		return "", fmt.Errorf("only http/https URLs are supported")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Baryo/1.0)")
 
-	resp, err := client.Do(req)
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching URL: %w", err)
 	}

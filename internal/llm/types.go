@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
-// dockerModelRaw matches the actual JSON from `docker model list --json`.
-type dockerModelRaw struct {
+// modelRaw matches the actual JSON from `docker model list --json`.
+type modelRaw struct {
 	ID     string   `json:"id"`
 	Tags   []string `json:"tags"`
 	Config struct {
@@ -17,8 +17,8 @@ type dockerModelRaw struct {
 	} `json:"config"`
 }
 
-// DockerModel is the cleaned-up model info we use in the TUI.
-type DockerModel struct {
+// Model is the cleaned-up model info we use in the TUI.
+type Model struct {
 	Name            string  // e.g. "ai/mistral"
 	Tag             string  // full tag e.g. "docker.io/ai/mistral:latest"
 	Params          string  // e.g. "7.25 B"
@@ -34,10 +34,11 @@ type Endpoint struct {
 	BaseURL    string // for remote HTTPS providers
 	APIKey     string // bearer token for authenticated providers
 	Provider   string // provider name for routing (e.g. "anthropic", "openai")
+	Region     string // AWS region for Bedrock
 }
 
-// IsRemote returns true if this endpoint targets an HTTPS provider.
-func (e Endpoint) IsRemote() bool { return e.BaseURL != "" }
+// IsRemote returns true if this endpoint targets a remote provider.
+func (e Endpoint) IsRemote() bool { return e.BaseURL != "" || e.Provider != "" }
 
 // ToolCall represents a completed tool call from the assistant.
 type ToolCall struct {

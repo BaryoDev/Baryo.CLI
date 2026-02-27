@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package docker
+package llm
 
 import (
 	"bufio"
@@ -296,7 +296,7 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 				var msgDelta anthropicSSEMessageDelta
 				if err := json.Unmarshal([]byte(data), &msgDelta); err == nil {
 					finishReason = msgDelta.Delta.StopReason
-					outputTokens += msgDelta.Usage.OutputTokens
+					outputTokens = msgDelta.Usage.OutputTokens
 				}
 
 			case "message_stop":

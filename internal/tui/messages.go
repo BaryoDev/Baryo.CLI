@@ -5,25 +5,25 @@
 package tui
 
 import (
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
 // ModelsLoadedMsg is sent when the model list has been fetched.
 type ModelsLoadedMsg struct {
-	Models []docker.DockerModel
+	Models []llm.Model
 	Err    error
 }
 
 // StreamTokenMsg carries a streaming event from the model.
 type StreamTokenMsg struct {
-	Event docker.StreamEvent
+	Event llm.StreamEvent
 }
 
 // ModelSelectedMsg is sent when the user picks a model.
 type ModelSelectedMsg struct {
-	Model docker.DockerModel
+	Model llm.Model
 }
 
 // ShowSessionsMsg requests transition to the session picker screen.
@@ -42,8 +42,8 @@ type SessionCancelledMsg struct{}
 
 // ShowModelsMsg requests transition to the model browser screen.
 type ShowModelsMsg struct {
-	Downloaded []docker.DockerModel
-	Available  []docker.SearchModel
+	Downloaded []llm.Model
+	Available  []llm.SearchModel
 	Err        error
 }
 
@@ -127,4 +127,5 @@ type ResearchProgressMsg struct {
 // ResearchDoneMsg signals that the research pipeline has finished.
 type ResearchDoneMsg struct {
 	Result search.ResearchResult
+	Err    error
 }

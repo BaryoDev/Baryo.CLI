@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // Manager manages multiple MCP server connections.
@@ -72,10 +72,10 @@ func (m *Manager) Start(ctx context.Context, configs []ServerConfig) []error {
 	return errs
 }
 
-// ToolDefinitions returns docker.ToolDefinition entries for all MCP tools
+// ToolDefinitions returns llm.ToolDefinition entries for all MCP tools
 // across all connected servers.
-func (m *Manager) ToolDefinitions() []docker.ToolDefinition {
-	var defs []docker.ToolDefinition
+func (m *Manager) ToolDefinitions() []llm.ToolDefinition {
+	var defs []llm.ToolDefinition
 	for serverName, client := range m.clients {
 		for _, tool := range client.Tools() {
 			qualified := "mcp__" + serverName + "__" + tool.Name
@@ -90,9 +90,9 @@ func (m *Manager) ToolDefinitions() []docker.ToolDefinition {
 			}
 			params = sanitizeSchema(params)
 
-			defs = append(defs, docker.ToolDefinition{
+			defs = append(defs, llm.ToolDefinition{
 				Type: "function",
-				Function: docker.FunctionDefinition{
+				Function: llm.FunctionDefinition{
 					Name:        qualified,
 					Description: fmt.Sprintf("[MCP:%s] %s", serverName, tool.Description),
 					Parameters:  params,
@@ -123,7 +123,7 @@ const contextThreshold = 16384
 //   - Small context (≤16K): redundant servers skipped, descriptions trimmed
 //
 // The full set is always routable via Execute when users explicitly request MCP tools.
-func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int) []docker.ToolDefinition {
+func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition {
 	native := make(map[string]bool, len(nativeNames))
 	for _, n := range nativeNames {
 		native[n] = true
@@ -131,7 +131,7 @@ func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int
 
 	largeContext := contextWindow > contextThreshold
 
-	var defs []docker.ToolDefinition
+	var defs []llm.ToolDefinition
 	for serverName, client := range m.clients {
 		// Small models: skip entire servers whose domain is covered by native tools.
 		if !largeContext && redundantServers[serverName] {
@@ -169,9 +169,9 @@ func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int
 				params = trimSchema(params)
 			}
 
-			defs = append(defs, docker.ToolDefinition{
+			defs = append(defs, llm.ToolDefinition{
 				Type: "function",
-				Function: docker.FunctionDefinition{
+				Function: llm.FunctionDefinition{
 					Name:        qualified,
 					Description: fmt.Sprintf("[MCP:%s] %s", serverName, desc),
 					Parameters:  params,

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // CheckResult holds the outcome of a single diagnostic check.
@@ -81,7 +81,7 @@ func runLocalChecks(socketPath string) []CheckResult {
 			Passed: false,
 			Message: `Baryo needs Docker Desktop to run AI models locally.
 
-  1. Download Docker Desktop from https://www.docker.com/products/docker-desktop
+  1. Download Docker Desktop from https://www.llm.com/products/docker-desktop
   2. Install and launch it
   3. Run baryo again`,
 		})
@@ -120,14 +120,14 @@ func runLocalChecks(socketPath string) []CheckResult {
   4. Run baryo again
 
   Expected socket: %s
-  Learn more: https://docs.docker.com/desktop/features/model-runner/`, socketPath),
+  Learn more: https://docs.llm.com/desktop/features/model-runner/`, socketPath),
 		})
 		return results
 	}
 	results = append(results, CheckResult{Name: "Model Runner enabled", Passed: true})
 
 	// 4. Are any models pulled?
-	models, err := docker.ListModels()
+	models, err := llm.ListModels()
 	if err != nil {
 		results = append(results, CheckResult{
 			Name:   "Models available",

@@ -6,13 +6,14 @@ package config
 
 import (
 	_ "embed"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/tunnel"
 	"gopkg.in/yaml.v3"
@@ -28,7 +29,7 @@ type Config struct {
 	Model          string            `yaml:"model"`
 	SocketPath     string            `yaml:"socket_path"`
 	SystemPrompt   string            `yaml:"system_prompt"`
-	Params         docker.ChatParams `yaml:"params"`
+	Params         llm.ChatParams `yaml:"params"`
 	SSHTunnel      *tunnel.Config    `yaml:"ssh_tunnel"`
 	SearchProvider   string            `yaml:"search_provider"`
 	SearchAPIKey     string            `yaml:"search_api_key"`
@@ -50,7 +51,7 @@ func defaultSocketPath() string {
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data", "inference.sock")
+		return filepath.Join(home, "Library", "Containers", "com.llm.docker", "Data", "inference.sock")
 	case "linux":
 		return probeLinuxSocket(home)
 	case "windows":
@@ -134,7 +135,8 @@ func loadFile(path string, cfg *Config) {
 
 	var file Config
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return // malformed YAML — skip silently
+		fmt.Fprintf(os.Stderr, "warning: malformed config %s: %v\n", path, err)
+		return
 	}
 
 	if file.Model != "" {
@@ -227,17 +229,30 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_PERMISSION_MODE"); v != "" {
 		cfg.PermissionMode = v
 	}
-	if v := os.Getenv("BARYO_GEMINI_API_KEY"); v != "" {
-		cfg.GeminiAPIKey = v
+	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
+	legacyEnvVars := map[string]string{
+		"gemini":     "BARYO_GEMINI_API_KEY",
+		"openrouter": "BARYO_OPENROUTER_API_KEY",
+		"openai":     "BARYO_OPENAI_API_KEY",
+		"anthropic":  "BARYO_ANTHROPIC_API_KEY",
 	}
-	if v := os.Getenv("BARYO_OPENROUTER_API_KEY"); v != "" {
-		cfg.OpenRouterAPIKey = v
-	}
-	if v := os.Getenv("BARYO_OPENAI_API_KEY"); v != "" {
-		cfg.OpenAIAPIKey = v
-	}
-	if v := os.Getenv("BARYO_ANTHROPIC_API_KEY"); v != "" {
-		cfg.AnthropicAPIKey = v
+	for provider, envKey := range legacyEnvVars {
+		if v := os.Getenv(envKey); v != "" {
+			switch provider {
+			case "gemini":
+				cfg.GeminiAPIKey = v
+			case "openrouter":
+				cfg.OpenRouterAPIKey = v
+			case "openai":
+				cfg.OpenAIAPIKey = v
+			case "anthropic":
+				cfg.AnthropicAPIKey = v
+			}
+			if cfg.ProviderKeys == nil {
+				cfg.ProviderKeys = make(map[string]string)
+			}
+			cfg.ProviderKeys[provider] = v
+		}
 	}
 
 	// New provider env vars (written directly into ProviderKeys map).
@@ -266,7 +281,7 @@ func applyEnv(cfg *Config) {
 
 // ApplyCLI merges CLI flag values on top of config (highest precedence).
 // Only non-empty values are applied. If yolo is true, PermissionMode is set to "auto".
-func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params docker.ChatParams, yolo bool) {
+func (c *Config) ApplyCLI(model, systemPrompt, tunnelFlag string, params llm.ChatParams, yolo bool) {
 	if model != "" {
 		c.Model = model
 	}

@@ -7,13 +7,12 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 )
@@ -36,7 +35,7 @@ type AppModel struct {
 	socketPath     string
 	systemPrompt   string
 	memoriesPrompt string
-	params         docker.ChatParams
+	params         llm.ChatParams
 
 	searchProvider   string
 	searchAPIKey     string
@@ -46,7 +45,7 @@ type AppModel struct {
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
 
-	preselectedModel *docker.DockerModel
+	preselectedModel *llm.Model
 	resumeSession    *session.Session
 	sessionList      []session.Summary
 
@@ -55,7 +54,7 @@ type AppModel struct {
 	modelBrowser  ModelBrowserModel
 	chat          ChatModel
 
-	pendingModel *docker.DockerModel // model waiting to be loaded
+	pendingModel *llm.Model // model waiting to be loaded
 	loadStart    time.Time           // when model loading began
 
 	err    error
@@ -74,7 +73,7 @@ func WithSocketPath(path string) AppOption {
 }
 
 // WithPreselectedModel skips the model picker and goes straight to chat.
-func WithPreselectedModel(model docker.DockerModel) AppOption {
+func WithPreselectedModel(model llm.Model) AppOption {
 	return func(a *AppModel) {
 		a.preselectedModel = &model
 	}
@@ -102,7 +101,7 @@ func WithMemories(memories string) AppOption {
 }
 
 // WithParams sets the model parameters for chat sessions.
-func WithParams(params docker.ChatParams) AppOption {
+func WithParams(params llm.ChatParams) AppOption {
 	return func(a *AppModel) {
 		a.params = params
 	}
@@ -396,13 +395,13 @@ func (m AppModel) loadModels() tea.Cmd {
 	socketPath := m.socketPath
 	keys := m.providerKeys
 	return func() tea.Msg {
-		var models []docker.DockerModel
-		if isRemoteSocket(socketPath) {
-			if m, err := docker.ListRemoteModels(socketPath); err == nil {
+		var models []llm.Model
+		if llm.IsRemoteSocket(socketPath) {
+			if m, err := llm.ListRemoteModels(socketPath); err == nil {
 				models = append(models, m...)
 			}
 		} else {
-			if m, err := docker.ListModels(); err == nil {
+			if m, err := llm.ListModels(); err == nil {
 				models = append(models, m...)
 			}
 		}
@@ -412,7 +411,7 @@ func (m AppModel) loadModels() tea.Cmd {
 			if key == "" {
 				continue
 			}
-			if pm, e := docker.ListProviderModels(provider, key); e == nil {
+			if pm, e := llm.ListProviderModels(provider, key); e == nil {
 				models = append(models, pm...)
 			}
 		}
@@ -433,13 +432,13 @@ type ModelPreloadedMsg struct {
 // preloadModel returns a Cmd that loads a model on a remote Ollama server.
 func preloadModel(socketPath, modelTag string) tea.Cmd {
 	return func() tea.Msg {
-		err := docker.PreloadModel(socketPath, modelTag)
+		err := llm.PreloadModel(socketPath, modelTag)
 		return ModelPreloadedMsg{Err: err}
 	}
 }
 
 // transitionToChat sets up the chat screen for the given model.
-func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
+func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.screen = screenChat
 	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.mcpManager)
 	var cmd tea.Cmd
@@ -452,13 +451,13 @@ func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 
 // startModelLoading transitions to the loading screen for remote models,
 // or directly to chat for local/cloud-provider models.
-func (m *AppModel) startModelLoading(model docker.DockerModel) (tea.Model, tea.Cmd) {
+func (m *AppModel) startModelLoading(model llm.Model) (tea.Model, tea.Cmd) {
 	// Cloud provider models don't need preloading.
 	if model.Provider != "" {
 		cmd := m.transitionToChat(model)
 		return *m, cmd
 	}
-	if isRemoteSocket(m.socketPath) {
+	if llm.IsRemoteSocket(m.socketPath) {
 		m.screen = screenModelLoading
 		m.pendingModel = &model
 		m.loadStart = time.Now()
@@ -468,7 +467,3 @@ func (m *AppModel) startModelLoading(model docker.DockerModel) (tea.Model, tea.C
 	return *m, cmd
 }
 
-// isRemoteSocket returns true if the socket path is a TCP endpoint.
-func isRemoteSocket(socketPath string) bool {
-	return strings.HasPrefix(socketPath, "tcp://")
-}
