@@ -6,24 +6,6 @@ Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. E
 
 ## Core — Essential Next Steps
 
-### File Write & Edit Tools
-The model can read files but can't write or edit them. This is the single biggest gap blocking real coding workflows.
-
-- `write_file` tool — create or overwrite files
-- `edit_file` tool — exact string replacement in existing files (like Claude Code's Edit tool)
-- Multi-file editing in a single turn
-- Permission gating — confirm before writes (see Permission System below)
-- Auto-create directories as needed
-
-### Permission System
-Tiered permission levels for tool execution and file modification. Required before enabling write tools.
-
-- Modes: `suggest` (read-only), `confirm` (ask before writes/runs), `auto` (full autonomy, like `--yolo`)
-- Default to `confirm` for destructive operations (file writes, shell commands, `run_code`)
-- Per-tool allow/deny overrides (e.g., always auto-approve `read_file`, always confirm `write_file`)
-- Config via `~/.baryo/config.yaml` or `--mode` flag
-- `--yolo` / `-y` flag for unattended operation (CI/CD)
-
 ### GitHub Workflow (PR, Issues, Code Review)
 End-to-end GitHub workflow via the `gh` CLI. Key differentiator for dev workflows.
 
@@ -33,25 +15,6 @@ End-to-end GitHub workflow via the `gh` CLI. Key differentiator for dev workflow
 - `/pr status` — show PR review status (approved/pending/changes requested)
 - Respond to PR review comments and push fixes
 - Branch management: create, switch, merge, delete
-
-### Deep Research Mode
-Go beyond single searches. Multi-step research that scours the internet, compiles findings, and generates structured reports.
-
-- `/research <topic>` — deep research with multiple search rounds
-- Search → fetch top pages → identify gaps → search again → compile report
-- Structured output: executive summary, key findings, sources, methodology
-- Configurable depth: quick (1 round), standard (3 rounds), deep (5+ rounds)
-- Auto-cite all sources with user's preferred citation style (from memories)
-- Export research to markdown file
-- Follow-up: "dig deeper into finding #3" for iterative research
-
-### Ignore Files
-Prevent the model from reading sensitive files. Security baseline.
-
-- `.baryoignore` file (similar to `.gitignore` patterns)
-- Auto-exclude `.env`, credentials, secrets, API keys
-- Respected by all tools (`read_file`, `glob`, `grep`, `@mentions`)
-- Falls back to `.gitignore` rules when `.baryoignore` doesn't exist
 
 ---
 
@@ -266,6 +229,36 @@ Allow users to add custom tools via config.
 
 ## Completed
 
+### File Write & Edit Tools
+- `write_file` tool — create or overwrite files with auto-directory creation
+- `edit_file` tool — exact string replacement in existing files
+- `delete_file` tool — remove files with permission gating
+- Multi-file editing in a single turn
+- Permission gating via confirm/suggest/auto modes
+- `.baryoignore` and `.gitignore` respected for all write operations
+
+### Permission System
+- Three modes: `suggest` (read-only), `confirm` (ask before writes/runs), `auto` (full autonomy)
+- Default to `confirm` for destructive operations (file writes, shell commands, `run_code`)
+- `--yolo` / `-y` flag sets `auto` mode for unattended operation
+- Config via `~/.baryo/config.yaml` (`permission_mode`) or `BARYO_PERMISSION_MODE` env var
+- TUI confirmation flow with y/n prompt for destructive tools in confirm mode
+
+### Ignore Files
+- `.baryoignore` file (`.gitignore`-style patterns) for project-specific exclusions
+- Builtin patterns auto-exclude `.env`, `.env.*`, `*.pem`, `*.key`
+- Respected by all tools: `read_file`, `write_file`, `edit_file`, `delete_file`, `glob`, `grep`, `list_directory`, `@mentions`
+- Falls back to `git check-ignore` when `.baryoignore` doesn't match
+- Batch gitignore checking for @mention completions (single subprocess)
+
+### Deep Research Mode
+- `/research <topic>` — multi-round deep research with structured reports
+- Configurable depth: quick (1 round), standard (3 rounds), deep (5 rounds)
+- Search → fetch top pages → identify gaps → search again → compile report
+- Structured output: executive summary, key findings, analysis, numbered source citations
+- Context-aware scaling to fit model's context window
+- Follow-up in conversation ("dig deeper into finding #3")
+
 ### Headless / CI Mode
 - Full tool calling in print mode (`-p`) with multi-turn support
 - `--yolo` flag for auto-approving all destructive operations
@@ -313,7 +306,7 @@ Allow users to add custom tools via config.
 - Custom skill creation support
 
 ### Tool Calling (v0.2.0)
-- Built-in tools: `read_file`, `glob`, `grep`, `list_directory`, `git_status`, `git_diff`, `git_log`, `gh`
+- Built-in tools: `read_file`, `write_file`, `edit_file`, `delete_file`, `glob`, `grep`, `list_directory`, `git_status`, `git_diff`, `git_log`, `gh`, `shell`
 - Native OpenAI tool-calling API + text-based fallback parser
 - Git workflow commands: `/diff`, `/commit`, `/review`, `/undo`
 - `/run` for shell commands, `/ask` for tool-free answers
