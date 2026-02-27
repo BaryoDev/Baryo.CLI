@@ -70,6 +70,11 @@ type streamResult struct {
 // The channel is closed when streaming ends. On completion the streamResult is
 // sent via the result channel so callers can inspect accumulated tool calls.
 func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, tools []ToolDefinition) (<-chan StreamEvent, <-chan streamResult) {
+	// Anthropic uses a completely different API format — delegate to native adapter.
+	if ep.Provider == "anthropic" {
+		return streamChatAnthropic(ctx, ep, model, messages, params, tools)
+	}
+
 	ch := make(chan StreamEvent, 64)
 	resCh := make(chan streamResult, 1)
 

@@ -41,8 +41,7 @@ type AppModel struct {
 	searchProvider   string
 	searchAPIKey     string
 	permissionMode   string // "auto", "confirm", "suggest"
-	geminiAPIKey     string
-	openRouterAPIKey string
+	providerKeys     map[string]string
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
@@ -125,10 +124,9 @@ func WithPermissionMode(mode string) AppOption {
 }
 
 // WithProviderKeys sets API keys for cloud model providers.
-func WithProviderKeys(gemini, openRouter string) AppOption {
+func WithProviderKeys(keys map[string]string) AppOption {
 	return func(a *AppModel) {
-		a.geminiAPIKey = gemini
-		a.openRouterAPIKey = openRouter
+		a.providerKeys = keys
 	}
 }
 
@@ -231,7 +229,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey, m.mcpManager)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.mcpManager)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -396,8 +394,7 @@ func (m AppModel) View() string {
 // Also appends models from configured cloud providers (Gemini, OpenRouter).
 func (m AppModel) loadModels() tea.Cmd {
 	socketPath := m.socketPath
-	geminiKey := m.geminiAPIKey
-	openRouterKey := m.openRouterAPIKey
+	keys := m.providerKeys
 	return func() tea.Msg {
 		var models []docker.DockerModel
 		var err error
@@ -411,13 +408,11 @@ func (m AppModel) loadModels() tea.Cmd {
 		}
 
 		// Append cloud provider models (non-fatal on error).
-		if geminiKey != "" {
-			if pm, e := docker.ListProviderModels("gemini", geminiKey); e == nil {
-				models = append(models, pm...)
+		for provider, key := range keys {
+			if key == "" {
+				continue
 			}
-		}
-		if openRouterKey != "" {
-			if pm, e := docker.ListProviderModels("openrouter", openRouterKey); e == nil {
+			if pm, e := docker.ListProviderModels(provider, key); e == nil {
 				models = append(models, pm...)
 			}
 		}
@@ -442,7 +437,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey, m.mcpManager)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.mcpManager)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

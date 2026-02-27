@@ -144,7 +144,7 @@ func main() {
 			tui.WithParams(cfg.Params),
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 			tui.WithPermissionMode(cfg.PermissionMode),
-			tui.WithProviderKeys(cfg.GeminiAPIKey, cfg.OpenRouterAPIKey),
+			tui.WithProviderKeys(cfg.ProviderKeys),
 		}
 
 		if len(cfg.MCPServers) > 0 {
@@ -253,31 +253,69 @@ func resolveModel(cfg *config.Config) (docker.DockerModel, error) {
 	return cli.MatchModel(cfg.Model, models)
 }
 
+// prefixToProvider maps model name prefixes to provider names for quick detection.
+var prefixToProvider = []struct {
+	prefixes []string
+	provider string
+}{
+	{[]string{"gemini-"}, "gemini"},
+	{[]string{"gpt-", "o1", "o3", "chatgpt-"}, "openai"},
+	{[]string{"claude-"}, "anthropic"},
+	{[]string{"deepseek-"}, "deepseek"},
+	{[]string{"grok-"}, "xai"},
+	{[]string{"mistral-", "codestral", "pixtral"}, "mistral"},
+	{[]string{"sonar"}, "perplexity"},
+	{[]string{"command-"}, "cohere"},
+}
+
 // tryProviderModel checks if the model name matches a known provider prefix
 // and returns the model directly without listing.
 func tryProviderModel(cfg *config.Config) (docker.DockerModel, bool) {
 	lower := strings.ToLower(cfg.Model)
-	switch {
-	case strings.HasPrefix(lower, "gemini-") && cfg.GeminiAPIKey != "":
-		return docker.DockerModel{Name: cfg.Model, Tag: cfg.Model, Provider: "gemini"}, true
-	default:
-		// For OpenRouter, model names are like "meta-llama/llama-3..."
-		// Can't reliably detect from prefix; user should set the model name explicitly
-		// and it'll be picked up via provider key in the TUI model list.
-		return docker.DockerModel{}, false
+	for _, entry := range prefixToProvider {
+		for _, prefix := range entry.prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				if key, ok := cfg.ProviderKeys[entry.provider]; ok && key != "" {
+					dm := docker.DockerModel{
+						Name:     cfg.Model,
+						Tag:      cfg.Model,
+						Provider: entry.provider,
+					}
+					// Restore pricing.
+					switch entry.provider {
+					case "gemini":
+						p := docker.LookupGeminiPricing(cfg.Model)
+						dm.PromptPrice = p.PromptPrice
+						dm.CompletionPrice = p.CompletionPrice
+					case "openai":
+						p := docker.LookupOpenAIPricing(cfg.Model)
+						dm.PromptPrice = p.PromptPrice
+						dm.CompletionPrice = p.CompletionPrice
+					case "anthropic":
+						p := docker.LookupAnthropicPricing(cfg.Model)
+						dm.PromptPrice = p.PromptPrice
+						dm.CompletionPrice = p.CompletionPrice
+					default:
+						p := docker.LookupProviderPricing(entry.provider, cfg.Model)
+						dm.PromptPrice = p.PromptPrice
+						dm.CompletionPrice = p.CompletionPrice
+					}
+					return dm, true
+				}
+			}
+		}
 	}
+	return docker.DockerModel{}, false
 }
 
 // endpointForModel returns the appropriate endpoint for a model.
 func endpointForModel(cfg config.Config, model docker.DockerModel) docker.Endpoint {
-	switch model.Provider {
-	case "gemini":
-		return docker.ProviderEndpoint("gemini", cfg.GeminiAPIKey)
-	case "openrouter":
-		return docker.ProviderEndpoint("openrouter", cfg.OpenRouterAPIKey)
-	default:
-		return docker.LocalEndpoint(cfg.SocketPath)
+	if model.Provider != "" {
+		if key, ok := cfg.ProviderKeys[model.Provider]; ok {
+			return docker.ProviderEndpoint(model.Provider, key)
+		}
 	}
+	return docker.LocalEndpoint(cfg.SocketPath)
 }
 
 // isProviderModel returns true if the model is a cloud provider model.

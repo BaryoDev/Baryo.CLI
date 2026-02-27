@@ -35,6 +35,9 @@ type Config struct {
 	PermissionMode   string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
 	GeminiAPIKey     string            `yaml:"gemini_api_key"`
 	OpenRouterAPIKey string            `yaml:"openrouter_api_key"`
+	OpenAIAPIKey     string            `yaml:"openai_api_key"`
+	AnthropicAPIKey  string            `yaml:"anthropic_api_key"`
+	ProviderKeys     map[string]string `yaml:"provider_keys"`
 	MCPServers       []mcp.ServerConfig `yaml:"mcp_servers"`
 }
 
@@ -94,7 +97,32 @@ func Load() Config {
 	// Environment variable overrides
 	applyEnv(&cfg)
 
+	// Build unified provider keys map from all sources.
+	cfg.BuildProviderKeys()
+
 	return cfg
+}
+
+// BuildProviderKeys merges individual API key fields and env vars into
+// the unified ProviderKeys map. Precedence: env vars > provider_keys yaml > individual fields.
+func (c *Config) BuildProviderKeys() {
+	if c.ProviderKeys == nil {
+		c.ProviderKeys = make(map[string]string)
+	}
+	// Individual fields are lowest precedence — only set if not already present.
+	legacy := map[string]string{
+		"gemini":     c.GeminiAPIKey,
+		"openrouter": c.OpenRouterAPIKey,
+		"openai":     c.OpenAIAPIKey,
+		"anthropic":  c.AnthropicAPIKey,
+	}
+	for provider, key := range legacy {
+		if key != "" {
+			if _, exists := c.ProviderKeys[provider]; !exists {
+				c.ProviderKeys[provider] = key
+			}
+		}
+	}
 }
 
 // loadFile reads a YAML config file and merges non-zero values into cfg.
@@ -145,6 +173,20 @@ func loadFile(path string, cfg *Config) {
 	if file.OpenRouterAPIKey != "" {
 		cfg.OpenRouterAPIKey = file.OpenRouterAPIKey
 	}
+	if file.OpenAIAPIKey != "" {
+		cfg.OpenAIAPIKey = file.OpenAIAPIKey
+	}
+	if file.AnthropicAPIKey != "" {
+		cfg.AnthropicAPIKey = file.AnthropicAPIKey
+	}
+	if len(file.ProviderKeys) > 0 {
+		if cfg.ProviderKeys == nil {
+			cfg.ProviderKeys = make(map[string]string)
+		}
+		for k, v := range file.ProviderKeys {
+			cfg.ProviderKeys[k] = v
+		}
+	}
 	if len(file.MCPServers) > 0 {
 		cfg.MCPServers = file.MCPServers
 	}
@@ -190,6 +232,34 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_OPENROUTER_API_KEY"); v != "" {
 		cfg.OpenRouterAPIKey = v
+	}
+	if v := os.Getenv("BARYO_OPENAI_API_KEY"); v != "" {
+		cfg.OpenAIAPIKey = v
+	}
+	if v := os.Getenv("BARYO_ANTHROPIC_API_KEY"); v != "" {
+		cfg.AnthropicAPIKey = v
+	}
+
+	// New provider env vars (written directly into ProviderKeys map).
+	providerEnvVars := map[string]string{
+		"groq":       "BARYO_GROQ_API_KEY",
+		"mistral":    "BARYO_MISTRAL_API_KEY",
+		"together":   "BARYO_TOGETHER_API_KEY",
+		"fireworks":  "BARYO_FIREWORKS_API_KEY",
+		"deepseek":   "BARYO_DEEPSEEK_API_KEY",
+		"xai":        "BARYO_XAI_API_KEY",
+		"cerebras":   "BARYO_CEREBRAS_API_KEY",
+		"perplexity": "BARYO_PERPLEXITY_API_KEY",
+		"sambanova":  "BARYO_SAMBANOVA_API_KEY",
+		"cohere":     "BARYO_COHERE_API_KEY",
+	}
+	for provider, envKey := range providerEnvVars {
+		if v := os.Getenv(envKey); v != "" {
+			if cfg.ProviderKeys == nil {
+				cfg.ProviderKeys = make(map[string]string)
+			}
+			cfg.ProviderKeys[provider] = v
+		}
 	}
 }
 

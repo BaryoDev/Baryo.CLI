@@ -50,12 +50,20 @@ func DetectModelHints(modelTag string) ModelHints {
 			ContextWindow: 32768,
 		}
 
+	case strings.HasPrefix(lower, "codestral"):
+		temp := 0.7
+		return ModelHints{
+			Family:        "mistral",
+			Temperature:   &temp,
+			ContextWindow: 256000,
+		}
+
 	case strings.Contains(lower, "mistral"):
 		temp := 0.7
 		return ModelHints{
 			Family:        "mistral",
 			Temperature:   &temp,
-			ContextWindow: 32768,
+			ContextWindow: 128000,
 		}
 
 	case strings.Contains(lower, "gemma"):
@@ -72,6 +80,57 @@ func DetectModelHints(modelTag string) ModelHints {
 			Family:        "gemini",
 			Temperature:   &temp,
 			ContextWindow: 131072,
+		}
+
+	case strings.HasPrefix(lower, "gpt-") ||
+		strings.HasPrefix(lower, "o1") ||
+		strings.HasPrefix(lower, "o3") ||
+		strings.HasPrefix(lower, "chatgpt-"):
+		temp := 1.0
+		return ModelHints{
+			Family:        "openai",
+			Temperature:   &temp,
+			ContextWindow: 128000,
+		}
+
+	case strings.HasPrefix(lower, "claude-"):
+		temp := 1.0
+		return ModelHints{
+			Family:        "anthropic",
+			Temperature:   &temp,
+			ContextWindow: 200000,
+		}
+
+	case strings.HasPrefix(lower, "deepseek-"):
+		temp := 1.0
+		return ModelHints{
+			Family:        "deepseek",
+			Temperature:   &temp,
+			ContextWindow: 64000,
+		}
+
+	case strings.HasPrefix(lower, "grok-"):
+		temp := 1.0
+		return ModelHints{
+			Family:        "xai",
+			Temperature:   &temp,
+			ContextWindow: 131072,
+		}
+
+	case strings.HasPrefix(lower, "sonar"):
+		temp := 1.0
+		return ModelHints{
+			Family:        "perplexity",
+			Temperature:   &temp,
+			ContextWindow: 128000,
+		}
+
+	case strings.HasPrefix(lower, "command-"):
+		temp := 0.7
+		return ModelHints{
+			Family:        "cohere",
+			Temperature:   &temp,
+			ContextWindow: 128000,
 		}
 
 	default:
