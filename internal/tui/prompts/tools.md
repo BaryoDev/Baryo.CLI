@@ -28,6 +28,8 @@ Only suggest /remember when the user says something NEW like "I prefer...", "alw
 /undo — undo last commit
 /run <cmd> — run a shell command
 /ask <question> — quick answer without tools
+/plan <prompt> — enter plan mode (read-only tools, explore codebase + produce implementation plan)
+/plan done — exit plan mode
 /skills — list available skills
 /skill <name> — activate a skill
 /remember <fact> — save a memory for future sessions

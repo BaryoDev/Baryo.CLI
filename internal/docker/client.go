@@ -61,8 +61,9 @@ func parseSocketAddr(socketPath string) (network, addr string) {
 
 // streamResult holds the final state after a raw streaming call completes.
 type streamResult struct {
-	ToolCalls []ToolCall  // accumulated tool calls (if any)
-	Usage     *UsageStats // token usage from the final SSE frame (if reported)
+	ToolCalls    []ToolCall  // accumulated tool calls (if any)
+	Usage        *UsageStats // token usage from the final SSE frame (if reported)
+	FinishReason string      // "stop", "length", "tool_calls", etc.
 }
 
 // streamChatRaw sends a chat request and streams events into the returned channel.
@@ -139,6 +140,7 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 		}
 		var toolAccs []toolCallAcc
 		var lastUsage *UsageStats
+		var finishReason string
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -164,6 +166,9 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 			}
 
 			for _, choice := range chunk.Choices {
+				if choice.FinishReason != nil {
+					finishReason = *choice.FinishReason
+				}
 				// Text content
 				if choice.Delta.Content != "" {
 					select {
@@ -173,20 +178,29 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 					}
 				}
 
-				// Tool call fragments
+				// Tool call fragments.
+				// Some providers (Gemini) send all parallel tool calls
+				// with index 0. When a new function name appears at an
+				// already-occupied index, allocate a fresh entry.
 				for _, dtc := range choice.Delta.ToolCalls {
-					// Grow accumulator slice if needed
-					for dtc.Index >= len(toolAccs) {
+					idx := dtc.Index
+					for idx >= len(toolAccs) {
+						toolAccs = append(toolAccs, toolCallAcc{})
+					}
+					if dtc.Function != nil && dtc.Function.Name != "" &&
+						toolAccs[idx].funcName != "" &&
+						toolAccs[idx].funcName != dtc.Function.Name {
+						idx = len(toolAccs)
 						toolAccs = append(toolAccs, toolCallAcc{})
 					}
 					if dtc.ID != "" {
-						toolAccs[dtc.Index].id = dtc.ID
+						toolAccs[idx].id = dtc.ID
 					}
 					if dtc.Function != nil {
 						if dtc.Function.Name != "" {
-							toolAccs[dtc.Index].funcName = dtc.Function.Name
+							toolAccs[idx].funcName = dtc.Function.Name
 						}
-						toolAccs[dtc.Index].args.WriteString(dtc.Function.Arguments)
+						toolAccs[idx].args.WriteString(dtc.Function.Arguments)
 					}
 				}
 			}
@@ -205,30 +219,57 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 			})
 		}
 
-		resCh <- streamResult{ToolCalls: calls, Usage: lastUsage}
+		resCh <- streamResult{ToolCalls: calls, Usage: lastUsage, FinishReason: finishReason}
 	}()
 
 	return ch, resCh
 }
 
+// maxContinuations is the maximum number of auto-continue rounds for
+// responses truncated at max_tokens (finish_reason == "length").
+const maxContinuations = 3
+
 // StreamChat sends a chat request and streams events. No tools are provided.
+// If the response is truncated (finish_reason == "length"), it auto-continues
+// up to maxContinuations times.
 func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams) <-chan StreamEvent {
-	ch, resCh := streamChatRaw(ctx, ep, model, messages, params, nil)
 	out := make(chan StreamEvent, 64)
 	go func() {
 		defer close(out)
-		for evt := range ch {
-			select {
-			case out <- evt:
-			case <-ctx.Done():
-				return
+
+		msgs := make([]ChatMessage, len(messages))
+		copy(msgs, messages)
+		var lastUsage *UsageStats
+
+		for attempt := 0; attempt <= maxContinuations; attempt++ {
+			var contentBuf string
+			ch, resCh := streamChatRaw(ctx, ep, model, msgs, params, nil)
+			for evt := range ch {
+				if evt.Token != "" {
+					contentBuf += evt.Token
+				}
+				select {
+				case out <- evt:
+				case <-ctx.Done():
+					return
+				}
 			}
+			res, ok := <-resCh
+			if !ok {
+				break
+			}
+			if res.Usage != nil {
+				lastUsage = res.Usage
+			}
+			if res.FinishReason != "length" {
+				break
+			}
+			// Truncated — append partial response and continue.
+			msgs = append(msgs, NewChatMessage("assistant", contentBuf))
+			msgs = append(msgs, NewChatMessage("user", "Continue"))
 		}
-		var usage *UsageStats
-		if res, ok := <-resCh; ok {
-			usage = res.Usage
-		}
-		out <- StreamEvent{Done: true, Usage: usage}
+
+		out <- StreamEvent{Done: true, Usage: lastUsage}
 	}()
 	return out
 }

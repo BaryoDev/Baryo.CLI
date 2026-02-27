@@ -8,11 +8,12 @@ import "strings"
 
 // ModelHints contains model-family-specific parameter recommendations.
 type ModelHints struct {
-	Family       string   // "qwen", "llama", "mistral", "phi", "gemma", "unknown"
-	DisableThink bool     // append /no_think to system prompt (qwen3)
-	Temperature  *float64 // recommended default if user hasn't set one
-	TopK         *int     // recommended top_k
-	StopTokens   []string // extra stop sequences
+	Family        string   // "qwen", "llama", "mistral", "phi", "gemma", "unknown"
+	DisableThink  bool     // append /no_think to system prompt (qwen3)
+	Temperature   *float64 // recommended default if user hasn't set one
+	TopK          *int     // recommended top_k
+	StopTokens    []string // extra stop sequences
+	ContextWindow int      // estimated context window size in tokens (0 = use default 8192)
 }
 
 // DetectModelHints inspects the model tag string and returns optimized defaults
@@ -25,51 +26,58 @@ func DetectModelHints(modelTag string) ModelHints {
 		temp := 0.7
 		topK := 20
 		return ModelHints{
-			Family:       "qwen",
-			DisableThink: true,
-			Temperature:  &temp,
-			TopK:         &topK,
+			Family:        "qwen",
+			DisableThink:  true,
+			Temperature:   &temp,
+			TopK:          &topK,
+			ContextWindow: 8192,
 		}
 
 	case strings.Contains(lower, "phi"):
 		temp := 0.7
 		return ModelHints{
-			Family:      "phi",
-			Temperature: &temp,
-			StopTokens:  []string{"<|end|>", "<|endoftext|>"},
+			Family:        "phi",
+			Temperature:   &temp,
+			StopTokens:    []string{"<|end|>", "<|endoftext|>"},
+			ContextWindow: 8192,
 		}
 
 	case strings.Contains(lower, "llama"):
 		temp := 0.7
 		return ModelHints{
-			Family:      "llama",
-			Temperature: &temp,
+			Family:        "llama",
+			Temperature:   &temp,
+			ContextWindow: 32768,
 		}
 
 	case strings.Contains(lower, "mistral"):
 		temp := 0.7
 		return ModelHints{
-			Family:      "mistral",
-			Temperature: &temp,
+			Family:        "mistral",
+			Temperature:   &temp,
+			ContextWindow: 32768,
 		}
 
 	case strings.Contains(lower, "gemma"):
 		temp := 0.7
 		return ModelHints{
-			Family:      "gemma",
-			Temperature: &temp,
+			Family:        "gemma",
+			Temperature:   &temp,
+			ContextWindow: 8192,
 		}
 
 	case strings.HasPrefix(lower, "gemini"):
 		temp := 1.0
 		return ModelHints{
-			Family:      "gemini",
-			Temperature: &temp,
+			Family:        "gemini",
+			Temperature:   &temp,
+			ContextWindow: 131072,
 		}
 
 	default:
 		return ModelHints{
-			Family: "unknown",
+			Family:        "unknown",
+			ContextWindow: 8192,
 		}
 	}
 }

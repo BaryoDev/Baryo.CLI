@@ -92,6 +92,44 @@ func DockerDefinitions() []docker.ToolDefinition {
 // scriptToolNames are the tools needed for skill script execution.
 var scriptToolNames = []string{"run_code", "run_script"}
 
+// Names returns the names of all registered tools.
+func Names() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ReadOnlyDefinitions returns tool definitions for non-destructive tools only.
+// Used in plan mode to restrict the model to read-only exploration.
+func ReadOnlyDefinitions() []Definition {
+	var defs []Definition
+	for _, t := range registry {
+		if !t.Destructive {
+			defs = append(defs, t.Def)
+		}
+	}
+	return defs
+}
+
+// ReadOnlyDockerDefinitions converts non-destructive tool definitions to docker.ToolDefinition format.
+func ReadOnlyDockerDefinitions() []docker.ToolDefinition {
+	defs := ReadOnlyDefinitions()
+	out := make([]docker.ToolDefinition, len(defs))
+	for i, d := range defs {
+		out[i] = docker.ToolDefinition{
+			Type: d.Type,
+			Function: docker.FunctionDefinition{
+				Name:        d.Function.Name,
+				Description: d.Function.Description,
+				Parameters:  d.Function.Parameters,
+			},
+		}
+	}
+	return out
+}
+
 // ScriptDefinitions returns only the run_code and run_script tool definitions.
 // Used when a skill is active to reduce tool count for smaller models.
 func ScriptDefinitions() []Definition {

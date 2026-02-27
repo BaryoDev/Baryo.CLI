@@ -53,14 +53,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 		var lastUsage *UsageStats
 
 		for round := 0; round < maxRounds; round++ {
-			// Only pass tool definitions on the first round. Continuation
-			// rounds use user-role results which don't require the "tool" role
-			// that many local models (Gemma, etc.) reject.
-			var roundTools []ToolDefinition
-			if round == 0 {
-				roundTools = toolDefs
-			}
-			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, roundTools)
+			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, toolDefs)
 
 			// Forward all streaming events (tokens, errors).
 			var contentBuf string
@@ -101,6 +94,13 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 				validNames := buildValidToolNames(toolDefs)
 				textCalls := parseTextToolCalls(contentBuf, validNames)
 				if len(textCalls) == 0 {
+					// Auto-continue: if truncated at max_tokens, append
+					// partial response and ask the model to continue.
+					if res.FinishReason == "length" {
+						msgs = append(msgs, NewChatMessage("assistant", contentBuf))
+						msgs = append(msgs, NewChatMessage("user", "Continue"))
+						continue // next round
+					}
 					out <- StreamEvent{Done: true, Usage: lastUsage}
 					return
 				}

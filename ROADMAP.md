@@ -2,6 +2,19 @@
 
 Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. Every feature should strengthen at least one of these.
 
+## Philosophy: Local-First with Cloud Escape Hatch
+
+Baryo is a **local-first** tool — models run on your machine via Docker, your data never leaves your laptop, and there are no per-token fees. This is the default and recommended experience.
+
+However, local models have real tradeoffs. A 7B parameter model running in 8GB of RAM cannot match the reasoning depth of a cloud model with 128K+ context and hundreds of billions of parameters. In practice this means:
+
+- **Local models** produce shallower reports, struggle with many tools, and need aggressive prompt/tool filtering to fit within small context windows.
+- **Cloud models** (Gemini, OpenRouter) chain complex multi-round tool calls, write deeper analysis, and handle the full MCP tool suite without filtering.
+
+Baryo handles this dynamically — the CLI detects the model's context window and available RAM, then adjusts how many tools and how much prompt context to send. Local models get a compact, filtered set; cloud models get everything. Both use the same pipeline, and the user can switch freely.
+
+The tradeoff is intentional: **privacy and cost vs. capability**. Most daily tasks (code review, quick edits, file exploration) work great locally. For deep research, multi-source reports, and complex agent workflows, cloud models shine. Baryo supports both without compromise.
+
 ---
 
 ## High Impact — Major Features
@@ -15,16 +28,6 @@ End-to-end GitHub workflow via the `gh` CLI.
 - `/pr status` — show PR review status (approved/pending/changes requested)
 - Respond to PR review comments and push fixes
 - Branch management: create, switch, merge, delete
-
-### Plan Mode
-Read-only analysis and planning before coding. Inspired by Claude Code and Copilot CLI.
-
-- `/plan` — enter plan mode (model can read but not write)
-- Model analyzes codebase, proposes step-by-step implementation plan
-- User approves, rejects, or modifies the plan
-- On approval, switch to execution mode and implement
-- Architecture decisions documented as part of the plan
-- Useful for complex refactors and multi-file changes
 
 ### Agent Modes
 Specialized modes with different tool access and behavior.
@@ -72,15 +75,6 @@ Spawn specialized sub-tasks for parallel or isolated work. Inspired by Kimi CLI 
 - Parallel task execution for independent work
 - Results merged back into main conversation
 - Use cases: research one topic while coding another, run tests in background
-
-### MCP (Model Context Protocol) Support
-Universal tool connectivity via the MCP standard.
-
-- Connect to external MCP servers (GitHub, Jira, Slack, databases, etc.)
-- MCP server config in `~/.baryo/config.yaml` or `.baryo/config.yaml`
-- `baryo mcp add/list/remove` management commands
-- Dynamically register tools from MCP servers alongside built-in tools
-- Compatible with Claude Code and Kimi CLI MCP configs
 
 ### RAG (Retrieval-Augmented Generation)
 Index project files and auto-retrieve relevant context.
@@ -215,6 +209,32 @@ Allow users to add custom tools via config.
 ---
 
 ## Completed
+
+### Dynamic Model-Aware Agent Pipeline
+- Context window detection per model family (8K for Qwen/Phi/Gemma, 32K for Llama/Mistral, 128K+ for Gemini)
+- Cloud vs local endpoint detection — cloud models skip all tool filtering, local models get aggressive compaction
+- MCP tool filtering: redundant servers (filesystem, git, memory) excluded for small models, all included for large
+- Schema trimming and description compaction for small context windows
+- Auto-continue on truncation: when `finish_reason == "length"`, automatically sends "Continue" and appends response
+- Multi-round tool calling: tools available on every round (not just first), enabling complex chained workflows
+- Parallel tool call fix for Gemini (index deduplication for providers that reuse index 0)
+- Hallucinated tool call stripping: catches `<tool_call>` and `<tool_code>` (Gemini) blocks
+- Ambiguous skill keyword filtering: common words like "report", "memo", "letter" no longer trigger document skills
+
+### Plan Mode
+- `/plan <prompt>` enters read-only analysis mode (model can read but not write)
+- Model explores codebase and proposes step-by-step implementation plan
+- `/plan done` exits plan mode and restores normal tool access
+- Header bar shows "plan" indicator when active
+- Auto-resets on `/clear`
+
+### MCP (Model Context Protocol) Support
+- Connect external tool servers (GitHub, databases, Slack, etc.) via MCP standard
+- Server config in `~/.baryo/config.yaml` or `.baryo/config.yaml`
+- `/mcp` lists connected servers and their available tools
+- MCP tools appear alongside built-in tools transparently
+- Works in both interactive and headless (`-p`) modes
+- Failed server connections are non-fatal (app continues without them)
 
 ### File Write & Edit Tools
 - `write_file` tool — create or overwrite files with auto-directory creation

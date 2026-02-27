@@ -107,6 +107,24 @@ type ChatModel struct {
 	confirmPending bool             // true while waiting for y/n
 	confirmPrompt  string           // rendered prompt text for the user
 	pendingConfirm chan<- bool       // response channel for the pending confirm
+
+	// Plan mode
+	planMode bool // true when /plan is active; restricts tools to read-only
+
+	// MCP (Model Context Protocol) servers
+	mcpManager MCPManager // nil when no MCP servers configured
+}
+
+// MCPManager is the interface for MCP server management.
+// Defined as an interface to avoid import cycles between tui and mcp packages.
+type MCPManager interface {
+	ToolDefinitions() []docker.ToolDefinition
+	CompactToolDefinitions(nativeNames []string, contextWindow int) []docker.ToolDefinition
+	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
+	IsMCPTool(name string) bool
+	ServerNames() []string
+	ServerTools(name string) []string
+	Close()
 }
 
 // chatEntry is a rendered message in the history.
@@ -116,7 +134,7 @@ type chatEntry struct {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, model docker.DockerModel, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(model.Name, model.Tag)
 	ep := endpointForModel(socketPath, model, geminiAPIKey, openRouterAPIKey)
@@ -134,7 +152,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 		markdown:         true,
 		historyIdx:       -1,
 		session:          sess,
-		contextLimit:     8192,
+		contextLimit:     contextWindowFor(docker.DetectModelHints(model.Tag)),
 		searchProvider:   searchProvider,
 		searchAPIKey:     searchAPIKey,
 		skillIndex:       config.SkillIndex(),
@@ -144,11 +162,12 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params docker.Chat
 		confirmCh:        make(chan confirmRequest, 1),
 		promptPrice:      model.PromptPrice,
 		completionPrice:  model.CompletionPrice,
+		mcpManager:       mcpMgr,
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params docker.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode, geminiAPIKey, openRouterAPIKey string, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -186,7 +205,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		markdown:         true,
 		historyIdx:       -1,
 		session:          sess,
-		contextLimit:     8192,
+		contextLimit:     contextWindowFor(docker.DetectModelHints(model.Tag)),
 		searchProvider:   searchProvider,
 		searchAPIKey:     searchAPIKey,
 		skillIndex:       config.SkillIndex(),
@@ -196,6 +215,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		confirmCh:        make(chan confirmRequest, 1),
 		promptPrice:      model.PromptPrice,
 		completionPrice:  model.CompletionPrice,
+		mcpManager:       mcpMgr,
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -610,6 +630,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				role:    "user",
 				content: text,
 			})
+
+			// Plan mode: always use read-only tools, skip rewrite
+			if m.planMode {
+				return m.startToolStream(text, true, false)
+			}
 
 			hasSkill := m.hasActiveScripts()
 			wantsTools := needsTools(text)
@@ -1216,6 +1241,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.messages = nil
 		m.history = nil
 		m.session = sess
+		m.planMode = false
 		m.contextTokens = estimateTokens(m.buildMessages())
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
@@ -1481,6 +1507,30 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleForget(strings.TrimPrefix(text, "/forget "))
 		}
 
+		if trimmed == "/mcp" {
+			return m.handleMCPList()
+		}
+
+		if trimmed == "/plan" {
+			if m.planMode {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: "Already in plan mode. Type your questions or /plan done to exit.",
+				})
+			} else {
+				m.history = append(m.history, chatEntry{
+					role:    "assistant",
+					content: "Usage: /plan <prompt> to enter plan mode, /plan done to exit.",
+				})
+			}
+			m.updateViewport()
+			return m, nil
+		}
+
+		if strings.HasPrefix(text, "/plan ") {
+			return m.handlePlan(strings.TrimPrefix(text, "/plan "))
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    "assistant",
 			content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", text),
@@ -1526,8 +1576,33 @@ var researchAnalysisTemplate string
 //go:embed prompts/research_report.md
 var researchReportTemplate string
 
+// planModePrompt instructs the model to explore and plan without making changes.
+//
+//go:embed prompts/plan.md
+var planModePrompt string
+
 // estimateTokens returns a rough token count for a set of messages.
 // Uses the chars/4 heuristic plus per-message overhead.
+// contextWindowFor returns the context window size from model hints,
+// defaulting to 8192 if not specified.
+func contextWindowFor(hints docker.ModelHints) int {
+	if hints.ContextWindow > 0 {
+		return hints.ContextWindow
+	}
+	return 8192
+}
+
+// mcpContextWindow returns the context window to use for MCP tool filtering.
+// Cloud/remote endpoints get a large value so all MCP tools are included
+// (no RAM constraints). Local models use their actual context window which
+// triggers aggressive filtering for small models.
+func (m *ChatModel) mcpContextWindow() int {
+	if m.endpoint.IsRemote() {
+		return 1_000_000 // cloud: no filtering
+	}
+	return m.contextLimit
+}
+
 func estimateTokens(messages []docker.ChatMessage) int {
 	total := 0
 	for _, m := range messages {
@@ -1576,6 +1651,16 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMess
 		sysPrompt += "\n\n/no_think"
 	}
 
+	// Plan mode: append plan mode instructions.
+	if m.planMode {
+		sysPrompt += "\n\n" + planModePrompt
+	}
+
+	// MCP tool guidance: tell the model about external tools when connected.
+	if hasTools && m.mcpManager != nil {
+		sysPrompt += "\n\n" + m.buildMCPGuidance()
+	}
+
 	if m.systemPrompt != "" {
 		sysPrompt += "\n\n" + m.systemPrompt
 	}
@@ -1602,6 +1687,29 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []docker.ChatMess
 
 	msgs = append(msgs, m.messages...)
 	return msgs
+}
+
+// buildMCPGuidance generates a system prompt section describing connected MCP
+// servers and when to prefer them over native tools.
+func (m *ChatModel) buildMCPGuidance() string {
+	servers := m.mcpManager.ServerNames()
+	if len(servers) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("<mcp-tools>\n")
+	b.WriteString("You have access to external MCP (Model Context Protocol) tools from the following servers:\n\n")
+	for _, name := range servers {
+		tools := m.mcpManager.ServerTools(name)
+		b.WriteString(fmt.Sprintf("- %s: %s\n", name, strings.Join(tools, ", ")))
+	}
+	b.WriteString("\nMCP tools are named mcp__<server>__<tool>. Usage guidelines:\n")
+	b.WriteString("- Use MCP tools for capabilities that native tools do NOT have (e.g. memory knowledge graph, time, web search via ddg).\n")
+	b.WriteString("- For file and git operations: prefer native tools — they are faster. MCP filesystem/git tools are available if explicitly requested.\n")
+	b.WriteString("- When the user explicitly asks to use an MCP tool or server by name, use it.\n")
+	b.WriteString("</mcp-tools>")
+	return b.String()
 }
 
 // applyModelHints builds ChatParams with model-family-specific defaults applied.
@@ -1676,17 +1784,31 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	m.cancelFunc = cancel
 
 	var toolDefs []docker.ToolDefinition
-	executor := m.makeExecutor()
-	if hasTools {
-		toolDefs = tools.DockerDefinitions()
+	var executor docker.ToolExecutor
+
+	if m.planMode {
+		// Plan mode: read-only tools only, no confirm prompts
+		toolDefs = tools.ReadOnlyDockerDefinitions()
+		if m.mcpManager != nil {
+			toolDefs = append(toolDefs, m.mcpManager.CompactToolDefinitions(tools.Names(), m.mcpContextWindow())...)
+		}
+		executor = m.makePlanExecutor()
+	} else {
+		executor = m.makeExecutor()
+		if hasTools {
+			toolDefs = tools.DockerDefinitions()
+			if m.mcpManager != nil {
+				toolDefs = append(toolDefs, m.mcpManager.CompactToolDefinitions(tools.Names(), m.mcpContextWindow())...)
+			}
+		}
 	}
 
-	chatParams := m.applyModelHints(hasTools, hasSkill)
-	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
+	chatParams := m.applyModelHints(hasTools || m.planMode, hasSkill)
+	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools || m.planMode), chatParams, toolDefs, executor)
 
 	m.updateViewport()
 	cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
-	if m.permissionMode == "confirm" {
+	if !m.planMode && m.permissionMode == "confirm" {
 		cmds = append(cmds, waitForConfirm(m.confirmCh))
 	}
 	return *m, tea.Batch(cmds...)
@@ -1698,7 +1820,12 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
 	mode := m.permissionMode
 	ch := m.confirmCh
+	mgr := m.mcpManager
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Route MCP tools to the MCP manager.
+		if mgr != nil && mgr.IsMCPTool(name) {
+			return mgr.Execute(ctx, name, argsJSON)
+		}
 		if tools.IsDestructive(name) {
 			switch mode {
 			case "suggest":
@@ -1722,6 +1849,23 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 				}
 			}
 			// "auto" falls through to execute
+		}
+		r := tools.Execute(ctx, name, argsJSON)
+		return r.Content, r.IsError
+	}
+}
+
+// makePlanExecutor returns a tool executor for plan mode that blocks all
+// destructive tools and only allows read-only operations.
+func (m *ChatModel) makePlanExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
+	mgr := m.mcpManager
+	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Block MCP tools in plan mode — can't verify they're read-only.
+		if mgr != nil && mgr.IsMCPTool(name) {
+			return fmt.Sprintf("[plan mode] %s is not available — MCP tools are blocked in plan mode", name), true
+		}
+		if tools.IsDestructive(name) {
+			return fmt.Sprintf("[plan mode] %s is not available — plan mode is read-only", name), true
 		}
 		r := tools.Execute(ctx, name, argsJSON)
 		return r.Content, r.IsError
@@ -2379,6 +2523,8 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /undo              Undo last git commit (soft reset)
   /run <cmd>         Run a shell command and show output
   /ask <question>    Ask without tool access (fast, read-only)
+  /plan <prompt>     Enter plan mode (read-only tools, explore + plan)
+  /plan done         Exit plan mode
   /search <query>    Search the web and summarize results
   /research <topic>  Multi-round deep research with report
   /fetch <url>       Fetch and display a web page
@@ -2399,11 +2545,101 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /export [file]     Export conversation to file
   /copy              Copy last response to clipboard
   /markdown          Toggle markdown rendering
+  /mcp               List connected MCP servers and tools
   /doctor            Run diagnostic checks`
 
 	m.history = append(m.history, chatEntry{
 		role:    "assistant",
 		content: help,
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
+	lower := strings.ToLower(strings.TrimSpace(arg))
+
+	// Exit plan mode
+	if lower == "done" || lower == "exit" {
+		if !m.planMode {
+			m.history = append(m.history, chatEntry{
+				role:    "assistant",
+				content: "Not in plan mode.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		m.planMode = false
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "Exited plan mode. Tools are now unrestricted.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Enter plan mode with the given prompt
+	m.planMode = true
+	m.history = append(m.history, chatEntry{
+		role:    "tool",
+		content: "Entering plan mode (read-only tools)...",
+	})
+
+	// Add user message with [plan] prefix so model knows it's a planning request
+	prompt := "[plan] " + arg
+	m.messages = append(m.messages, docker.NewChatMessage("user", prompt))
+	m.history = append(m.history, chatEntry{
+		role:    "user",
+		content: arg,
+	})
+
+	return m.startToolStream(prompt, true, false)
+}
+
+func (m ChatModel) handleMCPList() (ChatModel, tea.Cmd) {
+	if m.mcpManager == nil {
+		m.history = append(m.history, chatEntry{
+			role: "assistant",
+			content: `No MCP servers configured.
+
+Add servers to ~/.baryo/config.yaml:
+
+  mcp_servers:
+    - name: filesystem
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]
+    - name: github
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env: ["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]`,
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	servers := m.mcpManager.ServerNames()
+	if len(servers) == 0 {
+		m.history = append(m.history, chatEntry{
+			role:    "assistant",
+			content: "No MCP servers connected.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	var b strings.Builder
+	b.WriteString("MCP Servers:\n")
+	for _, name := range servers {
+		tools := m.mcpManager.ServerTools(name)
+		b.WriteString(fmt.Sprintf("\n  %s (%d tools)\n", name, len(tools)))
+		for _, tool := range tools {
+			b.WriteString(fmt.Sprintf("    - %s\n", tool))
+		}
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    "assistant",
+		content: b.String(),
 	})
 	m.updateViewport()
 	return m, nil
@@ -3049,8 +3285,9 @@ const noToolsNotice = "\n\nTools are NOT available for this message. Answer the 
 // middle" effect where small models forget system instructions.
 const longConversationReminder = "[System: Answer the user's question directly. Use tools for file operations and code execution — NEVER fake output. Do NOT hallucinate tool calls.]"
 
-// reHallucinatedToolCall matches <tool_call>...</tool_call> blocks in text.
-var reHallucinatedToolCall = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
+// reHallucinatedToolCall matches hallucinated tool call blocks in text.
+// Covers <tool_call>...</tool_call> (common) and <tool_code>...</tool_code> (Gemini).
+var reHallucinatedToolCall = regexp.MustCompile(`(?s)<tool_(?:call|code)>.*?</tool_(?:call|code)>`)
 
 // reToolUseLine matches lines like "I'll use the X tool to..." followed by JSON-like content.
 var reToolUseLine = regexp.MustCompile(`(?m)^.*(?:I'll use|Let me use|Using) the \w+ tool.*$`)
@@ -3262,9 +3499,13 @@ func (m ChatModel) View() string {
 
 	// Header: baryo · model · mode
 	sep := DimStyle.Render(" · ")
+	modeLabel := m.permissionMode
+	if m.planMode {
+		modeLabel = "plan"
+	}
 	header := TitleStyle.Render("baryo") + sep +
 		AssistantLabelStyle.Render(m.modelName) + sep +
-		HelpStyle.Render(m.permissionMode)
+		HelpStyle.Render(modeLabel)
 
 	frame := spinnerFrames[m.spinFrame]
 	// Separator line

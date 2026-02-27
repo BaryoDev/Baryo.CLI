@@ -142,6 +142,14 @@ func extractTriggerWords(description, body string) []string {
 		add(m[1:] + " file") // pdf file
 	}
 
+	// Ambiguous single words that appear in everyday conversation.
+	// These must not trigger skills by themselves — they need a qualifier
+	// like "word document" or ".docx" to be meaningful.
+	ambiguous := map[string]bool{
+		"report": true, "memo": true, "letter": true, "template": true,
+		"resume": true, "form": true, "document": true, "file": true,
+	}
+
 	// 2. Extract explicit Keywords section from body (only the keyword line itself)
 	for _, line := range strings.Split(body, "\n") {
 		trimLine := strings.TrimSpace(line)
@@ -163,7 +171,8 @@ func extractTriggerWords(description, body string) []string {
 		}
 		for _, kw := range strings.Split(trimLine, ",") {
 			kw = strings.TrimSpace(kw)
-			if len(kw) >= 2 && len(kw) <= 40 {
+			kwLower := strings.ToLower(kw)
+			if len(kw) >= 2 && len(kw) <= 40 && !ambiguous[kwLower] {
 				add(kw)
 			}
 		}
@@ -186,7 +195,7 @@ func extractTriggerWords(description, body string) []string {
 		}
 		// Clean up trailing punctuation
 		phrase = strings.TrimRight(phrase, ".,;:")
-		if len(phrase) >= 3 && len(phrase) <= 40 {
+		if len(phrase) >= 3 && len(phrase) <= 40 && !ambiguous[phrase] {
 			add(phrase)
 		}
 	}

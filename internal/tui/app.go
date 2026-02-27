@@ -5,6 +5,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
@@ -41,6 +43,9 @@ type AppModel struct {
 	permissionMode   string // "auto", "confirm", "suggest"
 	geminiAPIKey     string
 	openRouterAPIKey string
+
+	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
+	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
 
 	preselectedModel *docker.DockerModel
 	resumeSession    *session.Session
@@ -127,6 +132,20 @@ func WithProviderKeys(gemini, openRouter string) AppOption {
 	}
 }
 
+// WithMCPManager sets an already-started MCP server manager.
+func WithMCPManager(mgr MCPManager) AppOption {
+	return func(a *AppModel) {
+		a.mcpManager = mgr
+	}
+}
+
+// WithMCPConfigs sets MCP server configs for async startup during TUI loading.
+func WithMCPConfigs(configs []mcp.ServerConfig) AppOption {
+	return func(a *AppModel) {
+		a.mcpConfigs = configs
+	}
+}
+
 // WithSessionList starts on the session picker screen.
 func WithSessionList(summaries []session.Summary) AppOption {
 	return func(a *AppModel) {
@@ -163,7 +182,27 @@ func (m AppModel) Init() tea.Cmd {
 			return ShowSessionsMsg{Sessions: m.sessionList}
 		}
 	}
-	return tea.Batch(m.spinner.Tick, m.loadModels())
+	cmds := []tea.Cmd{m.spinner.Tick, m.loadModels()}
+	if len(m.mcpConfigs) > 0 {
+		cmds = append(cmds, m.startMCPServers())
+	}
+	return tea.Batch(cmds...)
+}
+
+// MCPReadyMsg signals that MCP servers have finished starting.
+type MCPReadyMsg struct {
+	Manager *mcp.Manager
+	Errors  []error
+}
+
+// startMCPServers starts MCP server connections in the background.
+func (m AppModel) startMCPServers() tea.Cmd {
+	configs := m.mcpConfigs
+	return func() tea.Msg {
+		mgr := mcp.NewManager()
+		errs := mgr.Start(context.Background(), configs)
+		return MCPReadyMsg{Manager: mgr, Errors: errs}
+	}
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -178,13 +217,21 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	// Global message handlers (can arrive from any screen)
+	case MCPReadyMsg:
+		m.mcpManager = msg.Manager
+		// If chat is already active, inject the MCP manager into it.
+		if m.screen == screenChat {
+			m.chat.mcpManager = msg.Manager
+		}
+		return m, nil
+
 	case SessionLoadedMsg:
 		if msg.Err != nil {
 			m.err = msg.Err
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey, m.mcpManager)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -395,7 +442,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model docker.DockerModel) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.geminiAPIKey, m.openRouterAPIKey, m.mcpManager)
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

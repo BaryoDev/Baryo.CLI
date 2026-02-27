@@ -11,10 +11,13 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"context"
+
 	"github.com/arnelirobles/baryo-cli/internal/cli"
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
 	"github.com/arnelirobles/baryo-cli/internal/tunnel"
@@ -107,6 +110,17 @@ func main() {
 			fmt.Fprintf(os.Stderr, "warning: destructive tools require --yolo in headless mode\n")
 		}
 
+		// Start MCP servers only when tools are enabled.
+		var mcpMgr *mcp.Manager
+		if enableTools && len(cfg.MCPServers) > 0 {
+			mcpMgr = mcp.NewManager()
+			errs := mcpMgr.Start(context.Background(), cfg.MCPServers)
+			for _, err := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			}
+			defer mcpMgr.Close()
+		}
+
 		printOpts := cli.PrintOptions{
 			Endpoint:       ep,
 			SystemPrompt:   systemPrompt,
@@ -117,6 +131,7 @@ func main() {
 			MaxTurns:       flags.MaxTurns,
 			OutputFormat:   flags.Output,
 			EnableTools:    enableTools,
+			MCPManager:     mcpMgr,
 		}
 		os.Exit(cli.RunPrint(printOpts))
 		return
@@ -130,6 +145,10 @@ func main() {
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 			tui.WithPermissionMode(cfg.PermissionMode),
 			tui.WithProviderKeys(cfg.GeminiAPIKey, cfg.OpenRouterAPIKey),
+		}
+
+		if len(cfg.MCPServers) > 0 {
+			opts = append(opts, tui.WithMCPConfigs(cfg.MCPServers))
 		}
 
 		// Handle session resume flags

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/docker"
+	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/tunnel"
 	"gopkg.in/yaml.v3"
 )
@@ -34,6 +35,7 @@ type Config struct {
 	PermissionMode   string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
 	GeminiAPIKey     string            `yaml:"gemini_api_key"`
 	OpenRouterAPIKey string            `yaml:"openrouter_api_key"`
+	MCPServers       []mcp.ServerConfig `yaml:"mcp_servers"`
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -142,6 +144,9 @@ func loadFile(path string, cfg *Config) {
 	}
 	if file.OpenRouterAPIKey != "" {
 		cfg.OpenRouterAPIKey = file.OpenRouterAPIKey
+	}
+	if len(file.MCPServers) > 0 {
+		cfg.MCPServers = file.MCPServers
 	}
 }
 

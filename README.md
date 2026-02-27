@@ -209,6 +209,9 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/init` | Generate a BARYO.md for this project |
 | `/system [prompt]` | View or change the system prompt |
 | `/params [k=v]` | View or change model parameters |
+| `/plan <prompt>` | Enter plan mode (read-only tools, produces implementation plan) |
+| `/plan done` | Exit plan mode and restore normal tool access |
+| `/mcp` | List connected MCP servers and their tools |
 | `/context` | Show token usage breakdown |
 | `/cost` | Show session API cost (cloud providers) |
 | `/compact` | Summarize older messages to free context |
@@ -659,6 +662,46 @@ Tools are called automatically when the model decides they're needed. Results ar
 The `gh` tool requires the [GitHub CLI](https://cli.github.com/) to be installed and is restricted to read-only operations (list, view, diff, checks, status).
 
 Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
+
+### Plan mode
+
+Enter a read-only analysis mode where the model explores your codebase and produces an implementation plan before any code changes happen.
+
+```bash
+# Inside the TUI
+/plan refactor the search package to support pagination
+```
+
+In plan mode the model has access to read-only tools (`read_file`, `glob`, `grep`, `list_directory`, `git_status`, `git_diff`, `git_log`) but cannot write files, run shell commands, or execute code. The header bar shows **plan** while the mode is active.
+
+Exit plan mode and restore normal tool access:
+
+```bash
+/plan done
+```
+
+Plan mode also resets automatically on `/clear`.
+
+### MCP support
+
+Connect external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/) standard. MCP lets you plug in GitHub, databases, Slack, and any other MCP-compatible service as additional tools.
+
+**Configure servers** in `~/.baryo/config.yaml` or `.baryo/config.yaml`:
+
+```yaml
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env: ["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]
+```
+
+MCP tools appear alongside built-in tools transparently — the model can call them the same way it calls `read_file` or `grep`. Use `/mcp` inside the TUI to list connected servers and their available tools.
+
+MCP works in both interactive and headless (`-p`) modes. Failed server connections are non-fatal; the app continues without them and logs a warning.
 
 ### Project instructions
 

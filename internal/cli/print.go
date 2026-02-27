@@ -16,6 +16,13 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
 
+// MCPToolProvider is the interface for MCP tool integration in headless mode.
+type MCPToolProvider interface {
+	CompactToolDefinitions(nativeNames []string, contextWindow int) []docker.ToolDefinition
+	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
+	IsMCPTool(name string) bool
+}
+
 // PrintOptions holds all configuration for headless print mode.
 type PrintOptions struct {
 	Endpoint       docker.Endpoint
@@ -27,6 +34,7 @@ type PrintOptions struct {
 	MaxTurns       int
 	OutputFormat   string // "text" or "json"
 	EnableTools    bool
+	MCPManager     MCPToolProvider // nil when no MCP servers configured
 }
 
 // RunPrint runs a single prompt through the model in headless mode.
@@ -50,7 +58,10 @@ func runPrintText(opts PrintOptions) int {
 	}
 
 	toolDefs := tools.DockerDefinitions()
-	executor := makeHeadlessExecutor(opts.PermissionMode)
+	if opts.MCPManager != nil {
+		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
+	}
+	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
 	maxRounds := opts.MaxTurns
 	if maxRounds <= 0 {
 		maxRounds = 5
@@ -137,7 +148,10 @@ func runPrintJSON(opts PrintOptions) int {
 	}
 
 	toolDefs := tools.DockerDefinitions()
-	executor := makeHeadlessExecutor(opts.PermissionMode)
+	if opts.MCPManager != nil {
+		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
+	}
+	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
 	maxRounds := opts.MaxTurns
 	if maxRounds <= 0 {
 		maxRounds = 5
@@ -222,14 +236,37 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []docker.Chat
 // makeHeadlessExecutor returns a tool executor for headless mode.
 // In "auto" mode, all tools are executed. In other modes, destructive tools
 // are blocked with an error message.
-func makeHeadlessExecutor(permissionMode string) docker.ToolExecutor {
+func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) docker.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Route MCP tools to the MCP manager.
+		if mcpMgr != nil && mcpMgr.IsMCPTool(name) {
+			return mcpMgr.Execute(ctx, name, argsJSON)
+		}
 		if permissionMode != "auto" && tools.IsDestructive(name) {
 			return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
 		}
 		result := tools.Execute(ctx, name, argsJSON)
 		return result.Content, result.IsError
 	}
+}
+
+// contextWindowForModel returns the estimated context window for the model.
+func contextWindowForModel(tag string) int {
+	hints := docker.DetectModelHints(tag)
+	if hints.ContextWindow > 0 {
+		return hints.ContextWindow
+	}
+	return 8192
+}
+
+// mcpContextWindow returns the context window used for MCP tool filtering.
+// Cloud/remote endpoints return a large value so all tools are included.
+// Local models return their actual context window for aggressive filtering.
+func mcpContextWindow(ep docker.Endpoint, tag string) int {
+	if ep.IsRemote() {
+		return 1_000_000
+	}
+	return contextWindowForModel(tag)
 }
 
 // printJSON marshals v as indented JSON and writes it to stdout.
