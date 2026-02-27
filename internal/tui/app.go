@@ -247,7 +247,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ShowModelsMsg:
 		if msg.Err != nil {
-			m.err = msg.Err
+			if m.screen == screenChat {
+				m.chat.history = append(m.chat.history, chatEntry{
+					role:    roleError,
+					content: fmt.Sprintf("Models error: %v", msg.Err),
+				})
+				m.chat.updateViewport()
+			} else {
+				m.err = msg.Err
+			}
 			return m, nil
 		}
 		m.screen = screenModelBrowser

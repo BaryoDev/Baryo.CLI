@@ -1257,17 +1257,17 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		keys := m.providerKeys
 		return m, func() tea.Msg {
 			var downloaded []llm.Model
-			var dlErr error
 			if llm.IsRemoteSocket(socketPath) {
-				downloaded, dlErr = llm.ListRemoteModels(socketPath)
+				if m, err := llm.ListRemoteModels(socketPath); err == nil {
+					downloaded = append(downloaded, m...)
+				}
 			} else {
-				downloaded, dlErr = llm.ListModels()
-			}
-			if dlErr != nil {
-				return ShowModelsMsg{Err: dlErr}
+				if m, err := llm.ListModels(); err == nil {
+					downloaded = append(downloaded, m...)
+				}
 			}
 
-			// Append cloud provider models.
+			// Append cloud provider models (non-fatal on error).
 			for provider, key := range keys {
 				if key == "" {
 					continue
@@ -1275,6 +1275,10 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 				if pm, e := llm.ListProviderModels(provider, key); e == nil {
 					downloaded = append(downloaded, pm...)
 				}
+			}
+
+			if len(downloaded) == 0 {
+				return ShowModelsMsg{Err: fmt.Errorf("no models available — configure a cloud provider or install Docker")}
 			}
 
 			if llm.IsRemoteSocket(socketPath) {
