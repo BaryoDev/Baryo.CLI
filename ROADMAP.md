@@ -4,10 +4,10 @@ Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. E
 
 ---
 
-## Core — Essential Next Steps
+## High Impact — Major Features
 
 ### GitHub Workflow (PR, Issues, Code Review)
-End-to-end GitHub workflow via the `gh` CLI. Key differentiator for dev workflows.
+End-to-end GitHub workflow via the `gh` CLI.
 
 - `/pr` — create a PR from current branch with AI-generated title and description
 - `/pr review` — review an open PR (fetch diff, analyze, comment)
@@ -15,10 +15,6 @@ End-to-end GitHub workflow via the `gh` CLI. Key differentiator for dev workflow
 - `/pr status` — show PR review status (approved/pending/changes requested)
 - Respond to PR review comments and push fixes
 - Branch management: create, switch, merge, delete
-
----
-
-## High Impact — Major Features
 
 ### DevOps Toolkit
 Purpose-built tools for infrastructure, deployment, and container management.
