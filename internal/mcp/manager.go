@@ -88,6 +88,7 @@ func (m *Manager) ToolDefinitions() []docker.ToolDefinition {
 			if params == nil {
 				params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
 			}
+			params = sanitizeSchema(params)
 
 			defs = append(defs, docker.ToolDefinition{
 				Type: "function",
@@ -162,6 +163,7 @@ func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int
 			if params == nil {
 				params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
 			}
+			params = sanitizeSchema(params)
 			// Small models: strip verbose schema fields.
 			if !largeContext {
 				params = trimSchema(params)
@@ -178,6 +180,31 @@ func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int
 		}
 	}
 	return defs
+}
+
+// sanitizeSchema ensures all properties in a JSON schema have a "type" field.
+// Some MCP servers emit schemas with properties missing "type" (e.g. GitHub's
+// create_pull_request has "base_branch" without one). Strict providers like
+// Cohere reject these with a 400 error.
+func sanitizeSchema(v interface{}) interface{} {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return v
+	}
+	if props, ok := m["properties"].(map[string]interface{}); ok {
+		for k, pv := range props {
+			if pm, ok := pv.(map[string]interface{}); ok {
+				if _, hasType := pm["type"]; !hasType {
+					pm["type"] = "string"
+				}
+				props[k] = sanitizeSchema(pm)
+			}
+		}
+	}
+	if items, ok := m["items"].(map[string]interface{}); ok {
+		m["items"] = sanitizeSchema(items)
+	}
+	return m
 }
 
 // trimSchema removes verbose fields ($schema, additionalProperties, etc.)

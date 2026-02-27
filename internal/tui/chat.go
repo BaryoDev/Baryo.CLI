@@ -668,8 +668,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			wantsTools := needsTools(text)
 			hasTools := hasSkill || wantsTools
 
-			// Rewrite pass: short, tool-oriented messages get rewritten for clarity
-			if hasTools && !hasSkill && len(text) <= 80 {
+			// Rewrite pass: short, tool-oriented messages get rewritten for clarity.
+			// Skip when tools are disabled — the rewrite prompt is tool-oriented.
+			if hasTools && !hasSkill && m.supportsTools && len(text) <= 80 {
 				m.isStream = true
 				m.toolStatus = "rewriting prompt..."
 				m.streamStart = time.Now()
