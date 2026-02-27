@@ -1678,7 +1678,7 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	var toolDefs []docker.ToolDefinition
 	executor := m.makeExecutor()
 	if hasTools {
-		toolDefs = toDockerToolDefs(tools.AllDefinitions())
+		toolDefs = tools.DockerDefinitions()
 	}
 
 	chatParams := m.applyModelHints(hasTools, hasSkill)
@@ -1867,7 +1867,7 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	toolDefs := toDockerToolDefs(tools.AllDefinitions())
+	toolDefs := tools.DockerDefinitions()
 	executor := m.makeExecutor()
 	m.eventCh = docker.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params, toolDefs, executor)
 
@@ -3367,18 +3367,3 @@ func summarizeToolResult(content string, isError bool) string {
 	return fmt.Sprintf("(%d lines total)\n%s\n... (%d more lines)", len(lines), preview, len(lines)-maxPreviewLines)
 }
 
-// toDockerToolDefs converts tools.Definition slice to docker.ToolDefinition slice.
-func toDockerToolDefs(defs []tools.Definition) []docker.ToolDefinition {
-	out := make([]docker.ToolDefinition, len(defs))
-	for i, d := range defs {
-		out[i] = docker.ToolDefinition{
-			Type: d.Type,
-			Function: docker.FunctionDefinition{
-				Name:        d.Function.Name,
-				Description: d.Function.Description,
-				Parameters:  d.Function.Parameters,
-			},
-		}
-	}
-	return out
-}

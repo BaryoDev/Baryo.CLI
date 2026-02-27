@@ -45,17 +45,6 @@ Go beyond single searches. Multi-step research that scours the internet, compile
 - Export research to markdown file
 - Follow-up: "dig deeper into finding #3" for iterative research
 
-### Headless / CI Mode
-Non-interactive mode for scripts, CI/CD pipelines, and automation. Required for DevOps integration.
-
-- `baryo -p "prompt"` already exists — extend with multi-turn support
-- `--yolo` flag for auto-approving all operations
-- `--max-turns N` to limit execution rounds
-- Output formats: `text`, `json`, `stream-json`
-- Exit codes for success/failure (useful in pipelines)
-- Pipe support: `cat file.go | baryo -p "review this code"`
-- GitHub Actions: `baryo -p "review PR diff" --yolo` in CI workflows
-
 ### Ignore Files
 Prevent the model from reading sensitive files. Security baseline.
 
@@ -276,6 +265,17 @@ Allow users to add custom tools via config.
 ---
 
 ## Completed
+
+### Headless / CI Mode
+- Full tool calling in print mode (`-p`) with multi-turn support
+- `--yolo` flag for auto-approving all destructive operations
+- `--max-turns N` to limit tool-call rounds
+- Output formats: `text` (streaming) and `json` (structured)
+- Exit codes: 0 (success), 1 (runtime error), 2 (config error)
+- Headless executor blocks destructive tools without `--yolo`
+- `--no-tools` flag for simple Q&A without tool overhead
+- Memories injected into system prompt for headless mode
+- Pipe support: `cat file.go | baryo -p "review this" --yolo`
 
 ### Cloud Provider Support & Cost Tracking (v0.2.3)
 - Gemini and OpenRouter as cloud model providers (Gemini, OpenRouter)

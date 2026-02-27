@@ -44,6 +44,9 @@ type Config struct {
 	ShowHelp     bool
 	ShowVer      bool
 	StdinData    string
+	MaxTurns     int
+	Output       string
+	NoTools      bool
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -70,6 +73,9 @@ func Parse() Config {
 	fs.BoolVar(&cfg.Yolo, "y", false, "auto-approve all destructive tool calls")
 	fs.BoolVar(&cfg.Yolo, "yolo", false, "auto-approve all destructive tool calls")
 	fs.BoolVar(&cfg.SkipChecks, "skip-checks", false, "skip startup health checks")
+	fs.IntVar(&cfg.MaxTurns, "max-turns", 0, "max tool-call rounds in print mode (0 = default 5)")
+	fs.StringVar(&cfg.Output, "output", "text", "output format for print mode: text or json")
+	fs.BoolVar(&cfg.NoTools, "no-tools", false, "disable tool calling in print mode")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
@@ -167,6 +173,9 @@ Flags:
   --resume-id <id>      Resume a specific session by ID
   --tunnel <user@host>  Auto-start SSH tunnel to remote Ollama server
   -y, --yolo            Auto-approve all destructive tool calls
+  --max-turns <n>       Max tool-call rounds in print mode (default: 5)
+  --output <fmt>        Output format for print mode: text or json
+  --no-tools            Disable tool calling in print mode
   --skip-checks         Skip startup health checks
   --version             Print version and exit
   --help                Print this help message
@@ -201,5 +210,12 @@ Examples:
   baryo -c                       Resume last session in this directory
   baryo -r                       Pick a session to resume
   cat file.go | baryo -p "explain this"  Pipe stdin as context
+
+Headless / CI:
+  baryo -p "read main.go and summarize" --yolo      Tools with auto-approve
+  baryo -p "list Go files" --yolo --output json      JSON structured output
+  baryo -p "what is 2+2" --no-tools                  Simple Q&A, no tools
+  baryo -p "edit main.go" --yolo --max-turns 2       Limited tool rounds
+  cat main.go | baryo -p "review this" --yolo        Piped input with tools
 `)
 }

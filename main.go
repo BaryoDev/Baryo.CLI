@@ -91,13 +91,34 @@ func main() {
 		model, err := resolveModel(&cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			os.Exit(2)
 		}
 		ep := endpointForModel(cfg, model)
-		if err := cli.RunPrint(ep, cfg.SystemPrompt, model, flags.FullPrompt(), cfg.Params); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+
+		// Inject memories into system prompt for headless mode.
+		systemPrompt := cfg.SystemPrompt
+		if memoriesPrompt != "" {
+			systemPrompt = systemPrompt + "\n\n" + memoriesPrompt
 		}
+
+		// Warn when tools are enabled but permission mode blocks destructive ones.
+		enableTools := !flags.NoTools
+		if enableTools && cfg.PermissionMode != "auto" {
+			fmt.Fprintf(os.Stderr, "warning: destructive tools require --yolo in headless mode\n")
+		}
+
+		printOpts := cli.PrintOptions{
+			Endpoint:       ep,
+			SystemPrompt:   systemPrompt,
+			Model:          model,
+			Prompt:         flags.FullPrompt(),
+			Params:         cfg.Params,
+			PermissionMode: cfg.PermissionMode,
+			MaxTurns:       flags.MaxTurns,
+			OutputFormat:   flags.Output,
+			EnableTools:    enableTools,
+		}
+		os.Exit(cli.RunPrint(printOpts))
 		return
 
 	case cli.ModeInteractive:

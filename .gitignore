@@ -31,3 +31,4 @@ skills/**/.venv/
 # Baryo exports and output files
 exported_sessions/
 output_files/
+blog/

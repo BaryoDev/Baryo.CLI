@@ -7,6 +7,8 @@ package tools
 import (
 	"context"
 	"fmt"
+
+	"github.com/arnelirobles/baryo-cli/internal/docker"
 )
 
 // Result is the outcome of a tool execution.
@@ -68,6 +70,23 @@ func AllDefinitions() []Definition {
 		defs = append(defs, t.Def)
 	}
 	return defs
+}
+
+// DockerDefinitions converts all registered tool definitions to docker.ToolDefinition format.
+func DockerDefinitions() []docker.ToolDefinition {
+	defs := AllDefinitions()
+	out := make([]docker.ToolDefinition, len(defs))
+	for i, d := range defs {
+		out[i] = docker.ToolDefinition{
+			Type: d.Type,
+			Function: docker.FunctionDefinition{
+				Name:        d.Function.Name,
+				Description: d.Function.Description,
+				Parameters:  d.Function.Parameters,
+			},
+		}
+	}
+	return out
 }
 
 // scriptToolNames are the tools needed for skill script execution.

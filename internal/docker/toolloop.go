@@ -36,6 +36,12 @@ func sanitizeToolCallID(id string) string {
 // StreamChatWithTools streams a conversation that may include tool calls.
 // The model can call tools up to maxToolRounds times before the final response.
 func StreamChatWithTools(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor) <-chan StreamEvent {
+	return StreamChatWithToolsN(ctx, ep, model, messages, params, toolDefs, executor, maxToolRounds)
+}
+
+// StreamChatWithToolsN is like StreamChatWithTools but accepts a configurable
+// maximum number of tool-call rounds.
+func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor, maxRounds int) <-chan StreamEvent {
 	out := make(chan StreamEvent, 64)
 
 	go func() {
@@ -46,7 +52,7 @@ func StreamChatWithTools(ctx context.Context, ep Endpoint, model string, message
 
 		var lastUsage *UsageStats
 
-		for round := 0; round < maxToolRounds; round++ {
+		for round := 0; round < maxRounds; round++ {
 			// Only pass tool definitions on the first round. Continuation
 			// rounds use user-role results which don't require the "tool" role
 			// that many local models (Gemma, etc.) reject.

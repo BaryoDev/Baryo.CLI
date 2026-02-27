@@ -105,6 +105,53 @@ baryo -p "generate a .gitignore for Go" > .gitignore
 
 When stdin is piped, it's included as context alongside your prompt.
 
+### Headless / CI mode
+
+Print mode supports full tool calling for CI/CD pipelines and automation. The model can read files, search code, and run tools — just like in the TUI.
+
+```bash
+# Tools with auto-approve (reads files, runs grep, etc.)
+baryo -p "read main.go and summarize" --yolo
+
+# JSON structured output for pipeline consumption
+baryo -p "list all Go files" --yolo --output json
+
+# Simple Q&A without tools
+baryo -p "what is 2+2" --no-tools
+
+# Limit tool rounds for faster execution
+baryo -p "review this project" --yolo --max-turns 2
+
+# Pipe input with tool access
+cat main.go | baryo -p "review this code" --yolo
+```
+
+**Output formats:**
+
+| Format | Description |
+|--------|-------------|
+| `text` (default) | Tokens streamed to stdout, tool status to stderr |
+| `json` | Single JSON object with content, tool calls, and usage stats |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Runtime error (streaming, API, tool failure) |
+| 2 | Configuration error (bad model, missing endpoint) |
+
+In text mode, tool execution status is written to stderr so stdout stays clean for piping:
+
+```
+$ baryo -p "read main.go and count the lines" --yolo
+[tool] read_file          # stderr
+[tool] read_file: ok      # stderr
+main.go has 256 lines.    # stdout
+```
+
+Without `--yolo`, destructive tools (file writes, shell commands) are blocked and the model receives an error message suggesting `--yolo`.
+
 ### Session persistence
 
 Conversations are automatically saved after each turn to `~/.baryo/sessions/`.
@@ -337,6 +384,10 @@ params:
 | `-r`, `--resume` | List and pick a saved session to resume |
 | `--resume-id <id>` | Resume a specific session by ID |
 | `--tunnel <user@host>` | Auto-start SSH tunnel to remote server |
+| `-y`, `--yolo` | Auto-approve all destructive tool calls |
+| `--max-turns <n>` | Max tool-call rounds in print mode (default: 5) |
+| `--output <fmt>` | Output format for print mode: `text` or `json` |
+| `--no-tools` | Disable tool calling in print mode |
 | `--skip-checks` | Skip startup health checks |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
