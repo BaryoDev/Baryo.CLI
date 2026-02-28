@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const baseURL = "https://raw.githubusercontent.com/arnelirobles/baryo-cli/main/default-skills/"
+const baseURL = "https://raw.githubusercontent.com/BaryoDev/Baryo.CLI/main/default-skills/"
 
 // Manifest describes the available starter skills.
 type Manifest struct {
