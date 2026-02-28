@@ -201,6 +201,7 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/search <query>` | Search the web and summarize results |
 | `/research <topic>` | Multi-round deep research with structured report |
 | `/fetch <url>` | Fetch and display a web page |
+| `/setup` | Download or update starter skills from GitHub |
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill (loads full instructions into context) |
 | `/clear` | Start a fresh conversation |
@@ -743,17 +744,20 @@ Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads
 
 ### Skills
 
-Baryo ships with 16 skills based on the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills extend the model with domain-specific knowledge, scripts, and code execution capabilities.
+Baryo includes a starter skill pack and supports community skills based on the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills extend the model with domain-specific knowledge, scripts, and code execution capabilities.
 
-**Auto-activation:** Skills activate automatically when your message matches trigger keywords. Ask "merge these two PDFs" and the `pdf` skill loads instantly — no manual commands needed.
+**First-run setup:** On first launch, Baryo asks if you'd like to download 5 starter skills (code review, code generation, refactoring, debugging, documentation). Press `y` to install them to `~/.baryo/skills/`, or `n` to skip. You can always run `/setup` later to download or update them.
 
 ```bash
-# These just work — the right skill activates automatically
-create a spreadsheet to track expenses        → xlsx
-make me a bouncing ball gif for slack          → slack-gif-creator
-build a pitch deck for my startup              → pptx
-write a technical spec for the new API         → doc-coauthoring
+# Download or update starter skills anytime
+/setup
 ```
+
+The `/setup` command is smart about updates — it tracks file checksums and skips any skills you've customized, so your edits are never overwritten.
+
+**Auto-activation:** Skills activate automatically when your message matches trigger keywords. Ask "create an excel file" and the `code-generation` skill loads instantly — no manual commands needed.
+
+![Skill auto-activation](assets/skill-auto-activation.png)
 
 **Manual activation:**
 
@@ -762,7 +766,17 @@ write a technical spec for the new API         → doc-coauthoring
 /skill pdf           # Activate a specific skill
 ```
 
-**Available skills:**
+**Starter skills** (installed via `/setup`):
+
+| Skill | Description |
+|-------|-------------|
+| `code-review` | Review code for bugs, security, performance, and style |
+| `code-generation` | Generate production code from requirements, following project conventions |
+| `refactoring` | Named refactoring patterns with behavior-preserving transforms |
+| `debugging` | Systematic debugging: reproduce, hypothesize, isolate, fix, verify |
+| `documentation` | READMEs, API docs, inline comments, architecture docs |
+
+**Additional skills** (install manually from [anthropic/skills](https://github.com/anthropics/skills)):
 
 | Skill | Description |
 |-------|-------------|
@@ -814,9 +828,13 @@ my-skill/
 
 Skills are **lazy-loaded** — only names and descriptions are indexed on startup. Full content, scripts, and resources are loaded on-demand when activated. Project-level skills override global skills with the same name.
 
-**Install skills globally:**
+**Install skills:**
 
 ```bash
+# Download starter skills automatically
+/setup
+
+# Or install additional skills manually
 cp -r skills/pdf ~/.baryo/skills/pdf
 ```
 
