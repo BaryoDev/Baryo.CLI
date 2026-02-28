@@ -8,6 +8,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	"github.com/arnelirobles/baryo-cli/internal/setup"
 )
 
 // ModelsLoadedMsg is sent when the model list has been fetched.
@@ -128,4 +129,18 @@ type ResearchProgressMsg struct {
 type ResearchDoneMsg struct {
 	Result search.ResearchResult
 	Err    error
+}
+
+// SetupPromptMsg triggers the first-run setup prompt.
+type SetupPromptMsg struct{}
+
+// SetupProgressMsg carries a download progress update from the setup pipeline.
+type SetupProgressMsg struct {
+	Progress setup.DownloadProgress
+}
+
+// SetupDoneMsg signals that skill setup has completed.
+type SetupDoneMsg struct {
+	Installed int
+	Err       error
 }

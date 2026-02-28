@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/logger"
 )
 
 const maxToolRounds = 5
@@ -123,6 +125,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 			// Get the accumulated result.
 			res, ok := <-resCh
 			if !ok {
+				logger.Debug("tool loop ended", "reason", "channel closed")
 				out <- StreamEvent{Done: true, Usage: lastUsage}
 				return
 			}
@@ -132,6 +135,8 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 				lastUsage = res.Usage
 			}
 
+			logger.Debug("tool loop round complete", "finish_reason", res.FinishReason, "tool_calls", len(res.ToolCalls), "content_len", len(contentBuf))
+
 			// Check for text-based tool calls if no native ones were returned.
 			if len(res.ToolCalls) == 0 {
 				validNames := buildValidToolNames(toolDefs)
@@ -140,6 +145,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 					// Auto-continue: if truncated at max_tokens, append
 					// partial response and ask the model to continue.
 					if res.FinishReason == "length" {
+						logger.Debug("auto-continuing", "reason", "finish_reason=length")
 						msgs = append(msgs, NewChatMessage("assistant", contentBuf))
 						msgs = append(msgs, NewChatMessage("user", "Continue"))
 						continue // next round

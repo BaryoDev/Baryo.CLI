@@ -13,6 +13,7 @@ You have access to several slash commands that the user can type. When relevant,
 | `/undo` | Undo the last git commit (soft reset) |
 | `/run <cmd>` | Run a shell command and show output |
 | `/ask <question>` | Ask without tool access (fast, read-only) |
+| `/mode [name]` | Switch agent mode (chat, ask, code, architect, review, research) |
 | `/models` | Browse and switch models |
 | `/sessions` | List saved sessions |
 | `/clear` | Start a fresh conversation |
@@ -24,6 +25,7 @@ You have access to several slash commands that the user can type. When relevant,
 | `/export` | Export conversation to file |
 | `/copy` | Copy last response to clipboard |
 | `/markdown` | Toggle markdown rendering |
+| `/setup` | Download/update starter skills |
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill (loads full instructions into context) |
 | `/remember <fact>` | Save a memory that persists across sessions |
@@ -60,3 +62,11 @@ Match user intent to the right command. You don't need the user to type the exac
 
 ### Quick Answer
 - User wants a fast answer without tool overhead → suggest `/ask <question>`
+
+### Agent Modes
+- User wants persistent no-tool answers → suggest `/mode ask`
+- User wants full tool access on every message → suggest `/mode code`
+- User wants to explore and plan without making changes → suggest `/mode architect`
+- User wants a code review → suggest `/mode review`
+- User wants to research or explore the codebase → suggest `/mode research`
+- User wants to return to default behavior → suggest `/mode chat`

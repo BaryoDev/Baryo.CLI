@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": [
+    {"name": "code-review", "files": ["SKILL.md"]},
+    {"name": "code-generation", "files": ["SKILL.md"]},
+    {"name": "refactoring", "files": ["SKILL.md"]},
+    {"name": "debugging", "files": ["SKILL.md"]},
+    {"name": "documentation", "files": ["SKILL.md"]}
+  ]
+}

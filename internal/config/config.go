@@ -40,6 +40,26 @@ type Config struct {
 	AnthropicAPIKey  string            `yaml:"anthropic_api_key"`
 	ProviderKeys     map[string]string `yaml:"provider_keys"`
 	MCPServers       []mcp.ServerConfig `yaml:"mcp_servers"`
+	Rewrite          *bool              `yaml:"rewrite"`          // prompt rewrite pass (default true)
+	MCPInReadOnly    *bool              `yaml:"mcp_in_read_only"` // allow MCP tools in read-only modes (default true)
+}
+
+// RewriteEnabled returns whether the prompt rewrite pass is enabled.
+// Defaults to true when not explicitly set.
+func (c *Config) RewriteEnabled() bool {
+	if c.Rewrite == nil {
+		return true
+	}
+	return *c.Rewrite
+}
+
+// MCPInReadOnlyEnabled returns whether MCP tools are allowed in read-only modes.
+// Defaults to true when not explicitly set.
+func (c *Config) MCPInReadOnlyEnabled() bool {
+	if c.MCPInReadOnly == nil {
+		return true
+	}
+	return *c.MCPInReadOnly
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -189,6 +209,12 @@ func loadFile(path string, cfg *Config) {
 			cfg.ProviderKeys[k] = v
 		}
 	}
+	if file.Rewrite != nil {
+		cfg.Rewrite = file.Rewrite
+	}
+	if file.MCPInReadOnly != nil {
+		cfg.MCPInReadOnly = file.MCPInReadOnly
+	}
 	if len(file.MCPServers) > 0 {
 		cfg.MCPServers = file.MCPServers
 	}
@@ -228,6 +254,14 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_PERMISSION_MODE"); v != "" {
 		cfg.PermissionMode = v
+	}
+	if v := os.Getenv("BARYO_REWRITE"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.Rewrite = &b
+	}
+	if v := os.Getenv("BARYO_MCP_IN_READ_ONLY"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.MCPInReadOnly = &b
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{

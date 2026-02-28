@@ -15,6 +15,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	"github.com/arnelirobles/baryo-cli/internal/setup"
 )
 
 type screen int
@@ -42,6 +43,9 @@ type AppModel struct {
 	permissionMode   string // "auto", "confirm", "suggest"
 	providerKeys     map[string]string
 
+	rewrite          bool               // prompt rewrite pass enabled
+	mcpInReadOnly    bool               // allow MCP tools in read-only modes
+
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
 
@@ -54,8 +58,9 @@ type AppModel struct {
 	modelBrowser  ModelBrowserModel
 	chat          ChatModel
 
-	pendingModel *llm.Model // model waiting to be loaded
-	loadStart    time.Time           // when model loading began
+	pendingModel       *llm.Model // model waiting to be loaded
+	loadStart          time.Time  // when model loading began
+	pendingSetupPrompt bool       // true when first-run setup prompt should be shown
 
 	err    error
 	width  int
@@ -129,6 +134,20 @@ func WithProviderKeys(keys map[string]string) AppOption {
 	}
 }
 
+// WithRewrite enables or disables the prompt rewrite pass.
+func WithRewrite(enabled bool) AppOption {
+	return func(a *AppModel) {
+		a.rewrite = enabled
+	}
+}
+
+// WithMCPInReadOnly enables or disables MCP tools in read-only modes.
+func WithMCPInReadOnly(enabled bool) AppOption {
+	return func(a *AppModel) {
+		a.mcpInReadOnly = enabled
+	}
+}
+
 // WithMCPManager sets an already-started MCP server manager.
 func WithMCPManager(mgr MCPManager) AppOption {
 	return func(a *AppModel) {
@@ -159,6 +178,8 @@ func NewApp(opts ...AppOption) AppModel {
 	m := AppModel{
 		screen:  screenLoading,
 		spinner: s,
+		rewrite:       true,
+		mcpInReadOnly: true,
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -179,7 +200,7 @@ func (m AppModel) Init() tea.Cmd {
 			return ShowSessionsMsg{Sessions: m.sessionList}
 		}
 	}
-	cmds := []tea.Cmd{m.spinner.Tick, m.loadModels()}
+	cmds := []tea.Cmd{m.spinner.Tick, m.loadModels(), m.checkFirstRunSetup()}
 	if len(m.mcpConfigs) > 0 {
 		cmds = append(cmds, m.startMCPServers())
 	}
@@ -190,6 +211,16 @@ func (m AppModel) Init() tea.Cmd {
 type MCPReadyMsg struct {
 	Manager *mcp.Manager
 	Errors  []error
+}
+
+// checkFirstRunSetup returns a Cmd that checks if first-run skill setup is needed.
+func (m AppModel) checkFirstRunSetup() tea.Cmd {
+	return func() tea.Msg {
+		if setup.NeedsSetup() {
+			return SetupPromptMsg{}
+		}
+		return nil
+	}
 }
 
 // startMCPServers starts MCP server connections in the background.
@@ -214,6 +245,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	// Global message handlers (can arrive from any screen)
+	case SetupPromptMsg:
+		if m.screen == screenChat {
+			m.chat.setupPromptPending = true
+			m.chat.showSetupPrompt()
+		} else {
+			m.pendingSetupPrompt = true
+		}
+		return m, nil
+
 	case MCPReadyMsg:
 		m.mcpManager = msg.Manager
 		// If chat is already active, inject the MCP manager into it.
@@ -228,7 +268,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenChat
-		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.mcpManager)
+		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -448,7 +488,12 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 // transitionToChat sets up the chat screen for the given model.
 func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.screen = screenChat
-	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.mcpManager)
+	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
+	if m.pendingSetupPrompt {
+		m.pendingSetupPrompt = false
+		m.chat.setupPromptPending = true
+		m.chat.showSetupPrompt()
+	}
 	var cmd tea.Cmd
 	m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 		Width:  m.width,

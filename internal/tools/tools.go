@@ -6,7 +6,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
@@ -51,7 +53,25 @@ func Execute(ctx context.Context, name, argsJSON string) Result {
 	if !ok {
 		return Result{Content: fmt.Sprintf("unknown tool: %s", name), IsError: true}
 	}
+	// Some models (e.g. Gemini) concatenate multiple JSON objects in one call
+	// like {"path":"a"}{"path":"b"}. Extract only the first valid object.
+	argsJSON = sanitizeArgs(argsJSON)
 	return tool.Execute(ctx, argsJSON)
+}
+
+// sanitizeArgs extracts the first valid JSON object from args that may contain
+// concatenated objects (e.g. {"path":"a"}{"path":"b"} → {"path":"a"}).
+func sanitizeArgs(argsJSON string) string {
+	dec := json.NewDecoder(strings.NewReader(argsJSON))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return argsJSON // let downstream handle the error
+	}
+	// If there's more content after the first object, return only the first.
+	if dec.More() {
+		return string(raw)
+	}
+	return argsJSON
 }
 
 // IsDestructive returns true if the named tool is marked as destructive.

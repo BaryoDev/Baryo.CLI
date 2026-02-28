@@ -168,6 +168,8 @@ func main() {
 			tui.WithSearchConfig(cfg.SearchProvider, cfg.SearchAPIKey),
 			tui.WithPermissionMode(cfg.PermissionMode),
 			tui.WithProviderKeys(cfg.ProviderKeys),
+			tui.WithRewrite(cfg.RewriteEnabled()),
+			tui.WithMCPInReadOnly(cfg.MCPInReadOnlyEnabled()),
 		}
 
 		if len(cfg.MCPServers) > 0 {

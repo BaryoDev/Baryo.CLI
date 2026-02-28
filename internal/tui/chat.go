@@ -29,6 +29,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	"github.com/arnelirobles/baryo-cli/internal/setup"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
 )
 
@@ -109,11 +110,20 @@ type ChatModel struct {
 	confirmPrompt  string           // rendered prompt text for the user
 	pendingConfirm chan<- bool       // response channel for the pending confirm
 
-	// Plan mode
-	planMode bool // true when /plan is active; restricts tools to read-only
+	// Agent mode
+	agentMode AgentMode // current operating mode (chat, ask, code, architect, review, research)
+
+	// Prompt rewrite
+	rewrite       bool // when true, short messages are rewritten for clarity before tool use
+	mcpInReadOnly bool // when true, MCP tools are allowed in read-only modes
 
 	// MCP (Model Context Protocol) servers
 	mcpManager MCPManager // nil when no MCP servers configured
+
+	// Skill setup (first-run / /setup)
+	setupPromptPending bool                          // true when showing y/n prompt
+	setupRunning       bool                          // true during download
+	setupProgressCh    <-chan setup.DownloadProgress  // receives progress from download goroutine
 }
 
 // MCPManager is the interface for MCP server management.
@@ -159,7 +169,7 @@ func (m *ChatModel) resetStreamState() {
 }
 
 // NewChat creates a new chat screen for the given model.
-func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, model llm.Model, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
+func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, model llm.Model, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, rewrite, mcpInReadOnly bool, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(model.Name, model.Tag)
 	ep := endpointForModel(socketPath, model, providerKeys)
@@ -189,11 +199,14 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatPar
 		promptPrice:      model.PromptPrice,
 		completionPrice:  model.CompletionPrice,
 		mcpManager:       mcpMgr,
+		agentMode:        ModeChat,
+		rewrite:          rewrite,
+		mcpInReadOnly:    mcpInReadOnly,
 	}
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
-func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, mcpMgr MCPManager) ChatModel {
+func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, sess *session.Session, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, rewrite, mcpInReadOnly bool, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	history := make([]chatEntry, len(sess.Messages))
 	for i, m := range sess.Messages {
@@ -241,6 +254,9 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		promptPrice:      model.PromptPrice,
 		completionPrice:  model.CompletionPrice,
 		mcpManager:       mcpMgr,
+		agentMode:        ModeChat,
+		rewrite:          rewrite,
+		mcpInReadOnly:    mcpInReadOnly,
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -514,6 +530,26 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 		}
 
+		// Setup prompt: y/n while asking to download starter skills.
+		if m.setupPromptPending {
+			switch msg.String() {
+			case "y", "Y":
+				m.setupPromptPending = false
+				return m.startSetupDownload()
+			case "n", "N":
+				m.setupPromptPending = false
+				setup.WriteStamp()
+				m.history = append(m.history, chatEntry{
+					role:    roleInfo,
+					content: "Skipped. You can run /setup anytime to download skills.",
+				})
+				m.updateViewport()
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
 		// Viewport scrolling — up/down arrows scroll the conversation.
 		if msg.String() == "up" && !m.isStream {
 			m.viewport.ScrollUp(3)
@@ -644,18 +680,24 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				content: text,
 			})
 
-			// Plan mode: always use read-only tools, skip rewrite
-			if m.planMode {
-				return m.startToolStream(text, true, false)
+			// Route based on current agent mode
+			modeCfg := modeRegistry[m.agentMode]
+			if modeCfg.Tools == ToolsNone {
+				return m.startNoToolStream(text)
 			}
 
 			hasSkill := m.hasActiveScripts()
-			wantsTools := needsTools(text)
-			hasTools := hasSkill || wantsTools
+			var hasTools bool
+			switch modeCfg.Tools {
+			case ToolsDynamic:
+				hasTools = hasSkill || needsTools(text)
+			case ToolsAll, ToolsReadOnly:
+				hasTools = true
+			}
 
 			// Rewrite pass: short, tool-oriented messages get rewritten for clarity.
-			// Skip when tools are disabled — the rewrite prompt is tool-oriented.
-			if hasTools && !hasSkill && m.supportsTools && len(text) <= 80 {
+			// Only in dynamic mode — unnecessary when tools are always/never present.
+			if m.rewrite && hasTools && !hasSkill && m.supportsTools && len(text) <= 80 && modeCfg.Tools == ToolsDynamic {
 				m.isStream = true
 				m.toolStatus = "rewriting prompt..."
 				m.streamStart = time.Now()
@@ -762,6 +804,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Commit the full turn as one assistant message (avoids consecutive assistant roles).
 			if m.turnContent != "" {
 				m.messages = append(m.messages, llm.NewChatMessage("assistant", m.turnContent))
+			} else if !m.compactPending && !m.searchPending && !m.researchPending {
+				// Model produced no content — let the user know.
+				m.history = append(m.history, chatEntry{
+					role:    roleError,
+					content: "Model returned an empty response. Try a simpler prompt, a different model, or increase max_tokens with /params.",
+				})
 			}
 
 			// Write BARYO.md if /init was pending
@@ -976,7 +1024,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		if evt.ToolResult != nil {
 			status := summarizeToolResult(evt.ToolResult.Content, evt.ToolResult.IsError)
-			m.toolStatus = ""
+			m.toolStatus = "Thinking..."
 			m.history = append(m.history, chatEntry{
 				role:    roleTool,
 				content: fmt.Sprintf("Result: %s", status),
@@ -1138,6 +1186,39 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 
+	case setupStartedMsg:
+		m.setupProgressCh = msg.ch
+		return m, waitForSetupProgress(m.setupProgressCh)
+
+	case SetupProgressMsg:
+		p := msg.Progress
+		if p.Err != nil {
+			m.setupRunning = false
+			m.history = append(m.history, chatEntry{
+				role:    roleError,
+				content: fmt.Sprintf("Setup error: %v", p.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		if p.Done {
+			m.setupRunning = false
+			m.skillIndex = config.SkillIndex()
+			m.history = append(m.history, chatEntry{
+				role:    roleInfo,
+				content: fmt.Sprintf("Installed %d skills. Use /skills to list them.", p.Total),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// Update progress in history
+		m.history = append(m.history, chatEntry{
+			role:    roleInfo,
+			content: fmt.Sprintf("Downloading skills... %d/%d: %s", p.Current, p.Total, p.Skill),
+		})
+		m.updateViewport()
+		return m, waitForSetupProgress(m.setupProgressCh)
+
 	case DiffResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
@@ -1234,7 +1315,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.messages = nil
 		m.history = nil
 		m.session = sess
-		m.planMode = false
+		m.agentMode = ModeChat
 		m.contextTokens = estimateTokens(m.buildMessages())
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
@@ -1481,6 +1562,10 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleReview()
 		}
 
+		if trimmed == "/setup" {
+			return m.handleSetup()
+		}
+
 		if trimmed == "/skills" {
 			return m.handleSkillsList()
 		}
@@ -1505,16 +1590,23 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleMCPList()
 		}
 
+		if trimmed == "/mode" {
+			return m.handleMode("")
+		}
+		if strings.HasPrefix(text, "/mode ") {
+			return m.handleMode(strings.TrimPrefix(text, "/mode "))
+		}
+
 		if trimmed == "/plan" {
-			if m.planMode {
+			if m.agentMode == ModeArchitect {
 				m.history = append(m.history, chatEntry{
 					role:    roleAssistant,
-					content: "Already in plan mode. Type your questions or /plan done to exit.",
+					content: "Already in architect mode. Type your questions or /plan done to exit.",
 				})
 			} else {
 				m.history = append(m.history, chatEntry{
 					role:    roleAssistant,
-					content: "Usage: /plan <prompt> to enter plan mode, /plan done to exit.",
+					content: "Usage: /plan <prompt> to enter architect mode, /plan done to exit.",
 				})
 			}
 			m.updateViewport()
@@ -1574,6 +1666,30 @@ var researchReportTemplate string
 //
 //go:embed prompts/plan.md
 var planModePrompt string
+
+// askModePrompt instructs the model to answer without tool access.
+//
+//go:embed prompts/ask.md
+var askModePrompt string
+
+// codeModePrompt instructs the model to proactively use all tools.
+//
+//go:embed prompts/code.md
+var codeModePrompt string
+
+// reviewModePrompt instructs the model for code review with read-only tools.
+//
+//go:embed prompts/review_mode.md
+var reviewModePrompt string
+
+// researchModePrompt instructs the model for research with read-only tools.
+//
+//go:embed prompts/research_mode.md
+var researchModePrompt string
+
+func init() {
+	initModePrompts()
+}
 
 // estimateTokens returns a rough token count for a set of messages.
 // Uses the chars/4 heuristic plus per-message overhead.
@@ -1645,9 +1761,9 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage
 		sysPrompt += "\n\n/no_think"
 	}
 
-	// Plan mode: append plan mode instructions.
-	if m.planMode {
-		sysPrompt += "\n\n" + planModePrompt
+	// Agent mode: append mode-specific instructions.
+	if modeCfg := modeRegistry[m.agentMode]; modeCfg.Prompt != "" {
+		sysPrompt += "\n\n" + modeCfg.Prompt
 	}
 
 	// MCP tool guidance: tell the model about external tools when connected.
@@ -1765,6 +1881,23 @@ func (m *ChatModel) formatParams() string {
 	return result
 }
 
+// startNoToolStream sends a message without any tool definitions.
+// Used for ask mode and any mode where tools are disabled.
+func (m *ChatModel) startNoToolStream(text string) (ChatModel, tea.Cmd) {
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(false), m.params)
+
+	m.updateViewport()
+	return *m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
 // startToolStream sets up streaming state and starts StreamChatWithTools.
 // Used by both the enter handler (direct path) and RewriteDoneMsg handler.
 func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatModel, tea.Cmd) {
@@ -1787,14 +1920,15 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	var toolDefs []llm.ToolDefinition
 	var executor llm.ToolExecutor
 
-	if m.planMode {
-		// Plan mode: read-only tools only, no confirm prompts
+	modeCfg := modeRegistry[m.agentMode]
+	switch modeCfg.Tools {
+	case ToolsReadOnly:
 		toolDefs = tools.ReadOnlyDockerDefinitions()
 		if m.mcpManager != nil {
 			toolDefs = append(toolDefs, m.mcpManager.CompactToolDefinitions(tools.Names(), m.mcpContextWindow())...)
 		}
 		executor = m.makePlanExecutor()
-	} else {
+	default:
 		executor = m.makeExecutor()
 		if hasTools {
 			toolDefs = tools.DockerDefinitions()
@@ -1804,12 +1938,12 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 		}
 	}
 
-	chatParams := m.applyModelHints(hasTools || m.planMode, hasSkill)
-	m.eventCh = llm.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools || m.planMode), chatParams, toolDefs, executor)
+	chatParams := m.applyModelHints(hasTools, hasSkill)
+	m.eventCh = llm.StreamChatWithTools(ctx, m.endpoint, m.modelTag, m.buildMessagesWithToolGating(hasTools), chatParams, toolDefs, executor)
 
 	m.updateViewport()
 	cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
-	if !m.planMode && m.permissionMode == "confirm" {
+	if modeCfg.Tools != ToolsReadOnly && m.permissionMode == "confirm" {
 		cmds = append(cmds, waitForConfirm(m.confirmCh))
 	}
 	return *m, tea.Batch(cmds...)
@@ -1856,17 +1990,21 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	}
 }
 
-// makePlanExecutor returns a tool executor for plan mode that blocks all
+// makePlanExecutor returns a tool executor for read-only modes that blocks all
 // destructive tools and only allows read-only operations.
 func (m *ChatModel) makePlanExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
 	mgr := m.mcpManager
+	allowMCP := m.mcpInReadOnly
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		// Block MCP tools in plan mode — can't verify they're read-only.
+		// Route MCP tools to the MCP manager (if allowed in read-only modes).
 		if mgr != nil && mgr.IsMCPTool(name) {
-			return fmt.Sprintf("[plan mode] %s is not available — MCP tools are blocked in plan mode", name), true
+			if !allowMCP {
+				return fmt.Sprintf("[read-only mode] %s is not available — MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)", name), true
+			}
+			return mgr.Execute(ctx, name, argsJSON)
 		}
 		if tools.IsDestructive(name) {
-			return fmt.Sprintf("[plan mode] %s is not available — plan mode is read-only", name), true
+			return fmt.Sprintf("[read-only mode] %s is not available — only read-only tools are allowed", name), true
 		}
 		r := tools.Execute(ctx, name, argsJSON)
 		return r.Content, r.IsError
@@ -2527,8 +2665,9 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /undo              Undo last git commit (soft reset)
   /run <cmd>         Run a shell command and show output
   /ask <question>    Ask without tool access (fast, read-only)
-  /plan <prompt>     Enter plan mode (read-only tools, explore + plan)
-  /plan done         Exit plan mode
+  /mode [name]       Switch agent mode (chat, ask, code, architect, review, research)
+  /plan <prompt>     Enter architect mode (read-only tools, explore + plan)
+  /plan done         Exit architect mode
   /search <query>    Search the web and summarize results
   /research <topic>  Multi-round deep research with report
   /fetch <url>       Fetch and display a web page
@@ -2550,6 +2689,7 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /copy              Copy last response to clipboard
   /markdown          Toggle markdown rendering
   /mcp               List connected MCP servers and tools
+  /setup             Download/update starter skills
   /doctor            Run diagnostic checks`
 
 	m.history = append(m.history, chatEntry{
@@ -2563,27 +2703,27 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
 func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 	lower := strings.ToLower(strings.TrimSpace(arg))
 
-	// Exit plan mode
+	// Exit plan/architect mode
 	if lower == "done" || lower == "exit" {
-		if !m.planMode {
+		if m.agentMode != ModeArchitect {
 			m.history = append(m.history, chatEntry{
 				role:    roleAssistant,
-				content: "Not in plan mode.",
+				content: "Not in architect mode.",
 			})
 			m.updateViewport()
 			return m, nil
 		}
-		m.planMode = false
+		m.agentMode = ModeChat
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
-			content: "Exited plan mode. Tools are now unrestricted.",
+			content: "Exited architect mode. Tools are now unrestricted.",
 		})
 		m.updateViewport()
 		return m, nil
 	}
 
-	// Enter plan mode with the given prompt
-	m.planMode = true
+	// Enter architect mode with the given prompt
+	m.agentMode = ModeArchitect
 	m.history = append(m.history, chatEntry{
 		role:    roleTool,
 		content: "Entering plan mode (read-only tools)...",
@@ -2598,6 +2738,63 @@ func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 	})
 
 	return m.startToolStream(prompt, true, false)
+}
+
+func (m ChatModel) handleMode(arg string) (ChatModel, tea.Cmd) {
+	arg = strings.TrimSpace(arg)
+
+	// No argument: show current mode + list all modes
+	if arg == "" {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Current mode: %s\n\nAvailable modes:\n", m.agentMode))
+		for _, mode := range AllModes() {
+			cfg := modeRegistry[mode]
+			marker := "  "
+			if mode == m.agentMode {
+				marker = "▸ "
+			}
+			sb.WriteString(fmt.Sprintf("  %s%-10s %s\n", marker, mode, cfg.Description))
+		}
+		sb.WriteString("\nUsage: /mode <name>")
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: sb.String(),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Look up the requested mode
+	mode, cfg, ok := LookupMode(strings.ToLower(arg))
+	if !ok {
+		var names []string
+		for _, m := range AllModes() {
+			names = append(names, string(m))
+		}
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("Unknown mode: %s\nAvailable: %s", arg, strings.Join(names, ", ")),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	if mode == m.agentMode {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: fmt.Sprintf("Already in %s mode.", mode),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.agentMode = mode
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: fmt.Sprintf("Switched to %s mode — %s", mode, cfg.Description),
+	})
+	m.updateViewport()
+	return m, nil
 }
 
 func (m ChatModel) handleMCPList() (ChatModel, tea.Cmd) {
@@ -3507,9 +3704,10 @@ func (m ChatModel) View() string {
 
 	// Header: baryo · model · mode
 	sep := DimStyle.Render(" · ")
-	modeLabel := m.permissionMode
-	if m.planMode {
-		modeLabel = "plan"
+	modeCfg := modeRegistry[m.agentMode]
+	modeLabel := modeCfg.Label
+	if m.agentMode == ModeChat {
+		modeLabel = m.permissionMode // preserve current behavior in default mode
 	}
 	header := TitleStyle.Render("baryo") + sep +
 		AssistantLabelStyle.Render(m.modelName) + sep +
@@ -3616,6 +3814,71 @@ func summarizeToolArgs(args string) string {
 		return args
 	}
 	return args[:77] + "..."
+}
+
+// showSetupPrompt displays the first-run setup prompt.
+func (m *ChatModel) showSetupPrompt() {
+	m.history = append(m.history, chatEntry{
+		role:    roleInfo,
+		content: "Welcome! Download starter skills (code review, generation, refactoring, debugging, docs)?\nPress y to download, n to skip.",
+	})
+	m.updateViewport()
+}
+
+// handleSetup handles the /setup command.
+func (m ChatModel) handleSetup() (ChatModel, tea.Cmd) {
+	if m.setupRunning {
+		m.history = append(m.history, chatEntry{
+			role:    roleInfo,
+			content: "Setup is already running...",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    roleInfo,
+		content: "Fetching skill manifest...",
+	})
+	m.updateViewport()
+
+	return m.startSetupDownload()
+}
+
+// startSetupDownload begins the skill download process.
+func (m ChatModel) startSetupDownload() (ChatModel, tea.Cmd) {
+	m.setupRunning = true
+
+	cmd := func() tea.Msg {
+		manifest, err := setup.FetchManifest()
+		if err != nil {
+			return SetupProgressMsg{Progress: setup.DownloadProgress{Err: err, Done: true}}
+		}
+
+		ch := setup.DownloadSkills(manifest)
+		// Return first progress to wire up the channel.
+		// We'll store the channel on the model via a closure trick:
+		// send ourselves a message that includes the channel.
+		return setupStartedMsg{ch: ch}
+	}
+
+	return m, cmd
+}
+
+// setupStartedMsg carries the progress channel back to the Update loop.
+type setupStartedMsg struct {
+	ch <-chan setup.DownloadProgress
+}
+
+// waitForSetupProgress returns a Cmd that waits for the next progress message.
+func waitForSetupProgress(ch <-chan setup.DownloadProgress) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return SetupProgressMsg{Progress: setup.DownloadProgress{Done: true}}
+		}
+		return SetupProgressMsg{Progress: p}
+	}
 }
 
 // summarizeToolResult returns a short preview of a tool result for the TUI.
