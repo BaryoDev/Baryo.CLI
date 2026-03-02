@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,7 +22,9 @@ type modelItem struct {
 	name       string
 	detail     string
 	size       string // memory/disk size (e.g. "4.07 GiB"), empty if unknown
+	sizeBytes  int64  // raw size in bytes for fit calculation
 	downloaded bool
+	isHeader   bool // non-selectable model family header
 	model      llm.Model
 	search     llm.SearchModel
 }
@@ -48,14 +51,17 @@ type ModelBrowserModel struct {
 	pullCancel context.CancelFunc
 	spinner    spinner.Model
 
-	hw     llm.Hardware // detected system hardware
-	err    error
-	width  int
-	height int
+	hw         llm.Hardware // detected system hardware
+	hubLoading bool                        // true while hub tags are being fetched
+	hubTagData map[string][]llm.ModelTag   // model name → tags
+	err        error
+	width      int
+	height     int
 }
 
 // NewModelBrowser creates a new tabbed model browser from the fetched lists.
-func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) ModelBrowserModel {
+// Returns a model and a Cmd that starts background hub tag fetching.
+func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) (ModelBrowserModel, tea.Cmd) {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
@@ -65,9 +71,28 @@ func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) ModelB
 		available:  available,
 		spinner:    s,
 		hw:         llm.DetectHardware(),
+		hubTagData: make(map[string][]llm.ModelTag),
 	}
 	m.buildTabs()
-	return m
+
+	// Identify hub models that need tag fetching.
+	downloadedNames := make(map[string]bool, len(downloaded))
+	for _, d := range downloaded {
+		downloadedNames[d.Name] = true
+	}
+	var hubModels []string
+	for _, s := range available {
+		if !downloadedNames[s.Name] {
+			hubModels = append(hubModels, s.Name)
+		}
+	}
+
+	var cmd tea.Cmd
+	if len(hubModels) > 0 {
+		m.hubLoading = true
+		cmd = fetchHubTagsCmd(hubModels)
+	}
+	return m, cmd
 }
 
 func (m *ModelBrowserModel) buildTabs() {
@@ -103,18 +128,43 @@ func (m *ModelBrowserModel) buildTabs() {
 		}
 	}
 
-	// Available Docker Hub models.
+	// Available Docker Hub models — expand into tags if available.
 	var hubItems []modelItem
 	for _, s := range m.available {
 		if downloadedNames[s.Name] {
 			continue
 		}
-		hubItems = append(hubItems, modelItem{
-			name:       s.Name,
-			detail:     s.Description,
-			downloaded: false,
-			search:     s,
-		})
+		tags, hasTagData := m.hubTagData[s.Name]
+		if hasTagData && len(tags) > 0 {
+			// Header row for the model family.
+			hubItems = append(hubItems, modelItem{
+				name:     s.Name,
+				isHeader: true,
+			})
+			// One entry per tag variant.
+			for _, t := range tags {
+				hubItems = append(hubItems, modelItem{
+					name:       s.Name + ":" + t.Name,
+					detail:     s.Description,
+					size:       llm.FormatBytes(t.Size),
+					sizeBytes:  t.Size,
+					downloaded: false,
+					search:     s,
+				})
+			}
+		} else {
+			// No tag data yet — show as single entry.
+			detail := s.Description
+			if m.hubLoading {
+				detail += "  (loading tags...)"
+			}
+			hubItems = append(hubItems, modelItem{
+				name:       s.Name,
+				detail:     detail,
+				downloaded: false,
+				search:     s,
+			})
+		}
 	}
 
 	m.tabs = nil
@@ -162,6 +212,20 @@ func (m *ModelBrowserModel) adjustScroll() {
 	m.offset = AdjustScroll(m.cursor, m.offset, m.pageSize())
 }
 
+// skipHeader advances the cursor past header rows in the given direction.
+func (m *ModelBrowserModel) skipHeader(dir int) {
+	items := m.activeItems()
+	for m.cursor >= 0 && m.cursor < len(items) && items[m.cursor].isHeader {
+		m.cursor += dir
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(items) {
+		m.cursor = len(items) - 1
+	}
+}
+
 func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -183,21 +247,25 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 				m.activeTab++
 				m.cursor = 0
 				m.offset = 0
+				m.skipHeader(1)
 			}
 		case "shift+tab", "left", "h":
 			if m.activeTab > 0 {
 				m.activeTab--
 				m.cursor = 0
 				m.offset = 0
+				m.skipHeader(1)
 			}
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
+				m.skipHeader(-1)
 				m.adjustScroll()
 			}
 		case "down", "j":
 			if m.cursor < len(items)-1 {
 				m.cursor++
+				m.skipHeader(1)
 				m.adjustScroll()
 			}
 		case "enter":
@@ -205,6 +273,9 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 				break
 			}
 			item := items[m.cursor]
+			if item.isHeader {
+				break
+			}
 			if item.downloaded {
 				selected := item.model
 				return m, func() tea.Msg {
@@ -252,6 +323,42 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 		m.pullStatus = msg.Status
 		return m, waitForPullLine(m.pullCh)
 
+	case hubTagsBatchMsg:
+		m.hubLoading = false
+		for name, tags := range msg {
+			m.hubTagData[name] = tags
+		}
+		// Preserve active tab label and cursor position.
+		activeLabel := ""
+		if m.activeTab >= 0 && m.activeTab < len(m.tabs) {
+			activeLabel = m.tabs[m.activeTab].label
+		}
+		oldCursor := m.cursor
+		m.buildTabs()
+		// Restore active tab by label.
+		for i, tab := range m.tabs {
+			if tab.label == activeLabel {
+				m.activeTab = i
+				break
+			}
+		}
+		// Restore cursor, clamping to new length.
+		items := m.activeItems()
+		m.cursor = oldCursor
+		if m.cursor >= len(items) {
+			m.cursor = len(items) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		// Skip header if cursor lands on one.
+		if m.cursor < len(items) && items[m.cursor].isHeader {
+			if m.cursor+1 < len(items) {
+				m.cursor++
+			}
+		}
+		m.adjustScroll()
+
 	case spinner.TickMsg:
 		if m.pulling {
 			var cmd tea.Cmd
@@ -288,7 +395,13 @@ func (m ModelBrowserModel) View() string {
 	// Render tab bar.
 	var tabLabels []string
 	for _, tab := range m.tabs {
-		tabLabels = append(tabLabels, fmt.Sprintf("%s (%d)", tab.label, len(tab.items)))
+		count := 0
+		for _, it := range tab.items {
+			if !it.isHeader {
+				count++
+			}
+		}
+		tabLabels = append(tabLabels, fmt.Sprintf("%s (%d)", tab.label, count))
 	}
 	b.WriteString(RenderTabBar(tabLabels, m.activeTab))
 	b.WriteString("\n\n")
@@ -315,6 +428,13 @@ func (m ModelBrowserModel) View() string {
 
 		for i := m.offset; i < end; i++ {
 			item := items[i]
+
+			// Header rows are non-selectable family labels.
+			if item.isHeader {
+				b.WriteString("  " + DimStyle.Render(item.name) + "\n")
+				continue
+			}
+
 			cursor := "  "
 			style := NormalModelStyle
 			if i == m.cursor {
@@ -330,7 +450,15 @@ func (m ModelBrowserModel) View() string {
 					suffix = " " + FitTagStyle(fit.Tag).Render(string(fit.Tag))
 					detailLine += " — " + fit.Remark
 				}
-			} else if item.size != "" {
+			} else if !item.downloaded && item.sizeBytes > 0 {
+				fit := llm.EstimateFitFromSize(item.sizeBytes, m.hw)
+				if fit.Tag != "" {
+					suffix = " " + FitTagStyle(fit.Tag).Render(string(fit.Tag))
+					detailLine = item.size + " — " + fit.Remark
+				} else {
+					suffix = " " + sizeTag.Render(item.size)
+				}
+			} else if !item.downloaded && item.size != "" {
 				suffix = " " + sizeTag.Render(item.size)
 			}
 
@@ -349,6 +477,48 @@ func (m ModelBrowserModel) View() string {
 
 	return b.String()
 }
+
+// fetchHubTagsCmd returns a Cmd that concurrently fetches tags for all hub models
+// and sends individual HubTagsMsg messages as results arrive.
+func fetchHubTagsCmd(modelNames []string) tea.Cmd {
+	return func() tea.Msg {
+		sem := make(chan struct{}, 5)
+		var wg sync.WaitGroup
+		type result struct {
+			name string
+			tags []llm.ModelTag
+		}
+		results := make(chan result, len(modelNames))
+
+		for _, name := range modelNames {
+			wg.Add(1)
+			go func(n string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				tags, _ := llm.FetchModelTags(n)
+				if len(tags) > 0 {
+					results <- result{name: n, tags: tags}
+				}
+			}(name)
+		}
+
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		// Collect all results into a single batch message.
+		batch := make(map[string][]llm.ModelTag)
+		for r := range results {
+			batch[r.name] = r.tags
+		}
+		return hubTagsBatchMsg(batch)
+	}
+}
+
+// hubTagsBatchMsg carries all fetched hub tags at once.
+type hubTagsBatchMsg map[string][]llm.ModelTag
 
 // waitForPullLine returns a Cmd that waits for the next line from the pull channel.
 func waitForPullLine(ch <-chan string) tea.Cmd {

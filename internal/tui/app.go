@@ -362,8 +362,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.screen = screenModelBrowser
-		m.modelBrowser = NewModelBrowser(msg.Downloaded, msg.Available)
-		return m, nil
+		var cmd tea.Cmd
+		m.modelBrowser, cmd = NewModelBrowser(msg.Downloaded, msg.Available)
+		return m, cmd
 
 	case ModelBrowserCancelMsg:
 		m.screen = screenChat
@@ -397,6 +398,12 @@ func (m AppModel) updateLoading(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.preselectedModel != nil {
 			return m.startModelLoading(*m.preselectedModel)
+		}
+		if len(msg.Available) > 0 {
+			m.screen = screenModelBrowser
+			var cmd tea.Cmd
+			m.modelBrowser, cmd = NewModelBrowser(msg.Models, msg.Available)
+			return m, cmd
 		}
 		m.screen = screenModelSelect
 		m.modelSelect = NewModelSelect(msg.Models)
@@ -531,7 +538,9 @@ func (m AppModel) loadModels() tea.Cmd {
 			return ModelsLoadedMsg{Err: fmt.Errorf("no models available — configure a cloud provider or install Docker")}
 		}
 
-		return ModelsLoadedMsg{Models: models}
+		// Fetch Docker Hub available models (non-fatal on error).
+		available, _ := llm.SearchModels()
+		return ModelsLoadedMsg{Models: models, Available: available}
 	}
 }
 

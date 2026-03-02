@@ -1662,9 +1662,6 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 				return ShowModelsMsg{Err: fmt.Errorf("no models available — configure a cloud provider or install Docker")}
 			}
 
-			if llm.IsRemoteSocket(socketPath) {
-				return ShowModelsMsg{Downloaded: downloaded}
-			}
 			available, srErr := llm.SearchModels()
 			if srErr != nil {
 				return ShowModelsMsg{Downloaded: downloaded}

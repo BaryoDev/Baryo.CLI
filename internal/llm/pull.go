@@ -9,9 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // SearchModel represents a model returned by `docker model search`.
@@ -89,6 +92,60 @@ func StreamPull(ctx context.Context, name string) <-chan string {
 		}
 	}()
 	return ch
+}
+
+// ModelTag represents a single tag (variant) of a Docker Hub model.
+type ModelTag struct {
+	Name string // tag name e.g. "4B-Q4_K_M"
+	Size int64  // bytes
+}
+
+var hubClient = &http.Client{Timeout: 10 * time.Second}
+
+// FetchModelTags fetches available tags for a Docker Hub model.
+// modelName should be in "namespace/repo" format (e.g. "ai/gemma3").
+// Returns nil on error so callers can fall back to default display.
+func FetchModelTags(modelName string) ([]ModelTag, error) {
+	parts := strings.SplitN(modelName, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid model name: %s", modelName)
+	}
+	namespace, repo := parts[0], parts[1]
+
+	url := fmt.Sprintf("https://hub.docker.com/v2/namespaces/%s/repositories/%s/tags?page_size=100", namespace, repo)
+	resp, err := hubClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker hub returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Results []struct {
+			Name     string `json:"name"`
+			FullSize int64  `json:"full_size"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	tags := make([]ModelTag, 0, len(result.Results))
+	for _, r := range result.Results {
+		if r.Name == "latest" {
+			continue
+		}
+		tags = append(tags, ModelTag{Name: r.Name, Size: r.FullSize})
+	}
+	return tags, nil
 }
 
 // splitLines is a bufio.SplitFunc that splits on \n or \r.

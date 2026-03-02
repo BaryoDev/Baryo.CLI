@@ -253,6 +253,27 @@ Browse downloaded and available models from Docker Hub without leaving the TUI.
 
 The model browser uses the same **tabbed interface** as the model picker — Local, cloud providers, and Docker Hub each get their own tab. Navigate with `Tab`/`←`/`→` between tabs and `↑`/`↓` within. Select a downloaded model to switch to it, or select a Docker Hub model to pull it with live progress.
 
+### Hardware fit tags
+
+The model picker and browser show a colored fit tag next to each local model, so you know at a glance whether a model will run well on your machine.
+
+```
+▸ ai/gemma3                                          fast
+  params: 4 B  size: 2.34 GiB — plenty of room, expect fast responses
+
+  ai/llama3.1:70b                                    too large
+  params: 70.6 B  size: 38.5 GiB — likely won't fit, expect crashes or heavy swapping
+```
+
+| Tag | Memory usage | What to expect |
+|-----|-------------|----------------|
+| **fast** | <60% of RAM | Plenty of room, expect fast responses |
+| **smooth** | 60-80% | Fits well, may slow during long contexts |
+| **slow** | 80-95% | Tight fit, expect slower responses and possible swapping |
+| **too large** | >95% | Likely won't fit, expect crashes or heavy swapping |
+
+Memory is estimated from the model's on-disk size (or parameter count as fallback) and compared against your system's total RAM. Cloud provider models skip fit scoring entirely — they show pricing instead.
+
 ### Startup diagnostics
 
 Baryo checks your Docker setup on every launch. If cloud providers are configured and Docker isn't available, it prints a warning and continues — the model picker just won't have a Local tab. If neither Docker nor any cloud provider is configured, it exits with step-by-step instructions.

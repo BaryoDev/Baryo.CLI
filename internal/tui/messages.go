@@ -15,8 +15,9 @@ import (
 
 // ModelsLoadedMsg is sent when the model list has been fetched.
 type ModelsLoadedMsg struct {
-	Models []llm.Model
-	Err    error
+	Models    []llm.Model
+	Available []llm.SearchModel // Docker Hub models (may be nil)
+	Err       error
 }
 
 // StreamTokenMsg carries a streaming event from the model.
@@ -181,3 +182,4 @@ type RepoMapUpdatedMsg struct{}
 type RAGReadyMsg struct {
 	RAG *rag.RAG
 }
+

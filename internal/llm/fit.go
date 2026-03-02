@@ -34,12 +34,43 @@ func EstimateFit(model Model, hw Hardware) FitResult {
 	}
 
 	memBytes := estimateMemory(model)
-	if memBytes == 0 {
+	if memBytes == 0 || hw.TotalRAM == 0 {
 		return FitResult{}
 	}
 
 	memGB := float64(memBytes) / (1024 * 1024 * 1024)
 	ratio := float64(memBytes) / float64(hw.TotalRAM)
+
+	var tag FitTag
+	var remark string
+	switch {
+	case ratio < 0.60:
+		tag = FitFast
+		remark = "plenty of room, expect fast responses"
+	case ratio < 0.80:
+		tag = FitSmooth
+		remark = "fits well, may slow during long contexts"
+	case ratio < 0.95:
+		tag = FitSlow
+		remark = "tight fit, expect slower responses and possible swapping"
+	default:
+		tag = FitTooLarge
+		remark = "likely won't fit, expect crashes or heavy swapping"
+	}
+
+	return FitResult{Tag: tag, Remark: remark, MemoryGB: memGB}
+}
+
+// EstimateFitFromSize scores how well a model fits the available hardware
+// using raw byte size instead of a Model struct. Useful for Docker Hub tags
+// where only the download size is known.
+func EstimateFitFromSize(sizeBytes int64, hw Hardware) FitResult {
+	if sizeBytes == 0 || hw.TotalRAM == 0 {
+		return FitResult{}
+	}
+
+	memGB := float64(sizeBytes) / (1024 * 1024 * 1024)
+	ratio := float64(sizeBytes) / float64(hw.TotalRAM)
 
 	var tag FitTag
 	var remark string
@@ -95,13 +126,13 @@ func parseSize(s string) uint64 {
 		multiplier = 1024 * 1024 * 1024
 	case strings.HasSuffix(upper, " GB"):
 		numStr = strings.TrimSuffix(upper, " GB")
-		multiplier = 1024 * 1024 * 1024
+		multiplier = 1_000_000_000
 	case strings.HasSuffix(upper, " MIB"):
 		numStr = strings.TrimSuffix(upper, " MIB")
 		multiplier = 1024 * 1024
 	case strings.HasSuffix(upper, " MB"):
 		numStr = strings.TrimSuffix(upper, " MB")
-		multiplier = 1024 * 1024
+		multiplier = 1_000_000
 	default:
 		return 0
 	}

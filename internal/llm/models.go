@@ -101,7 +101,7 @@ func ListRemoteModels(socketPath string) ([]Model, error) {
 
 		size := ""
 		if m.Size > 0 {
-			size = formatBytes(m.Size)
+			size = FormatBytes(m.Size)
 		}
 
 		models = append(models, Model{
@@ -171,7 +171,7 @@ func PreloadModel(socketPath, model string) error {
 	return nil
 }
 
-func formatBytes(b int64) string {
+func FormatBytes(b int64) string {
 	const gib = 1024 * 1024 * 1024
 	const mib = 1024 * 1024
 	if b >= gib {
