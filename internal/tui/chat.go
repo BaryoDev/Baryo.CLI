@@ -138,6 +138,9 @@ type ChatModel struct {
 	ragPipeline *rag.RAG  // shared RAG index reference
 	ragPrompt   string    // pre-rendered <context> block for system prompt
 
+	// Intent-based prompt injection (transient, reset each turn)
+	planningPrompt string // set when intent is Planning; injected into system prompt
+
 	// Strategy planning
 	strategyPhase      strategyPhase  // idle, gathering, done
 	strategyCompactAt  int            // index for post-analysis compaction
@@ -240,6 +243,19 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		history[i] = chatEntry{role: entryRole(m.Role), content: c}
 	}
 	msgs := append([]llm.ChatMessage{}, sess.Messages...)
+
+	// Session resume cleanup: strip stale injected context (search results,
+	// strategy prompts, compaction summaries, etc.) to avoid inflating the
+	// context window with outdated information.
+	msgs = filterExportMessages(msgs)
+	var cleanHistory []chatEntry
+	for i, m := range sess.Messages {
+		if !isInternalMessage(m) && i < len(history) {
+			cleanHistory = append(cleanHistory, history[i])
+		}
+	}
+	history = cleanHistory
+
 	// Detect provider from model tag for session restore.
 	model := llm.Model{Name: sess.ModelName, Tag: sess.ModelTag}
 	model.Provider = llm.DetectProvider(sess.ModelTag)
@@ -726,23 +742,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
-			// Auto-strategy: detect decision-worthy questions and offer /strategy
-			if m.strategyPhase == strategyIdle && isStrategyQuestion(text) {
-				m.strategyPromptPending = true
-				m.strategyPromptText = text
-				m.history = append(m.history, chatEntry{
-					role:    roleUser,
-					content: text,
-					mode:    m.agentMode,
-				})
-				m.history = append(m.history, chatEntry{
-					role:    roleInfo,
-					content: "This looks like a strategic decision. Use /strategy for structured analysis? (y/n)",
-				})
-				m.updateViewport()
-				return m, nil
-			}
-
 			// Process @mentions — inject file contents as context
 			_, fileContexts, mentionErrors := m.processAtMentions(text)
 			for _, fc := range fileContexts {
@@ -788,9 +787,24 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// RAG: recompute context for this message.
 			m.ragPrompt = buildRAGPrompt(m.ragPipeline, text, m.contextLimit)
 
-			// Proactive web search: if RAG detects the query needs fresh info,
-			// trigger /search automatically instead of waiting for the model to ask.
-			if m.ragPipeline != nil && m.ragPipeline.NeedsFreshInfo(text) && !m.searchPending && !m.searchFallbackUsed {
+			// Intent classification: determines what context to inject.
+			intent := ClassifyIntent(text)
+
+			// Planning questions: inject structured thinking guidance.
+			m.planningPrompt = ""
+			if intent == IntentPlanning && m.strategyPhase == strategyIdle {
+				m.planningPrompt = structuredThinkingPrompt
+			}
+
+			// Proactive web search: trigger when RAG detects the query needs
+			// fresh info, OR when intent is Knowledge and RAG returned nothing.
+			needsSearch := false
+			if m.ragPipeline != nil && m.ragPipeline.NeedsFreshInfo(text) {
+				needsSearch = true
+			} else if intent == IntentKnowledge && m.ragPrompt == "" {
+				needsSearch = true
+			}
+			if needsSearch && !m.searchPending && !m.searchFallbackUsed {
 				return m.handleSearch(text)
 			}
 
@@ -1102,8 +1116,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 
-			// Auto-compaction: trigger if over 85% of context limit
-			if m.contextTokens > int(float64(m.contextLimit)*0.85) && len(m.messages) > 8 {
+			// Auto-compaction: trigger if over 78% of context limit (conservative
+			// threshold to account for token estimation inaccuracy on code-heavy content).
+			if m.contextTokens > int(float64(m.contextLimit)*0.78) && len(m.messages) > 8 {
 				return m.startCompaction()
 			}
 
@@ -2044,6 +2059,11 @@ var strategyRefineTemplate string
 //go:embed prompts/strategy_final.md
 var strategyFinalTemplate string
 
+// structuredThinkingPrompt guides the model to structure planning/decision responses.
+//
+//go:embed prompts/structured_thinking.md
+var structuredThinkingPrompt string
+
 func init() {
 	initModePrompts()
 }
@@ -2100,10 +2120,13 @@ func buildRepoMapPrompt(idx *index.Index, contextLimit int) string {
 }
 
 // ragBudget returns the token budget for RAG context based on context window size.
+// Even small 8K models get a tiny budget so they can use the single most relevant chunk.
 func ragBudget(contextLimit int) int {
 	switch {
+	case contextLimit < 8_000:
+		return contextLimit * 1 / 100
 	case contextLimit < 16_000:
-		return 0
+		return contextLimit * 2 / 100
 	case contextLimit < 32_000:
 		return contextLimit * 3 / 100
 	case contextLimit < 64_000:
@@ -2137,12 +2160,66 @@ func estimateTokens(messages []llm.ChatMessage) int {
 	total := 0
 	for _, m := range messages {
 		if m.Content != nil {
-			total += len(*m.Content)/4 + 4
+			total += estimateContentTokens(*m.Content) + 4
 		} else {
 			total += 4 // per-message overhead even without content
 		}
 	}
 	return total
+}
+
+// estimateContentTokens uses a content-aware ratio instead of flat chars/4.
+// Code-heavy content has a lower chars-per-token ratio (~3.2) due to
+// symbols, short identifiers, and punctuation.
+func estimateContentTokens(content string) int {
+	ratio := 4.0
+
+	// Sample first 50 lines; if >30% have code indicators, use tighter ratio.
+	lines := strings.SplitN(content, "\n", 51)
+	if len(lines) > 5 {
+		codeLines := 0
+		total := len(lines)
+		if total > 50 {
+			total = 50
+		}
+		for i := 0; i < total; i++ {
+			if looksLikeCode(lines[i]) {
+				codeLines++
+			}
+		}
+		if float64(codeLines)/float64(total) > 0.30 {
+			ratio = 3.2
+		}
+	}
+
+	return int(float64(len(content)) / ratio)
+}
+
+// looksLikeCode checks if a line has common code indicators.
+func looksLikeCode(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return false
+	}
+	// Common statement prefixes
+	codePrefixes := []string{
+		"func ", "if ", "for ", "import ", "def ", "class ",
+		"return ", "var ", "const ", "let ", "type ", "package ",
+		"pub ", "fn ", "use ", "from ", "struct ", "enum ",
+		"switch ", "case ", "//", "/*", "#include", "module ",
+	}
+	lower := strings.ToLower(trimmed)
+	for _, p := range codePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	// Common code suffixes
+	if strings.HasSuffix(trimmed, "{") || strings.HasSuffix(trimmed, "};") ||
+		strings.HasSuffix(trimmed, ");") || strings.HasSuffix(trimmed, "}") {
+		return true
+	}
+	return false
 }
 
 // buildMessages prepends the system prompt to the conversation messages.
@@ -2169,6 +2246,10 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage
 
 	if m.ragPrompt != "" {
 		sysPrompt += "\n\n" + m.ragPrompt
+	}
+
+	if m.planningPrompt != "" {
+		sysPrompt += "\n\n" + m.planningPrompt
 	}
 
 	if m.repoMap != "" {
@@ -4329,7 +4410,7 @@ func (m ChatModel) View() string {
 		ratio := float64(m.contextTokens) / float64(m.contextLimit)
 		var tokenStyled string
 		switch {
-		case ratio > 0.85:
+		case ratio > 0.78:
 			tokenStyled = TokenCritStyle.Render(tokenInfo)
 		case ratio > 0.60:
 			tokenStyled = TokenWarnStyle.Render(tokenInfo)
