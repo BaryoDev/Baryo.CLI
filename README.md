@@ -180,7 +180,8 @@ Baryo understands natural language and automatically routes to the right command
 research golang vs rust for web servers    → auto-triggers /research
 deep dive into kubernetes networking       → auto-triggers /research
 investigate the performance regression     → auto-triggers /research
-pros and cons of React vs Svelte           → auto-triggers /research
+should I use PostgreSQL or MongoDB?        → offers /strategy (y/n)
+what's the best approach to scaling?       → offers /strategy (y/n)
 ```
 
 The model also suggests commands naturally in conversation. Ask about current events and it will search automatically. Ask to "run the tests" and it will suggest `/run`. Ask to "commit this" and it will suggest `/commit`.
@@ -212,6 +213,10 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/params [k=v]` | View or change model parameters |
 | `/plan <prompt>` | Enter plan mode (read-only tools, produces implementation plan) |
 | `/plan done` | Exit plan mode and restore normal tool access |
+| `/strategy` | Start an interactive strategy wizard for structured decision analysis |
+| `/strategy <file>` | Load a JSON strategy file for analysis |
+| `/strategy init` | Generate a blank strategy.json template |
+| `/strategy done` | Exit strategy mode |
 | `/mode [name]` | Switch agent mode or list all modes |
 | `/mcp` | List connected MCP servers and their tools |
 | `/context` | Show token usage breakdown |
@@ -707,6 +712,44 @@ Exit plan mode and restore normal tool access:
 ```
 
 Plan mode also resets automatically on `/clear`.
+
+### Strategy planning
+
+Structured decision analysis for complex choices — career moves, purchases, business strategy, and anything where you need to weigh trade-offs.
+
+```bash
+# Inside the TUI
+/strategy
+```
+
+The strategy wizard interviews you step-by-step: your goal, relevant facts, constraints, and context. When you say "done", it produces a structured analysis with an optimal strategy, reasoning, sensitivity analysis, and knowledge gap searches.
+
+**Auto-detection:** Baryo detects strategy-worthy questions automatically. If you type something like "should I buy a Toyota or Honda for my family?" or "what's the best approach to paying off student loans?", it will offer to enter strategy mode:
+
+```
+You: should I buy a Toyota or Honda for my family?
+ℹ This looks like a strategic decision. Use /strategy for structured analysis? (y/n)
+y → enters strategy wizard with your question as the goal
+n → responds normally as a regular chat message
+```
+
+Detection triggers on decision phrases ("should I", "which is better", "help me decide"), trade-off phrases ("pros and cons", "compare", "vs"), and strategy phrases ("best approach", "best way to").
+
+**JSON input:** For repeatable or complex analyses, define your inputs in a file:
+
+```bash
+/strategy init              # generate a blank template
+# edit strategy.json with your goal, facts, and constraints
+/strategy strategy.json     # load and analyze
+```
+
+**Knowledge gap searches:** The analysis includes `/search` queries for information gaps. Baryo auto-runs these searches and feeds the results back into a refined analysis.
+
+**Exit strategy mode:**
+
+```bash
+/strategy done
+```
 
 ### Agent modes
 

@@ -331,6 +331,12 @@ func isStrategyQuestion(text string) bool {
 		"pros and cons", "compare", "versus", "vs ", "trade-off", "tradeoff",
 		// Strategy
 		"strategize", "strategy for", "best approach", "best way to",
+		// Architecture / coding decisions
+		"should i use", "which framework", "which library", "which database",
+		"which language", "monolith or microservice", "rest or graphql",
+		"rest vs graphql", "sql or nosql", "sql vs nosql",
+		"how should i architect", "how should i structure", "how should i design",
+		"what architecture", "what tech stack", "what stack should",
 	}
 	for _, p := range phrases {
 		if strings.Contains(lower, p) {
