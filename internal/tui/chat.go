@@ -132,8 +132,10 @@ type ChatModel struct {
 	strategyPhase      strategyPhase  // idle, gathering, done
 	strategyCompactAt  int            // index for post-analysis compaction
 	strategyContext    string         // accumulated strategy summary for refinement
-	strategyPending    bool           // true during strategy analysis streaming (for post-stream compaction)
-	strategySearchCh   <-chan string  // progress updates from knowledge gap searches
+	strategyPending       bool           // true during strategy analysis streaming (for post-stream compaction)
+	strategySearchCh      <-chan string  // progress updates from knowledge gap searches
+	strategyPromptPending bool           // true while showing y/n strategy suggestion
+	strategyPromptText    string         // saved user text if they accept/decline
 }
 
 // MCPManager is the interface for MCP server management.
@@ -561,6 +563,53 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 		}
 
+		// Strategy suggestion prompt: y/n after detecting a strategy-worthy question.
+		if m.strategyPromptPending {
+			switch msg.String() {
+			case "y", "Y":
+				m.strategyPromptPending = false
+				text := m.strategyPromptText
+				m.strategyPromptText = ""
+				m.messages = append(m.messages, llm.NewChatMessage("user", text))
+				m.history = append(m.history, chatEntry{
+					role:    roleUser,
+					content: text,
+					mode:    m.agentMode,
+				})
+				return m.handleStrategyWizardWith(text)
+			case "n", "N":
+				m.strategyPromptPending = false
+				text := m.strategyPromptText
+				m.strategyPromptText = ""
+				m.history = append(m.history, chatEntry{
+					role:    roleInfo,
+					content: "Okay, responding normally.",
+				})
+				// Route through normal chat flow
+				m.messages = append(m.messages, llm.NewChatMessage("user", text))
+				m.history = append(m.history, chatEntry{
+					role:    roleUser,
+					content: text,
+					mode:    m.agentMode,
+				})
+				modeCfg := modeRegistry[m.agentMode]
+				if modeCfg.Tools == ToolsNone {
+					return m.startNoToolStream(text)
+				}
+				hasSkill := m.hasActiveScripts()
+				var hasTools bool
+				switch modeCfg.Tools {
+				case ToolsDynamic:
+					hasTools = hasSkill || needsTools(text)
+				case ToolsAll, ToolsReadOnly:
+					hasTools = true
+				}
+				return m.startToolStream(text, hasTools, hasSkill)
+			default:
+				return m, nil
+			}
+		}
+
 		// Viewport scrolling — up/down arrows scroll the conversation.
 		if msg.String() == "up" && !m.isStream {
 			m.viewport.ScrollUp(3)
@@ -665,6 +714,23 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					})
 					return m.handleRemember(fact)
 				}
+			}
+
+			// Auto-strategy: detect decision-worthy questions and offer /strategy
+			if m.strategyPhase == strategyIdle && isStrategyQuestion(text) {
+				m.strategyPromptPending = true
+				m.strategyPromptText = text
+				m.history = append(m.history, chatEntry{
+					role:    roleUser,
+					content: text,
+					mode:    m.agentMode,
+				})
+				m.history = append(m.history, chatEntry{
+					role:    roleInfo,
+					content: "This looks like a strategic decision. Use /strategy for structured analysis? (y/n)",
+				})
+				m.updateViewport()
+				return m, nil
 			}
 
 			// Process @mentions — inject file contents as context

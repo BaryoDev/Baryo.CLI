@@ -69,7 +69,7 @@ func (m ChatModel) handleStrategy(arg string) (ChatModel, tea.Cmd) {
 
 	switch {
 	case arg == "":
-		return m.handleStrategyWizard()
+		return m.handleStrategyWizardWith("")
 	case strings.EqualFold(arg, "init"):
 		return m.handleStrategyInit()
 	case strings.EqualFold(arg, "done"):
@@ -79,8 +79,10 @@ func (m ChatModel) handleStrategy(arg string) (ChatModel, tea.Cmd) {
 	}
 }
 
-// handleStrategyWizard starts the interactive gathering mode.
-func (m ChatModel) handleStrategyWizard() (ChatModel, tea.Cmd) {
+// handleStrategyWizardWith starts the interactive gathering mode with an
+// optional initial question. When initialQuestion is non-empty, the model
+// treats it as the user's goal and skips asking for it.
+func (m ChatModel) handleStrategyWizardWith(initialQuestion string) (ChatModel, tea.Cmd) {
 	if m.strategyPhase == strategyGathering {
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
@@ -97,7 +99,13 @@ func (m ChatModel) handleStrategyWizard() (ChatModel, tea.Cmd) {
 	})
 
 	// Inject the gather prompt as a hidden user message
-	m.messages = append(m.messages, llm.NewChatMessage("user", "[strategy wizard]\n\n"+strategyGatherPrompt))
+	prompt := "[strategy wizard]\n\n" + strategyGatherPrompt
+	if initialQuestion != "" {
+		prompt += "\n\nThe user's question/goal is: " + initialQuestion +
+			"\nDo NOT ask what their goal is — they already stated it above. " +
+			"Acknowledge it briefly and proceed to ask about relevant facts and constraints."
+	}
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
 
 	// Start no-tool stream so model asks the first question
 	m.isStream = true
@@ -305,6 +313,31 @@ func extractSearchQueries(text string) []string {
 		}
 	}
 	return queries
+}
+
+// isStrategyQuestion detects questions that would benefit from structured
+// strategy analysis (decision-making, comparisons, trade-offs).
+func isStrategyQuestion(text string) bool {
+	if len(text) <= 20 {
+		return false
+	}
+	lower := strings.ToLower(text)
+	phrases := []string{
+		// Decision
+		"should i", "which is better", "what should i", "best option",
+		"what's the best", "whats the best", "which one should",
+		"help me decide", "help me choose",
+		// Trade-off
+		"pros and cons", "compare", "versus", "vs ", "trade-off", "tradeoff",
+		// Strategy
+		"strategize", "strategy for", "best approach", "best way to",
+	}
+	for _, p := range phrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // isStrategyDoneSignal detects when the user wants to trigger the analysis.
