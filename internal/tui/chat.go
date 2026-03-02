@@ -25,8 +25,10 @@ import (
 
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/doctor"
+	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/logger"
+	"github.com/arnelirobles/baryo-cli/internal/rag"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/setup"
@@ -127,6 +129,14 @@ type ChatModel struct {
 
 	// Export
 	exportPath string // default directory for /export output (empty = current dir)
+
+	// Repo map (tree-sitter index)
+	repoIndex *index.Index // shared index reference
+	repoMap   string       // pre-rendered repo map for system prompt
+
+	// RAG context retrieval
+	ragPipeline *rag.RAG  // shared RAG index reference
+	ragPrompt   string    // pre-rendered <context> block for system prompt
 
 	// Strategy planning
 	strategyPhase      strategyPhase  // idle, gathering, done
@@ -775,6 +785,15 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.messages[len(m.messages)-1] = llm.NewChatMessage("user", refineMsg)
 			}
 
+			// RAG: recompute context for this message.
+			m.ragPrompt = buildRAGPrompt(m.ragPipeline, text, m.contextLimit)
+
+			// Proactive web search: if RAG detects the query needs fresh info,
+			// trigger /search automatically instead of waiting for the model to ask.
+			if m.ragPipeline != nil && m.ragPipeline.NeedsFreshInfo(text) && !m.searchPending && !m.searchFallbackUsed {
+				return m.handleSearch(text)
+			}
+
 			// Route based on current agent mode
 			modeCfg := modeRegistry[m.agentMode]
 			if modeCfg.Tools == ToolsNone {
@@ -1086,6 +1105,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Auto-compaction: trigger if over 85% of context limit
 			if m.contextTokens > int(float64(m.contextLimit)*0.85) && len(m.messages) > 8 {
 				return m.startCompaction()
+			}
+
+			// Incremental repo map refresh after each turn.
+			if m.repoIndex != nil {
+				return m, m.refreshRepoMap()
 			}
 
 			return m, nil
@@ -1419,6 +1443,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 
+	case RepoMapUpdatedMsg:
+		if m.repoIndex != nil {
+			m.repoMap = buildRepoMapPrompt(m.repoIndex, m.contextLimit)
+		}
+		return m, nil
+
 	case setupStartedMsg:
 		m.setupProgressCh = msg.ch
 		return m, waitForSetupProgress(m.setupProgressCh)
@@ -1694,12 +1724,45 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			pct = total * 100 / m.contextLimit
 		}
 		m.contextTokens = total
+
+		repoMapInfo := "Repo map:        off"
+		if m.repoMap != "" {
+			mapTokens := len(m.repoMap) / 4
+			fileCount := 0
+			if m.repoIndex != nil {
+				fileCount = m.repoIndex.FileCount()
+			}
+			repoMapInfo = fmt.Sprintf("Repo map:        ~%s tokens (%d files)", formatTokenCount(mapTokens), fileCount)
+		} else if m.repoIndex != nil && m.repoIndex.Ready() {
+			repoMapInfo = "Repo map:        skipped (context too small)"
+		} else if m.repoIndex == nil {
+			repoMapInfo = "Repo map:        indexing..."
+		}
+
+		ragInfo := "RAG:             off"
+		if m.ragPrompt != "" {
+			ragTokens := len(m.ragPrompt) / 4
+			docCount := 0
+			sesCount := 0
+			if m.ragPipeline != nil {
+				docCount = m.ragPipeline.DocCount()
+				sesCount = m.ragPipeline.SessionCount()
+			}
+			ragInfo = fmt.Sprintf("RAG:             ~%s tokens (%d docs, %d sessions)", formatTokenCount(ragTokens), docCount, sesCount)
+		} else if m.ragPipeline != nil && m.ragPipeline.Ready() {
+			ragInfo = "RAG:             ready (no matches yet)"
+		} else if m.ragPipeline == nil {
+			ragInfo = "RAG:             indexing..."
+		}
+
 		m.history = append(m.history, chatEntry{
 			role: "assistant",
-			content: fmt.Sprintf("System prompt:   ~%s tokens\nConversation:    ~%s tokens (%d messages)\nTotal estimated: ~%s / %s (%d%%)",
+			content: fmt.Sprintf("System prompt:   ~%s tokens\nConversation:    ~%s tokens (%d messages)\n%s\n%s\nTotal estimated: ~%s / %s (%d%%)",
 				formatTokenCount(sysTokens),
 				formatTokenCount(convTokens),
 				len(m.messages),
+				repoMapInfo,
+				ragInfo,
 				formatTokenCount(total),
 				formatTokenCount(m.contextLimit),
 				pct,
@@ -2010,6 +2073,69 @@ func (m *ChatModel) mcpContextWindow() int {
 	return m.contextLimit
 }
 
+// repoMapBudget returns the token budget for the repo map based on context window size.
+func repoMapBudget(contextLimit int) int {
+	switch {
+	case contextLimit < 16_000:
+		return 0
+	case contextLimit < 32_000:
+		return contextLimit * 5 / 100
+	case contextLimit < 64_000:
+		return contextLimit * 10 / 100
+	case contextLimit < 128_000:
+		return contextLimit * 12 / 100
+	default:
+		return contextLimit * 15 / 100
+	}
+}
+
+// buildRepoMapPrompt generates a <repo-map> block from the index within the token budget.
+func buildRepoMapPrompt(idx *index.Index, contextLimit int) string {
+	budget := repoMapBudget(contextLimit)
+	if budget <= 0 || idx == nil || !idx.Ready() {
+		return ""
+	}
+	body := idx.RepoMap(budget)
+	if body == "" {
+		return ""
+	}
+	return "<repo-map>\n" + body + "\n</repo-map>"
+}
+
+// ragBudget returns the token budget for RAG context based on context window size.
+func ragBudget(contextLimit int) int {
+	switch {
+	case contextLimit < 16_000:
+		return 0
+	case contextLimit < 32_000:
+		return contextLimit * 3 / 100
+	case contextLimit < 64_000:
+		return contextLimit * 5 / 100
+	case contextLimit < 128_000:
+		return contextLimit * 8 / 100
+	default:
+		return contextLimit * 10 / 100
+	}
+}
+
+// buildRAGPrompt queries the RAG pipeline and returns a <context> block within budget.
+func buildRAGPrompt(r *rag.RAG, userMessage string, contextLimit int) string {
+	budget := ragBudget(contextLimit)
+	if budget <= 0 || r == nil || !r.Ready() {
+		return ""
+	}
+	return r.Query(userMessage, budget)
+}
+
+// refreshRepoMap returns a Cmd that performs an incremental index update in a goroutine.
+func (m *ChatModel) refreshRepoMap() tea.Cmd {
+	idx := m.repoIndex
+	return func() tea.Msg {
+		_ = idx.Update(context.Background())
+		return RepoMapUpdatedMsg{}
+	}
+}
+
 func estimateTokens(messages []llm.ChatMessage) int {
 	total := 0
 	for _, m := range messages {
@@ -2042,6 +2168,14 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage
 	// the beginning of the system prompt and tend to ignore content at the end.
 	if m.memoriesPrompt != "" {
 		sysPrompt += "\n\n" + m.memoriesPrompt
+	}
+
+	if m.ragPrompt != "" {
+		sysPrompt += "\n\n" + m.ragPrompt
+	}
+
+	if m.repoMap != "" {
+		sysPrompt += "\n\n" + m.repoMap
 	}
 
 	sysPrompt += "\n\n" + defaultSkillsPrompt

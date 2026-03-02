@@ -303,6 +303,54 @@ The token count is color-coded: dim when under 60%, amber at 60-85%, and red abo
 
 **Auto-compaction** triggers automatically when token usage exceeds 85% of the context limit and there are enough messages to compact. Older messages are replaced with a summary while recent exchanges are kept verbatim.
 
+### Knowledge retrieval (RAG)
+
+Baryo automatically retrieves relevant context from local knowledge files and past conversations, injecting it into the system prompt so the model answers better without extra effort.
+
+**Knowledge files:** Place `.md`, `.txt`, or `.rst` files in a knowledge directory:
+
+| Path | Scope |
+|------|-------|
+| `~/.baryo/knowledge/` | Global — available in all projects |
+| `.baryo/knowledge/` | Project-local — only for this project |
+
+```bash
+# Add project-specific knowledge
+mkdir -p .baryo/knowledge
+echo "Our API runs on port 8443. Deploy via GitHub Actions." > .baryo/knowledge/infra.md
+
+# Add global knowledge
+mkdir -p ~/.baryo/knowledge
+echo "Always use conventional commits: feat, fix, chore, docs." > ~/.baryo/knowledge/conventions.md
+```
+
+**How it works:**
+
+1. On startup, Baryo indexes knowledge files and up to 20 recent sessions in the background (same pattern as the repo map)
+2. On each user message, BM25 keyword search ranks the most relevant chunks
+3. Matching content is injected as a `<context>` block in the system prompt (after memories, before repo map)
+4. Budget scales with context window: 0% for <16K, 3-10% for larger windows
+
+**Session memory:** Past conversations are automatically indexed. If you discussed something in a previous session, relevant Q&A pairs surface as context for new questions.
+
+**Auto web search:** Time-sensitive queries (containing "today", "latest", "2025", "news about", etc.) automatically trigger `/search` before the model responds — no more two-step "I don't know" → "yes, search" dance.
+
+**Check status:**
+
+```bash
+/context    # shows RAG line alongside repo map and token counts
+```
+
+```
+System prompt:   ~2.1k tokens
+Conversation:    ~800 tokens (4 messages)
+Repo map:        ~1.5k tokens (42 files)
+RAG:             ~150 tokens (3 docs, 12 sessions)
+Total estimated: ~4.6k / 128k (3%)
+```
+
+RAG is skipped entirely for small models (<16K context) to avoid wasting limited space.
+
 ### Conversation export
 
 Export your conversation to a file or copy the last response to the clipboard.

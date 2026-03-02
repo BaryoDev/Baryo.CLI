@@ -5,7 +5,9 @@
 package tui
 
 import (
+	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/arnelirobles/baryo-cli/internal/rag"
 	"github.com/arnelirobles/baryo-cli/internal/search"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/setup"
@@ -165,4 +167,17 @@ type StrategySearchDoneMsg struct {
 	Queries []string // the queries that were run
 	Results []string // corresponding results from DeepQuery
 	Err     error
+}
+
+// RepoMapReadyMsg signals that the background repo index has finished building.
+type RepoMapReadyMsg struct {
+	Index *index.Index
+}
+
+// RepoMapUpdatedMsg signals that an incremental repo map refresh has completed.
+type RepoMapUpdatedMsg struct{}
+
+// RAGReadyMsg signals that the background RAG index has finished building.
+type RAGReadyMsg struct {
+	RAG *rag.RAG
 }

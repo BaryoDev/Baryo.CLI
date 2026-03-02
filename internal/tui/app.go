@@ -7,13 +7,16 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
+	"github.com/arnelirobles/baryo-cli/internal/rag"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/setup"
 )
@@ -58,6 +61,9 @@ type AppModel struct {
 	sessionSelect SessionSelectModel
 	modelBrowser  ModelBrowserModel
 	chat          ChatModel
+
+	repoIndex          *index.Index // background repo map index
+	ragPipeline        *rag.RAG    // background RAG index
 
 	pendingModel       *llm.Model // model waiting to be loaded
 	loadStart          time.Time  // when model loading began
@@ -208,7 +214,7 @@ func (m AppModel) Init() tea.Cmd {
 			return ShowSessionsMsg{Sessions: m.sessionList}
 		}
 	}
-	cmds := []tea.Cmd{m.spinner.Tick, m.loadModels(), m.checkFirstRunSetup()}
+	cmds := []tea.Cmd{m.spinner.Tick, m.loadModels(), m.checkFirstRunSetup(), m.startRepoIndex(), m.startRAGIndex()}
 	if len(m.mcpConfigs) > 0 {
 		cmds = append(cmds, m.startMCPServers())
 	}
@@ -228,6 +234,33 @@ func (m AppModel) checkFirstRunSetup() tea.Cmd {
 			return SetupPromptMsg{}
 		}
 		return nil
+	}
+}
+
+// startRepoIndex builds the repo map index in the background.
+func (m AppModel) startRepoIndex() tea.Cmd {
+	return func() tea.Msg {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return RepoMapReadyMsg{}
+		}
+		idx := index.New(cwd)
+		if err := idx.Build(context.Background()); err != nil {
+			return RepoMapReadyMsg{}
+		}
+		return RepoMapReadyMsg{Index: idx}
+	}
+}
+
+// startRAGIndex builds the RAG retrieval index in the background.
+func (m AppModel) startRAGIndex() tea.Cmd {
+	return func() tea.Msg {
+		cwd, _ := os.Getwd()
+		r := rag.New(cwd, cwd)
+		if err := r.Build(context.Background()); err != nil {
+			return RAGReadyMsg{}
+		}
+		return RAGReadyMsg{RAG: r}
 	}
 }
 
@@ -270,6 +303,21 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case RepoMapReadyMsg:
+		m.repoIndex = msg.Index
+		if m.screen == screenChat && msg.Index != nil {
+			m.chat.repoIndex = msg.Index
+			m.chat.repoMap = buildRepoMapPrompt(msg.Index, m.chat.contextLimit)
+		}
+		return m, nil
+
+	case RAGReadyMsg:
+		m.ragPipeline = msg.RAG
+		if m.screen == screenChat && msg.RAG != nil {
+			m.chat.ragPipeline = msg.RAG
+		}
+		return m, nil
+
 	case SessionLoadedMsg:
 		if msg.Err != nil {
 			m.err = msg.Err
@@ -277,6 +325,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenChat
 		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
+		if m.repoIndex != nil {
+			m.chat.repoIndex = m.repoIndex
+			m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)
+		}
+		if m.ragPipeline != nil {
+			m.chat.ragPipeline = m.ragPipeline
+		}
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(tea.WindowSizeMsg{
 			Width:  m.width,
@@ -498,6 +553,13 @@ func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.screen = screenChat
 	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
 	m.chat.exportPath = m.exportPath
+	if m.repoIndex != nil {
+		m.chat.repoIndex = m.repoIndex
+		m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)
+	}
+	if m.ragPipeline != nil {
+		m.chat.ragPipeline = m.ragPipeline
+	}
 	if m.pendingSetupPrompt {
 		m.pendingSetupPrompt = false
 		m.chat.setupPromptPending = true
