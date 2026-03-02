@@ -30,7 +30,7 @@ func DetectModelHints(modelTag string) ModelHints {
 			DisableThink:  true,
 			Temperature:   &temp,
 			TopK:          &topK,
-			ContextWindow: 8192,
+			ContextWindow: 32768,
 		}
 
 	case strings.Contains(lower, "phi"):
