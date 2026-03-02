@@ -144,3 +144,13 @@ type SetupDoneMsg struct {
 	Installed int
 	Err       error
 }
+
+// StrategyLoadedMsg carries parsed strategy JSON back to the chat.
+type StrategyLoadedMsg struct {
+	Goal        string
+	Facts       string
+	Constraints string
+	Context     string
+	Path        string
+	Err         error
+}

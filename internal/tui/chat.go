@@ -124,6 +124,12 @@ type ChatModel struct {
 	setupPromptPending bool                          // true when showing y/n prompt
 	setupRunning       bool                          // true during download
 	setupProgressCh    <-chan setup.DownloadProgress  // receives progress from download goroutine
+
+	// Strategy planning
+	strategyPhase     strategyPhase // idle, gathering, done
+	strategyCompactAt int           // index for post-analysis compaction
+	strategyContext   string        // accumulated strategy summary for refinement
+	strategyPending   bool          // true during strategy analysis streaming (for post-stream compaction)
 }
 
 // MCPManager is the interface for MCP server management.
@@ -685,6 +691,20 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				mode:    m.agentMode,
 			})
 
+			// Strategy wizard: detect "done" signal → inject analysis trigger
+			if m.strategyPhase == strategyGathering && isStrategyDoneSignal(text) {
+				m.messages[len(m.messages)-1] = llm.NewChatMessage("user",
+					text+"\n\n[User is ready. Produce the full strategy analysis now following the format: "+
+						"### Optimal Strategy, ### Why This Path, ### Sensitivity Analysis, ### Knowledge Gaps]")
+			}
+
+			// Strategy refinement: frame follow-up messages as refinement queries
+			if m.strategyPhase == strategyDone {
+				refineMsg := fmt.Sprintf(strategyRefineTemplate,
+					search.TruncateContent(m.strategyContext, 2000), text)
+				m.messages[len(m.messages)-1] = llm.NewChatMessage("user", refineMsg)
+			}
+
 			// Route based on current agent mode
 			modeCfg := modeRegistry[m.agentMode]
 			if modeCfg.Tools == ToolsNone {
@@ -888,6 +908,35 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					content := *m.messages[idx].Content
 					if len(content) > 500 {
 						content = content[:500] + "\n... (full research context summarized by assistant above)"
+					}
+					m.messages[idx] = llm.NewChatMessage("user", content)
+				}
+				promptIdx := idx + 1
+				if promptIdx < len(m.messages) && m.messages[promptIdx].Role == "user" {
+					m.messages = append(m.messages[:promptIdx], m.messages[promptIdx+1:]...)
+				}
+			}
+
+			// Strategy: detect wizard → analysis transition
+			if m.strategyPhase == strategyGathering && m.turnContent != "" {
+				if strings.Contains(m.turnContent, "### Optimal Strategy") ||
+					strings.Contains(m.turnContent, "## Optimal Strategy") {
+					m.strategyPhase = strategyDone
+					m.strategyContext = m.turnContent
+				}
+			}
+
+			// Strategy: compact raw input after analysis + save context for refinement
+			if m.strategyPending {
+				m.strategyPending = false
+				if m.turnContent != "" {
+					m.strategyContext = m.turnContent
+				}
+				idx := m.strategyCompactAt
+				if idx >= 0 && idx < len(m.messages) && m.messages[idx].Role == "user" && m.messages[idx].Content != nil {
+					content := *m.messages[idx].Content
+					if len(content) > 500 {
+						content = content[:500] + "\n... (full strategy input summarized by assistant above)"
 					}
 					m.messages[idx] = llm.NewChatMessage("user", content)
 				}
@@ -1191,6 +1240,49 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
 
+	case StrategyLoadedMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    roleError,
+				content: fmt.Sprintf("Strategy error: %v", msg.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+
+		// Inject formatted input as context
+		contextMsg := fmt.Sprintf("[Strategy input from %s]\n\nGoal: %s\nFacts:\n%s\nConstraints:\n%s\nContext: %s",
+			msg.Path, msg.Goal, msg.Facts, msg.Constraints, msg.Context)
+		m.strategyCompactAt = len(m.messages)
+		m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
+
+		// Inject analysis prompt
+		analysisPrompt := fmt.Sprintf(strategyPromptTemplate, msg.Goal, msg.Facts, msg.Constraints, msg.Context)
+		m.messages = append(m.messages, llm.NewChatMessage("user", analysisPrompt))
+
+		m.history = append(m.history, chatEntry{
+			role:    roleTool,
+			content: fmt.Sprintf("Strategy loaded from %s — analyzing...", msg.Path),
+		})
+
+		// Skip gathering — input is complete
+		m.strategyPhase = strategyDone
+		m.strategyPending = true
+
+		// Start no-tool stream for the analysis
+		m.isStream = true
+		m.streaming = ""
+		m.turnContent = ""
+		m.toolStatus = "Analyzing strategy..."
+		m.streamStart = time.Now()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancelFunc = cancel
+		m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+
+		m.updateViewport()
+		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+
 	case setupStartedMsg:
 		m.setupProgressCh = msg.ch
 		return m, waitForSetupProgress(m.setupProgressCh)
@@ -1356,6 +1448,8 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.history = nil
 		m.session = sess
 		m.agentMode = ModeChat
+		m.strategyPhase = strategyIdle
+		m.strategyContext = ""
 		m.contextTokens = estimateTokens(m.buildMessages())
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
@@ -1637,6 +1731,13 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleMode(strings.TrimPrefix(text, "/mode "))
 		}
 
+		if trimmed == "/strategy" {
+			return m.handleStrategy("")
+		}
+		if strings.HasPrefix(text, "/strategy ") {
+			return m.handleStrategy(strings.TrimPrefix(text, "/strategy "))
+		}
+
 		if trimmed == "/plan" {
 			if m.agentMode == ModeArchitect {
 				m.history = append(m.history, chatEntry{
@@ -1726,6 +1827,21 @@ var reviewModePrompt string
 //
 //go:embed prompts/research_mode.md
 var researchModePrompt string
+
+// strategyPromptTemplate is the prompt used for structured strategy analysis.
+//
+//go:embed prompts/strategy.md
+var strategyPromptTemplate string
+
+// strategyGatherPrompt puts the model into question-asking mode for strategy.
+//
+//go:embed prompts/strategy_gather.md
+var strategyGatherPrompt string
+
+// strategyRefineTemplate is used when the user adds info after strategy analysis.
+//
+//go:embed prompts/strategy_refine.md
+var strategyRefineTemplate string
 
 func init() {
 	initModePrompts()
@@ -2711,6 +2827,9 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /plan done         Exit architect mode
   /search <query>    Search the web and summarize results
   /research <topic>  Multi-round deep research with report
+  /strategy [file]   Analyze facts+constraints+goal → optimal steps
+  /strategy init     Generate a blank strategy template JSON
+  /strategy done     Exit strategy mode
   /fetch <url>       Fetch and display a web page
   /skills            List available skills
   /skill <name>      Activate a skill (loads full instructions)

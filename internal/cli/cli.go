@@ -48,6 +48,7 @@ type Config struct {
 	Output       string
 	NoTools      bool
 	Debug        bool
+	Strategy     string // --strategy flag: path to strategy JSON file
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -78,6 +79,7 @@ func Parse() Config {
 	fs.StringVar(&cfg.Output, "output", "text", "output format for print mode: text or json")
 	fs.BoolVar(&cfg.NoTools, "no-tools", false, "disable tool calling in print mode")
 	fs.BoolVar(&cfg.Debug, "debug", false, "enable debug logging to ~/.baryo/debug.log")
+	fs.StringVar(&cfg.Strategy, "strategy", "", "path to strategy JSON file (use with -p)")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
@@ -140,7 +142,7 @@ func (c Config) Mode() Mode {
 	if c.Doctor {
 		return ModeDoctor
 	}
-	if c.Prompt != "" || c.StdinData != "" {
+	if c.Prompt != "" || c.StdinData != "" || c.Strategy != "" {
 		return ModePrint
 	}
 	return ModeInteractive
@@ -185,6 +187,7 @@ Flags:
   --max-turns <n>       Max tool-call rounds in print mode (default: 5)
   --output <fmt>        Output format for print mode: text or json
   --no-tools            Disable tool calling in print mode
+  --strategy <file>     Path to strategy JSON file (use with -p)
   --debug               Enable debug logging to ~/.baryo/debug.log
   --skip-checks         Skip startup health checks
   --version             Print version and exit
@@ -205,6 +208,7 @@ TUI Commands:
   /markdown         Toggle markdown rendering on/off
   /doctor           Run diagnostic checks inside the TUI
   /search <query>   Search the web (DuckDuckGo, Brave, or Tavily)
+  /strategy [file]  Analyze facts+constraints+goal → optimal steps
   /fetch <url>      Fetch a URL and inject its content into the conversation
 
 Mentions:

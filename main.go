@@ -144,17 +144,34 @@ func main() {
 			defer mcpMgr.Close()
 		}
 
+		// Load and format strategy JSON if --strategy flag is provided.
+		var strategyInput string
+		if flags.Strategy != "" {
+			si, err := cli.LoadStrategyFile(flags.Strategy)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(2)
+			}
+			strategyInput = si
+		}
+
+		prompt := flags.FullPrompt()
+		if prompt == "" && strategyInput != "" {
+			prompt = "Analyze the strategy input above and find optimal steps."
+		}
+
 		printOpts := cli.PrintOptions{
 			Endpoint:       ep,
 			SystemPrompt:   systemPrompt,
 			Model:          model,
-			Prompt:         flags.FullPrompt(),
+			Prompt:         prompt,
 			Params:         cfg.Params,
 			PermissionMode: cfg.PermissionMode,
 			MaxTurns:       flags.MaxTurns,
 			OutputFormat:   flags.Output,
 			EnableTools:    enableTools,
 			MCPManager:     mcpMgr,
+			StrategyInput:  strategyInput,
 		}
 		os.Exit(cli.RunPrint(printOpts))
 		return

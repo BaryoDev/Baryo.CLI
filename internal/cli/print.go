@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,7 +15,11 @@ import (
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
+	"github.com/arnelirobles/baryo-cli/internal/tui"
 )
+
+//go:embed strategy_prompt.md
+var strategyPrintPrompt string
 
 // MCPToolProvider is the interface for MCP tool integration in headless mode.
 type MCPToolProvider interface {
@@ -35,6 +40,7 @@ type PrintOptions struct {
 	OutputFormat   string // "text" or "json"
 	EnableTools    bool
 	MCPManager     MCPToolProvider // nil when no MCP servers configured
+	StrategyInput  string          // pre-formatted strategy context (from --strategy flag)
 }
 
 // RunPrint runs a single prompt through the model in headless mode.
@@ -221,6 +227,9 @@ func buildMessages(opts PrintOptions) []llm.ChatMessage {
 	if opts.SystemPrompt != "" {
 		messages = append(messages, llm.NewChatMessage("system", opts.SystemPrompt))
 	}
+	if opts.StrategyInput != "" {
+		messages = append(messages, llm.NewChatMessage("user", opts.StrategyInput))
+	}
 	messages = append(messages, llm.NewChatMessage("user", opts.Prompt))
 	return messages
 }
@@ -275,6 +284,23 @@ func mcpContextWindow(ep llm.Endpoint, tag string) int {
 		return 1_000_000
 	}
 	return contextWindowForModel(tag)
+}
+
+// LoadStrategyFile reads a strategy JSON file and returns the formatted prompt.
+func LoadStrategyFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("cannot read %s: %w", path, err)
+	}
+
+	var input tui.StrategyInput
+	if err := json.Unmarshal(data, &input); err != nil {
+		return "", fmt.Errorf("invalid JSON in %s: %w", path, err)
+	}
+
+	goal, facts, constraints, ctx := tui.FormatStrategyInput(input)
+	prompt := fmt.Sprintf(strategyPrintPrompt, goal, facts, constraints, ctx)
+	return prompt, nil
 }
 
 // printJSON marshals v as indented JSON and writes it to stdout.

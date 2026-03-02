@@ -31,6 +31,8 @@ Only suggest /remember when the user says something NEW like "I prefer...", "alw
 /mode [name] — switch agent mode (chat, ask, code, architect, review, research)
 /plan <prompt> — enter architect mode (read-only tools, explore codebase + produce implementation plan)
 /plan done — exit architect mode
+/strategy [file] — structured decision planning (facts+constraints+goal → optimal steps)
+/strategy init — generate blank strategy template
 /setup — download/update starter skills
 /skills — list available skills
 /skill <name> — activate a skill
