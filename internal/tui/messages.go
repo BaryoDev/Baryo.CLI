@@ -154,3 +154,15 @@ type StrategyLoadedMsg struct {
 	Path        string
 	Err         error
 }
+
+// StrategySearchProgressMsg carries a status update from the knowledge gap search pipeline.
+type StrategySearchProgressMsg struct {
+	Status string
+}
+
+// StrategySearchDoneMsg signals that knowledge gap searches have finished.
+type StrategySearchDoneMsg struct {
+	Queries []string // the queries that were run
+	Results []string // corresponding results from DeepQuery
+	Err     error
+}

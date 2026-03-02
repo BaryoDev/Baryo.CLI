@@ -129,10 +129,11 @@ type ChatModel struct {
 	exportPath string // default directory for /export output (empty = current dir)
 
 	// Strategy planning
-	strategyPhase     strategyPhase // idle, gathering, done
-	strategyCompactAt int           // index for post-analysis compaction
-	strategyContext   string        // accumulated strategy summary for refinement
-	strategyPending   bool          // true during strategy analysis streaming (for post-stream compaction)
+	strategyPhase      strategyPhase  // idle, gathering, done
+	strategyCompactAt  int            // index for post-analysis compaction
+	strategyContext    string         // accumulated strategy summary for refinement
+	strategyPending    bool           // true during strategy analysis streaming (for post-stream compaction)
+	strategySearchCh   <-chan string  // progress updates from knowledge gap searches
 }
 
 // MCPManager is the interface for MCP server management.
@@ -1008,6 +1009,14 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.saveSession()
 			m.updateViewport()
 
+			// Auto-search knowledge gaps after strategy analysis completes
+			if m.strategyPhase == strategyDone && m.strategyContext != "" && m.strategySearchCh == nil {
+				queries := extractSearchQueries(m.strategyContext)
+				if len(queries) > 0 {
+					return m.startStrategySearch(queries)
+				}
+			}
+
 			// Auto-compaction: trigger if over 85% of context limit
 			if m.contextTokens > int(float64(m.contextLimit)*0.85) && len(m.messages) > 8 {
 				return m.startCompaction()
@@ -1277,6 +1286,64 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.streaming = ""
 		m.turnContent = ""
 		m.toolStatus = "Analyzing strategy..."
+		m.streamStart = time.Now()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancelFunc = cancel
+		m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+
+		m.updateViewport()
+		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+
+	case StrategySearchProgressMsg:
+		m.toolStatus = msg.Status
+		m.history = append(m.history, chatEntry{
+			role:    roleTool,
+			content: msg.Status,
+		})
+		m.updateViewport()
+		return m, waitForStrategySearchProgress(m.strategySearchCh)
+
+	case StrategySearchDoneMsg:
+		m.strategySearchCh = nil
+		if msg.Err != nil {
+			m.isStream = false
+			m.toolStatus = ""
+			m.history = append(m.history, chatEntry{
+				role:    roleError,
+				content: fmt.Sprintf("Knowledge gap search error: %v", msg.Err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+
+		// Combine search results
+		var combined strings.Builder
+		for i, q := range msg.Queries {
+			fmt.Fprintf(&combined, "### Search: %s\n\n%s\n\n", q, msg.Results[i])
+		}
+
+		// Inject search results as context
+		m.strategyCompactAt = len(m.messages)
+		m.messages = append(m.messages, llm.NewChatMessage("user",
+			fmt.Sprintf("[Strategy knowledge gap search results]\n\n%s", combined.String())))
+
+		// Inject final analysis prompt
+		initialSummary := search.TruncateContent(m.strategyContext, 2000)
+		m.messages = append(m.messages, llm.NewChatMessage("user",
+			fmt.Sprintf(strategyFinalTemplate, initialSummary, combined.String())))
+
+		m.history = append(m.history, chatEntry{
+			role:    roleTool,
+			content: fmt.Sprintf("Knowledge gaps filled (%d searches) — producing final analysis...", len(msg.Queries)),
+		})
+
+		// Stream the final merged analysis
+		m.strategyPending = true
+		m.isStream = true
+		m.streaming = ""
+		m.turnContent = ""
+		m.toolStatus = "Producing final analysis..."
 		m.streamStart = time.Now()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1845,6 +1912,11 @@ var strategyGatherPrompt string
 //
 //go:embed prompts/strategy_refine.md
 var strategyRefineTemplate string
+
+// strategyFinalTemplate merges search results into a single final analysis.
+//
+//go:embed prompts/strategy_final.md
+var strategyFinalTemplate string
 
 func init() {
 	initModePrompts()
@@ -2493,6 +2565,14 @@ func isInternalMessage(msg llm.ChatMessage) bool {
 	if strings.HasPrefix(c, "You previously produced a strategy") {
 		return true
 	}
+	// Strategy auto-search context
+	if strings.HasPrefix(c, "[Strategy knowledge gap search results]") {
+		return true
+	}
+	// Strategy final analysis prompt
+	if strings.HasPrefix(c, "You previously produced an initial strategy analysis.") {
+		return true
+	}
 	return false
 }
 
@@ -2645,6 +2725,61 @@ func waitForResearchProgress(ch <-chan string) tea.Cmd {
 			return nil // channel closed, pipeline done
 		}
 		return ResearchProgressMsg{Status: status}
+	}
+}
+
+// startStrategySearch launches background goroutine to run DeepQuery for each
+// knowledge gap query, sending progress updates via channel.
+func (m ChatModel) startStrategySearch(queries []string) (ChatModel, tea.Cmd) {
+	progressCh := make(chan string, 10)
+	m.strategySearchCh = progressCh
+	m.isStream = true
+	m.streamStart = time.Now()
+	m.toolStatus = fmt.Sprintf("Researching knowledge gaps (0/%d)...", len(queries))
+
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: fmt.Sprintf("Auto-searching %d knowledge gaps...", len(queries)),
+	})
+	m.updateViewport()
+
+	provider := m.searchProvider
+	apiKey := m.searchAPIKey
+
+	doneCh := make(chan StrategySearchDoneMsg, 1)
+
+	go func() {
+		var results []string
+		for i, q := range queries {
+			progressCh <- fmt.Sprintf("Researching knowledge gaps (%d/%d): %s...", i+1, len(queries), q)
+			result, err := search.DeepQuery(provider, apiKey, q)
+			if err != nil {
+				close(progressCh)
+				doneCh <- StrategySearchDoneMsg{Err: fmt.Errorf("search %q: %w", q, err)}
+				return
+			}
+			results = append(results, result)
+		}
+		close(progressCh)
+		doneCh <- StrategySearchDoneMsg{Queries: queries, Results: results}
+	}()
+
+	waitDone := func() tea.Msg {
+		return <-doneCh
+	}
+
+	return m, tea.Batch(waitForStrategySearchProgress(m.strategySearchCh), waitDone, doSpinTick())
+}
+
+// waitForStrategySearchProgress returns a Cmd that reads the next progress string
+// from the strategy search channel.
+func waitForStrategySearchProgress(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		status, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return StrategySearchProgressMsg{Status: status}
 	}
 }
 

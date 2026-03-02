@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -263,6 +264,47 @@ func FormatStrategyInput(input StrategyInput) (goal, facts, constraints, context
 	}
 
 	return goal, facts, constraints, context
+}
+
+// extractSearchQueries parses the Knowledge Gaps section of a strategy analysis
+// and returns /search queries (without the /search prefix). Capped at 5.
+func extractSearchQueries(text string) []string {
+	// Find the Knowledge Gaps section
+	idx := strings.Index(text, "### Knowledge Gaps")
+	if idx < 0 {
+		idx = strings.Index(text, "## Knowledge Gaps")
+	}
+	if idx < 0 {
+		return nil
+	}
+	section := text[idx:]
+
+	// Stop at the next heading (if any)
+	if end := strings.Index(section[3:], "\n##"); end >= 0 {
+		section = section[:end+3]
+	}
+
+	re := regexp.MustCompile("(?:`/search\\s+([^`]+)`|/search\\s+(.+?)(?:\\s*$))")
+	var queries []string
+	for _, line := range strings.Split(section, "\n") {
+		matches := re.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+		q := matches[1]
+		if q == "" {
+			q = matches[2]
+		}
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		queries = append(queries, q)
+		if len(queries) >= 5 {
+			break
+		}
+	}
+	return queries
 }
 
 // isStrategyDoneSignal detects when the user wants to trigger the analysis.
