@@ -187,6 +187,7 @@ func main() {
 			tui.WithProviderKeys(cfg.ProviderKeys),
 			tui.WithRewrite(cfg.RewriteEnabled()),
 			tui.WithMCPInReadOnly(cfg.MCPInReadOnlyEnabled()),
+			tui.WithExportPath(cfg.ExportPath),
 		}
 
 		if len(cfg.MCPServers) > 0 {

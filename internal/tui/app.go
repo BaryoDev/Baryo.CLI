@@ -45,6 +45,7 @@ type AppModel struct {
 
 	rewrite          bool               // prompt rewrite pass enabled
 	mcpInReadOnly    bool               // allow MCP tools in read-only modes
+	exportPath       string             // default directory for /export output
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
@@ -145,6 +146,13 @@ func WithRewrite(enabled bool) AppOption {
 func WithMCPInReadOnly(enabled bool) AppOption {
 	return func(a *AppModel) {
 		a.mcpInReadOnly = enabled
+	}
+}
+
+// WithExportPath sets the default directory for /export output.
+func WithExportPath(path string) AppOption {
+	return func(a *AppModel) {
+		a.exportPath = path
 	}
 }
 
@@ -489,6 +497,7 @@ func preloadModel(socketPath, modelTag string) tea.Cmd {
 func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.screen = screenChat
 	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
+	m.chat.exportPath = m.exportPath
 	if m.pendingSetupPrompt {
 		m.pendingSetupPrompt = false
 		m.chat.setupPromptPending = true

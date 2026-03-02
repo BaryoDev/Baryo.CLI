@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -268,10 +269,5 @@ func FormatStrategyInput(input StrategyInput) (goal, facts, constraints, context
 func isStrategyDoneSignal(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	signals := []string{"done", "analyze", "go", "that's all", "thats all", "let's go", "lets go", "ready", "proceed"}
-	for _, s := range signals {
-		if lower == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(signals, lower)
 }

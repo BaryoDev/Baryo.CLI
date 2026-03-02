@@ -125,6 +125,9 @@ type ChatModel struct {
 	setupRunning       bool                          // true during download
 	setupProgressCh    <-chan setup.DownloadProgress  // receives progress from download goroutine
 
+	// Export
+	exportPath string // default directory for /export output (empty = current dir)
+
 	// Strategy planning
 	strategyPhase     strategyPhase // idle, gathering, done
 	strategyCompactAt int           // index for post-analysis compaction
@@ -2398,15 +2401,27 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 		filename = fmt.Sprintf("baryo-export-%s.md", time.Now().Format("20060102-150405"))
 	}
 
+	// If export_path is configured and filename is not an absolute path,
+	// place the file in the configured directory.
+	if m.exportPath != "" && !filepath.IsAbs(filename) {
+		if err := os.MkdirAll(m.exportPath, 0755); err == nil {
+			filename = filepath.Join(m.exportPath, filename)
+		}
+	}
+
 	var data []byte
 	var err error
 
 	if filepath.Ext(filename) == ".json" {
-		data, err = json.MarshalIndent(m.messages, "", "  ")
+		exported := filterExportMessages(m.messages)
+		data, err = json.MarshalIndent(exported, "", "  ")
 	} else {
 		var b strings.Builder
 		b.WriteString(fmt.Sprintf("# Baryo — %s\n\n", m.modelName))
 		for _, msg := range m.messages {
+			if isInternalMessage(msg) {
+				continue
+			}
 			switch msg.Role {
 			case "user":
 				b.WriteString("### User\n\n")
@@ -2440,6 +2455,56 @@ func (m ChatModel) handleExport(arg string) (ChatModel, tea.Cmd) {
 	}
 	m.updateViewport()
 	return m, nil
+}
+
+// isInternalMessage returns true if a message is an injected prompt or context
+// that should not appear in exported conversations.
+func isInternalMessage(msg llm.ChatMessage) bool {
+	if msg.Content == nil || msg.Role != "user" {
+		return false
+	}
+	c := *msg.Content
+	// Strategy wizard prompt / analysis prompt injections
+	if strings.HasPrefix(c, "[strategy wizard]") {
+		return true
+	}
+	if strings.HasPrefix(c, "[Strategy input from ") {
+		return true
+	}
+	if strings.HasPrefix(c, "You are a strategic") {
+		return true
+	}
+	// Search / research context injections
+	if strings.HasPrefix(c, "[Web search results for ") {
+		return true
+	}
+	if strings.HasPrefix(c, "[Deep research on ") {
+		return true
+	}
+	// One-shot summarize/report prompts
+	if strings.HasPrefix(c, "Summarize the search results above") {
+		return true
+	}
+	// Conversation summary from compaction
+	if strings.HasPrefix(c, "[Conversation summary]") {
+		return true
+	}
+	// Refinement prompt injections
+	if strings.HasPrefix(c, "You previously produced a strategy") {
+		return true
+	}
+	return false
+}
+
+// filterExportMessages returns messages with internal prompts removed.
+func filterExportMessages(messages []llm.ChatMessage) []llm.ChatMessage {
+	var filtered []llm.ChatMessage
+	for _, msg := range messages {
+		if !isInternalMessage(msg) {
+			filtered = append(filtered, msg)
+		}
+	}
+	return filtered
 }
 
 func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {

@@ -42,6 +42,7 @@ type Config struct {
 	MCPServers       []mcp.ServerConfig `yaml:"mcp_servers"`
 	Rewrite          *bool              `yaml:"rewrite"`          // prompt rewrite pass (default true)
 	MCPInReadOnly    *bool              `yaml:"mcp_in_read_only"` // allow MCP tools in read-only modes (default true)
+	ExportPath       string             `yaml:"export_path"`      // default directory for /export output
 }
 
 // RewriteEnabled returns whether the prompt rewrite pass is enabled.
@@ -218,6 +219,9 @@ func loadFile(path string, cfg *Config) {
 	if len(file.MCPServers) > 0 {
 		cfg.MCPServers = file.MCPServers
 	}
+	if file.ExportPath != "" {
+		cfg.ExportPath = file.ExportPath
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -262,6 +266,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_MCP_IN_READ_ONLY"); v != "" {
 		b := v == "true" || v == "1" || v == "yes"
 		cfg.MCPInReadOnly = &b
+	}
+	if v := os.Getenv("BARYO_EXPORT_PATH"); v != "" {
+		cfg.ExportPath = v
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{
