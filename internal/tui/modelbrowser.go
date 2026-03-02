@@ -48,6 +48,7 @@ type ModelBrowserModel struct {
 	pullCancel context.CancelFunc
 	spinner    spinner.Model
 
+	hw     llm.Hardware // detected system hardware
 	err    error
 	width  int
 	height int
@@ -63,6 +64,7 @@ func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) ModelB
 		downloaded: downloaded,
 		available:  available,
 		spinner:    s,
+		hw:         llm.DetectHardware(),
 	}
 	m.buildTabs()
 	return m
@@ -320,13 +322,20 @@ func (m ModelBrowserModel) View() string {
 				style = SelectedModelStyle
 			}
 
-			sizeInfo := ""
-			if item.size != "" {
-				sizeInfo = " " + sizeTag.Render(item.size)
+			suffix := ""
+			detailLine := item.detail
+			if item.downloaded && item.model.Provider == "" {
+				fit := llm.EstimateFit(item.model, m.hw)
+				if fit.Tag != "" {
+					suffix = " " + FitTagStyle(fit.Tag).Render(string(fit.Tag))
+					detailLine += " — " + fit.Remark
+				}
+			} else if item.size != "" {
+				suffix = " " + sizeTag.Render(item.size)
 			}
 
-			b.WriteString(fmt.Sprintf("%s%s%s\n", cursor, style.Render(item.name), sizeInfo))
-			b.WriteString("    " + ModelDetailStyle.Render(item.detail) + "\n\n")
+			b.WriteString(fmt.Sprintf("%s%s%s\n", cursor, style.Render(item.name), suffix))
+			b.WriteString("    " + ModelDetailStyle.Render(detailLine) + "\n\n")
 		}
 
 		remaining := len(items) - end

@@ -41,10 +41,11 @@ func ListModels() ([]Model, error) {
 		}
 
 		models = append(models, Model{
-			Name:   name,
-			Tag:    tag,
-			Params: r.Config.Parameters,
-			Size:   r.Config.Size,
+			Name:         name,
+			Tag:          tag,
+			Params:       r.Config.Parameters,
+			Size:         r.Config.Size,
+			Quantization: r.Config.Quantization,
 		})
 	}
 

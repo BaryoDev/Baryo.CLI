@@ -4,7 +4,10 @@
 
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
+)
 
 var (
 	// Title and header styles
@@ -100,7 +103,36 @@ var (
 	// Model size tag style (used in model browser)
 	SizeTagStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("243"))
+
+	// Fit tag styles (model hardware fit)
+	FitFastStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("108"))
+
+	FitSmoothStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("75"))
+
+	FitSlowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("179"))
+
+	FitTooLargeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("167"))
 )
+
+// FitTagStyle returns the lipgloss style for a given fit tag.
+func FitTagStyle(tag llm.FitTag) lipgloss.Style {
+	switch tag {
+	case llm.FitFast:
+		return FitFastStyle
+	case llm.FitSmooth:
+		return FitSmoothStyle
+	case llm.FitSlow:
+		return FitSlowStyle
+	case llm.FitTooLarge:
+		return FitTooLargeStyle
+	default:
+		return HelpStyle
+	}
+}
 
 // ModeStyle returns a distinct lipgloss style for each agent mode.
 func ModeStyle(mode AgentMode) lipgloss.Style {

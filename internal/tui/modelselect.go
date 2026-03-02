@@ -27,11 +27,12 @@ type ModelSelectModel struct {
 	offset    int // scroll offset within the active tab
 	width     int
 	height    int
+	hw        llm.Hardware // detected system hardware
 }
 
 // NewModelSelect creates a new tabbed model selection screen.
 func NewModelSelect(models []llm.Model) ModelSelectModel {
-	m := ModelSelectModel{}
+	m := ModelSelectModel{hw: llm.DetectHardware()}
 	m.tabs = buildTabs(models)
 	return m
 }
@@ -189,6 +190,7 @@ func (m ModelSelectModel) View() string {
 			name := style.Render(model.Name)
 
 			var detail string
+			var fitSuffix string
 			if model.Provider != "" {
 				if model.PromptPrice > 0 {
 					detail = ModelDetailStyle.Render(formatPricing(model.PromptPrice, model.CompletionPrice))
@@ -199,11 +201,24 @@ func (m ModelSelectModel) View() string {
 					detail = ModelDetailStyle.Render(model.Params) + "  " + detail
 				}
 			} else {
-				detail = ModelDetailStyle.Render(
-					fmt.Sprintf("params: %s  size: %s", model.Params, model.Size))
+				fit := llm.EstimateFit(model, m.hw)
+				parts := []string{}
+				if model.Params != "" {
+					parts = append(parts, "params: "+model.Params)
+				}
+				if model.Size != "" {
+					parts = append(parts, "size: "+model.Size)
+				}
+				if fit.Tag != "" {
+					fitSuffix = " " + FitTagStyle(fit.Tag).Render(string(fit.Tag))
+					if len(parts) > 0 {
+						parts = append(parts, "— "+fit.Remark)
+					}
+				}
+				detail = ModelDetailStyle.Render(strings.Join(parts, "  "))
 			}
 
-			b.WriteString(cursor + name + "\n")
+			b.WriteString(cursor + name + fitSuffix + "\n")
 			b.WriteString("  " + detail + "\n\n")
 		}
 

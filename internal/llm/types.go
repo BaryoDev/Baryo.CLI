@@ -23,6 +23,7 @@ type Model struct {
 	Tag             string  // full tag e.g. "docker.io/ai/mistral:latest"
 	Params          string  // e.g. "7.25 B"
 	Size            string  // e.g. "4.07 GiB"
+	Quantization    string  // e.g. "Q4_K_M"
 	Provider        string  // empty = local, "gemini", "openrouter"
 	PromptPrice     float64 // cost per prompt token (0 for local)
 	CompletionPrice float64 // cost per completion token (0 for local)
