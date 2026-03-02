@@ -29,16 +29,6 @@ End-to-end GitHub workflow via the `gh` CLI.
 - Respond to PR review comments and push fixes
 - Branch management: create, switch, merge, delete
 
-### Agent Modes
-Specialized modes with different tool access and behavior.
-
-- `/mode ask` — read-only answers, no tools, fast (extends existing `/ask`)
-- `/mode code` — model can read/write files, run tools, execute code
-- `/mode architect` — high-level planning, generates plans without executing
-- `/mode review` — focused on code review with security and style checks
-- `/mode research` — web-focused, search and fetch tools prioritized
-- Mode persists for the session, switchable at any time
-
 ### Multi-Source Search
 Strengthen research by querying multiple sources simultaneously.
 
@@ -209,6 +199,15 @@ Allow users to add custom tools via config.
 ---
 
 ## Completed
+
+### Agent Modes
+- 6 modes: chat (dynamic tools), ask (no tools), code (all tools), architect (read-only), review (read-only), research (read-only)
+- `/mode` command to list and switch modes
+- Color-coded mode label in status bar (cyan, yellow, purple, orange, green)
+- Mode-aware command gating: destructive commands blocked in restricted modes
+- System message injection on mode switch for immediate model behavior change
+- Mode tags on user messages in history for visual context
+- Mode-specific system prompts loaded from embedded prompt files
 
 ### Dynamic Model-Aware Agent Pipeline
 - Context window detection per model family (8K for Qwen/Phi/Gemma, 32K for Llama/Mistral, 128K+ for Gemini)

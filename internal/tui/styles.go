@@ -101,3 +101,21 @@ var (
 	SizeTagStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("243"))
 )
+
+// ModeStyle returns a distinct lipgloss style for each agent mode.
+func ModeStyle(mode AgentMode) lipgloss.Style {
+	switch mode {
+	case ModeAsk:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("43"))
+	case ModeCode:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	case ModeArchitect:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+	case ModeReview:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	case ModeResearch:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
+	default:
+		return HelpStyle
+	}
+}

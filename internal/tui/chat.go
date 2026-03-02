@@ -153,6 +153,7 @@ const (
 type chatEntry struct {
 	role    entryRole
 	content string
+	mode    AgentMode // agent mode when entry was created (user entries only)
 }
 
 // resetStreamState clears all fields associated with an active stream.
@@ -627,6 +628,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					m.history = append(m.history, chatEntry{
 						role:    roleUser,
 						content: text,
+						mode:    m.agentMode,
 					})
 					return m.handleSearch(query)
 				}
@@ -637,6 +639,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.history = append(m.history, chatEntry{
 					role:    roleUser,
 					content: text,
+					mode:    m.agentMode,
 				})
 				return m.handleResearch(topic)
 			}
@@ -648,6 +651,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					m.history = append(m.history, chatEntry{
 						role:    roleUser,
 						content: text,
+						mode:    m.agentMode,
 					})
 					return m.handleRemember(fact)
 				}
@@ -678,6 +682,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.history = append(m.history, chatEntry{
 				role:    roleUser,
 				content: text,
+				mode:    m.agentMode,
 			})
 
 			// Route based on current agent mode
@@ -1296,9 +1301,44 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// gatedCommand returns the blocked command name if the current mode doesn't
+// allow it, or "" if the command is permitted.
+func (m *ChatModel) gatedCommand(trimmed string) string {
+	modeCfg := modeRegistry[m.agentMode]
+	// Extract the command verb (e.g. "/run foo" → "/run").
+	cmd := trimmed
+	if idx := strings.IndexByte(cmd, ' '); idx > 0 {
+		cmd = cmd[:idx]
+	}
+
+	switch modeCfg.Tools {
+	case ToolsNone: // ask mode
+		switch cmd {
+		case "/run", "/commit", "/diff", "/review", "/init", "/plan":
+			return cmd
+		}
+	case ToolsReadOnly: // architect, review, research
+		switch cmd {
+		case "/run", "/commit", "/init":
+			return cmd
+		}
+	}
+	return ""
+}
+
 func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 	logger.Debug("command dispatch", "command", text)
 	trimmed := strings.TrimSpace(text)
+
+	// Mode-aware command gating: block destructive commands in restricted modes.
+	if blocked := m.gatedCommand(trimmed); blocked != "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("%s not available in %s mode. Switch with /mode code or /mode chat.", blocked, m.agentMode),
+		})
+		m.updateViewport()
+		return m, nil
+	}
 
 	switch trimmed {
 	case "/help":
@@ -2139,6 +2179,7 @@ Write ONLY the markdown content for BARYO.md. No explanation before or after.
 	m.history = append(m.history, chatEntry{
 		role:    roleUser,
 		content: "/init",
+		mode:    m.agentMode,
 	})
 
 	m.isStream = true
@@ -2735,6 +2776,7 @@ func (m ChatModel) handlePlan(arg string) (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
 		role:    roleUser,
 		content: arg,
+		mode:    m.agentMode,
 	})
 
 	return m.startToolStream(prompt, true, false)
@@ -2789,6 +2831,8 @@ func (m ChatModel) handleMode(arg string) (ChatModel, tea.Cmd) {
 	}
 
 	m.agentMode = mode
+	m.messages = append(m.messages, llm.NewChatMessage("system",
+		fmt.Sprintf("[Mode changed to %s] %s", mode, cfg.Description)))
 	m.history = append(m.history, chatEntry{
 		role:    roleTool,
 		content: fmt.Sprintf("Switched to %s mode — %s", mode, cfg.Description),
@@ -2941,6 +2985,7 @@ func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
 		role:    roleUser,
 		content: question,
+		mode:    m.agentMode,
 	})
 
 	// Stream response WITHOUT tool definitions (read-only, fast)
@@ -2998,6 +3043,7 @@ func (m ChatModel) handleCommit() (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
 		role:    roleUser,
 		content: "/commit",
+		mode:    m.agentMode,
 	})
 
 	// Stream the model's response, then auto-commit on completion
@@ -3047,6 +3093,7 @@ func (m ChatModel) handleReview() (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
 		role:    roleUser,
 		content: "/review",
+		mode:    m.agentMode,
 	})
 
 	// Stream the review
@@ -3627,7 +3674,11 @@ func (m *ChatModel) updateViewport() {
 	for _, entry := range m.history {
 		switch entry.role {
 		case roleUser:
-			b.WriteString(UserLabelStyle.Render("❯") + " " + entry.content)
+			prefix := UserLabelStyle.Render("❯")
+			if entry.mode != "" && entry.mode != ModeChat {
+				prefix = ModeStyle(entry.mode).Render("["+string(entry.mode)+"]") + " " + prefix
+			}
+			b.WriteString(prefix + " " + entry.content)
 		case roleError:
 			b.WriteString(prefixWrap(ErrorStyle.Render(entry.content), errBorder, m.width))
 		case roleTool:
@@ -3711,7 +3762,7 @@ func (m ChatModel) View() string {
 	}
 	header := TitleStyle.Render("baryo") + sep +
 		AssistantLabelStyle.Render(m.modelName) + sep +
-		HelpStyle.Render(modeLabel)
+		ModeStyle(m.agentMode).Render(modeLabel)
 
 	frame := spinnerFrames[m.spinFrame]
 	// Separator line

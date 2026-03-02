@@ -212,6 +212,7 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/params [k=v]` | View or change model parameters |
 | `/plan <prompt>` | Enter plan mode (read-only tools, produces implementation plan) |
 | `/plan done` | Exit plan mode and restore normal tool access |
+| `/mode [name]` | Switch agent mode or list all modes |
 | `/mcp` | List connected MCP servers and their tools |
 | `/context` | Show token usage breakdown |
 | `/cost` | Show session API cost (cloud providers) |
@@ -706,6 +707,27 @@ Exit plan mode and restore normal tool access:
 ```
 
 Plan mode also resets automatically on `/clear`.
+
+### Agent modes
+
+Switch between specialized modes that control tool access and model behavior. Each mode is color-coded in the status bar.
+
+```bash
+/mode         # list all modes with current highlighted
+/mode code    # switch to code mode
+/mode chat    # return to default
+```
+
+| Mode | Tools | Description |
+|------|-------|-------------|
+| `chat` | Dynamic | Default — tools used when the model decides they're needed |
+| `ask` | None | Fast answers with no tool access |
+| `code` | All | Full tool access on every message |
+| `architect` | Read-only | Explore codebase and plan without making changes |
+| `review` | Read-only | Code review focus with read-only tools |
+| `research` | Read-only | Web search and exploration |
+
+Destructive commands (`/run`, `/commit`, `/init`) are blocked in restricted modes. The model receives a system message on each mode switch so it adjusts behavior immediately.
 
 ### MCP support
 
