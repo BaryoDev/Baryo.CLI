@@ -64,6 +64,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 		copy(msgs, messages)
 
 		var lastUsage *UsageStats
+		var prevContent string // tracks previous round content for repetition detection
 
 		for round := 0; round < maxRounds; round++ {
 			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, toolDefs)
@@ -146,6 +147,13 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 					// Auto-continue: if truncated at max_tokens, append
 					// partial response and ask the model to continue.
 					if res.FinishReason == "length" {
+						// Stop if continuation is just repeating previous content.
+						if isRepetitive(prevContent, contentBuf) {
+							logger.Debug("auto-continue stopped", "reason", "repetitive content")
+							out <- StreamEvent{Done: true, Usage: lastUsage}
+							return
+						}
+						prevContent = contentBuf
 						logger.Debug("auto-continuing", "reason", "finish_reason=length")
 						msgs = append(msgs, NewChatMessage("assistant", contentBuf))
 						msgs = append(msgs, NewChatMessage("user", "Continue"))

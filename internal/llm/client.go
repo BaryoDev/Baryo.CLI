@@ -267,6 +267,7 @@ func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatM
 		msgs := make([]ChatMessage, len(messages))
 		copy(msgs, messages)
 		var lastUsage *UsageStats
+		var prevContent string
 
 		for attempt := 0; attempt <= maxContinuations; attempt++ {
 			var contentBuf string
@@ -291,6 +292,12 @@ func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatM
 			if res.FinishReason != "length" {
 				break
 			}
+			// Stop if continuation is just repeating previous content.
+			if isRepetitive(prevContent, contentBuf) {
+				logger.Debug("auto-continue stopped", "reason", "repetitive content")
+				break
+			}
+			prevContent = contentBuf
 			// Truncated — append partial response and continue.
 			msgs = append(msgs, NewChatMessage("assistant", contentBuf))
 			msgs = append(msgs, NewChatMessage("user", "Continue"))
@@ -299,4 +306,23 @@ func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatM
 		out <- StreamEvent{Done: true, Usage: lastUsage}
 	}()
 	return out
+}
+
+// isRepetitive returns true if the new content significantly overlaps with
+// previous content, indicating the model is looping instead of continuing.
+// It checks whether a substantial prefix of the new content already appeared
+// in the previous round's output.
+func isRepetitive(prev, current string) bool {
+	if prev == "" || current == "" {
+		return false
+	}
+	// Check if a 200-char sample from the start of current appeared in prev.
+	sample := current
+	if len(sample) > 200 {
+		sample = sample[:200]
+	}
+	if len(sample) < 50 {
+		return false
+	}
+	return strings.Contains(prev, sample)
 }
