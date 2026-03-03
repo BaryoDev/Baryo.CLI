@@ -172,19 +172,39 @@ Inside the TUI you can also use:
 - `/resume` — alias for `/sessions`
 - `/clear` — start a fresh conversation
 
-### Intuitive command routing
+### Intelligent routing
 
-Baryo understands natural language and automatically routes to the right command. You don't need to memorize slash commands — just say what you want:
+Baryo uses **two-tier routing** to match each model's capabilities. Capable models (≥32K context) get `web_search` and `deep_research` as real tool calls — they decide when to search, just like Claude Code. Smaller models get a consolidated heuristic router that triggers the right command automatically.
+
+**Tier 1 — Capable models** (Gemini, GPT, Claude, large Llama, etc.):
+
+The model receives `web_search` and `deep_research` as tool definitions. It calls them directly when needed — no heuristic keyword matching, no false positives.
+
+```
+You: What are the latest Go features?
+→ model calls web_search("latest Go features") → answers with citations
+
+You: Research the best databases for time-series data
+→ model calls deep_research("best databases for time-series data") → multi-round report
+
+You: Should I use PostgreSQL or MongoDB?
+→ model answers directly with structured analysis (no unnecessary search)
+```
+
+**Tier 2 — Small models** (<32K context):
+
+A single `routeInput()` function with clear priority ordering replaces scattered detection paths:
 
 ```
 research golang vs rust for web servers    → auto-triggers /research
 deep dive into kubernetes networking       → auto-triggers /research
 investigate the performance regression     → auto-triggers /research
+what are the latest Go features?           → auto-triggers /search (freshness keyword)
 should I use PostgreSQL or MongoDB?        → offers /strategy (y/n)
 what's the best approach to scaling?       → offers /strategy (y/n)
 ```
 
-The model also suggests commands naturally in conversation. Ask about current events and it will search automatically. Ask to "run the tests" and it will suggest `/run`. Ask to "commit this" and it will suggest `/commit`.
+**Both tiers** share conversational shortcuts (saying "yes" after a search suggestion), post-stream safety nets, and all slash commands. Switching models mid-session via `/models` changes the routing tier automatically.
 
 ### Slash commands
 
@@ -761,7 +781,7 @@ The `gh` tool requires the [GitHub CLI](https://cli.github.com/) to be installed
 
 Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
 
-If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models), Baryo automatically retries the request without tools and disables them for the rest of the session. You'll see an info message in the chat and subsequent messages skip tools entirely — no repeated errors.
+If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models, or models that return "tool calling is not supported"), Baryo automatically retries the request without tools and disables them for the rest of the session. You'll see an info message in the chat and subsequent messages skip tools entirely — no repeated errors.
 
 ### Plan mode
 
