@@ -42,6 +42,7 @@ func isToolUnsupportedError(errText string) bool {
 	return strings.Contains(lower, "tool use is not supported") ||
 		strings.Contains(lower, "tools is not supported") ||
 		strings.Contains(lower, "tool_use is not supported") ||
+		(strings.Contains(lower, "tool calling") && strings.Contains(lower, "is not supported")) ||
 		strings.Contains(lower, "does not support tools")
 }
 

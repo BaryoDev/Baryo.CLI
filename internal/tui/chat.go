@@ -706,42 +706,41 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				return m.handleCommand(text)
 			}
 
-			// Auto-search: if user agrees after model suggested searching
-			if m.isSearchAgreement(text) {
-				query := m.extractSearchTopic()
-				if query != "" {
-					m.history = append(m.history, chatEntry{
-						role:    roleUser,
-						content: text,
-						mode:    m.agentMode,
-					})
-					return m.handleSearch(query)
-				}
-			}
+			// --- Two-tier routing ---
+			// Tier 1 (capable models, >= 32K context): conversational shortcuts
+			//   only. Research intent and proactive search are handled by the
+			//   model via web_search / deep_research meta-tools.
+			// Tier 2 (small models, < 32K): consolidated heuristic router.
 
-			// Natural language research: "research X", "deep dive into X", etc.
-			// Skip if intent is Planning — those get structured thinking instead.
-			if ClassifyIntent(text) != IntentPlanning {
-				if topic := isResearchIntent(text); topic != "" {
-					m.history = append(m.history, chatEntry{
-						role:    roleUser,
-						content: text,
-						mode:    m.agentMode,
-					})
-					return m.handleResearch(topic)
+			if m.isCapableModel() {
+				// Conversational shortcuts: both tiers.
+				if m.isSearchAgreement(text) {
+					if query := m.extractSearchTopic(); query != "" {
+						m.history = append(m.history, chatEntry{role: roleUser, content: text, mode: m.agentMode})
+						return m.handleSearch(query)
+					}
 				}
-			}
-
-			// Auto-remember: if user agrees after model suggested /remember
-			if m.isRememberAgreement(text) {
-				fact := m.extractRememberFact()
-				if fact != "" {
-					m.history = append(m.history, chatEntry{
-						role:    roleUser,
-						content: text,
-						mode:    m.agentMode,
-					})
-					return m.handleRemember(fact)
+				if m.isRememberAgreement(text) {
+					if fact := m.extractRememberFact(); fact != "" {
+						m.history = append(m.history, chatEntry{role: roleUser, content: text, mode: m.agentMode})
+						return m.handleRemember(fact)
+					}
+				}
+				// Capable models: skip isResearchIntent and proactive search —
+				// the model uses its meta-tools to decide when to search.
+			} else {
+				// Small models: consolidated heuristic router.
+				result := m.routeInput(text)
+				switch result.Action {
+				case RouteSearch:
+					m.history = append(m.history, chatEntry{role: roleUser, content: text, mode: m.agentMode})
+					return m.handleSearch(result.Query)
+				case RouteResearch:
+					m.history = append(m.history, chatEntry{role: roleUser, content: text, mode: m.agentMode})
+					return m.handleResearch(result.Query)
+				case RouteRemember:
+					m.history = append(m.history, chatEntry{role: roleUser, content: text, mode: m.agentMode})
+					return m.handleRemember(result.Query)
 				}
 			}
 
@@ -797,18 +796,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.planningPrompt = ""
 			if intent == IntentPlanning && m.strategyPhase == strategyIdle {
 				m.planningPrompt = structuredThinkingPrompt
-			}
-
-			// Proactive web search: trigger when RAG detects the query needs
-			// fresh info, OR when intent is Knowledge and RAG returned nothing.
-			needsSearch := false
-			if m.ragPipeline != nil && m.ragPipeline.NeedsFreshInfo(text) {
-				needsSearch = true
-			} else if intent == IntentKnowledge && m.ragPrompt == "" && rag.NeedsFreshInfo(text) {
-				needsSearch = true
-			}
-			if needsSearch && !m.searchPending && !m.searchFallbackUsed {
-				return m.handleSearch(text)
 			}
 
 			// Route based on current agent mode
@@ -2088,8 +2075,20 @@ var strategyFinalTemplate string
 //go:embed prompts/structured_thinking.md
 var structuredThinkingPrompt string
 
+// metaToolsPrompt overrides search-rules for capable models that have web_search/deep_research tools.
+//
+//go:embed prompts/metatools.md
+var metaToolsPrompt string
+
 func init() {
 	initModePrompts()
+}
+
+// isCapableModel returns true if the model's context window is large enough
+// for meta-tool routing (>= 32K). Capable models use tool-based search/research
+// instead of heuristic keyword matching.
+func (m *ChatModel) isCapableModel() bool {
+	return m.contextLimit >= 32768
 }
 
 // estimateTokens returns a rough token count for a set of messages.
@@ -2289,6 +2288,13 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage
 		sysPrompt += noToolsNotice
 	}
 
+	// Meta-tools prompt: override search-rules for capable models that have
+	// web_search/deep_research tools. Injected before mode-specific instructions
+	// so the model knows to use tools instead of admitting ignorance.
+	if m.isCapableModel() && hasTools {
+		sysPrompt += "\n\n" + metaToolsPrompt
+	}
+
 	// Qwen3: append /no_think for tool tasks to save tokens.
 	if hasTools && m.modelHints.DisableThink {
 		sysPrompt += "\n\n/no_think"
@@ -2469,6 +2475,13 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 				toolDefs = append(toolDefs, m.mcpManager.CompactToolDefinitions(tools.Names(), m.mcpContextWindow())...)
 			}
 		}
+	}
+
+	// Add meta-tools (web_search, deep_research) for capable models.
+	// The model decides when to search instead of heuristic keyword matching.
+	if m.isCapableModel() && hasTools {
+		toolDefs = append(toolDefs, MetaToolDefinitions()...)
+		executor = m.makeMetaToolExecutor(executor)
 	}
 
 	chatParams := m.applyModelHints(hasTools, hasSkill)
