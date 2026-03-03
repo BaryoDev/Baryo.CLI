@@ -30,7 +30,8 @@ var Providers = map[string]string{
 	"cerebras":   "https://api.cerebras.ai/v1",
 	"perplexity": "https://api.perplexity.ai",
 	"sambanova":  "https://api.sambanova.ai/v1",
-	"cohere":     "https://api.cohere.ai/compatibility/v1",
+	"cohere":      "https://api.cohere.ai/compatibility/v1",
+	"huggingface": "https://router.huggingface.co/v1",
 }
 
 // prefixToProvider maps model name prefixes to provider names for quick detection.
@@ -239,6 +240,19 @@ func filterProviderModel(provider, id string, entry providerModelEntry) bool {
 		// Skip non-chat models (embeddings, reranking); keep everything else.
 		for _, skip := range []string{"embed", "rerank"} {
 			if strings.Contains(id, skip) {
+				return false
+			}
+		}
+		return true
+
+	case "huggingface":
+		// HF /models returns all task types; keep only chat-capable models.
+		// HF model IDs use org/model format (contain a slash).
+		if !strings.Contains(id, "/") {
+			return false
+		}
+		for _, skip := range []string{"embed", "image", "audio", "tts", "whisper", "vit", "clip", "bert", "diffus"} {
+			if strings.Contains(strings.ToLower(id), skip) {
 				return false
 			}
 		}

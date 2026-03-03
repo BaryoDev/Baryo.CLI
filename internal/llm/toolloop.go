@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -46,6 +47,32 @@ func isToolUnsupportedError(errText string) bool {
 		strings.Contains(lower, "does not support tools")
 }
 
+// toolCallKey returns a normalized key for deduplication: "name:query_lower".
+// It extracts "query" or "topic" from the JSON arguments. Tools with the same
+// subject (web_search and deep_research on the same topic) share a namespace
+// via the "search:" prefix so escalation chains are detected.
+func toolCallKey(name, argsJSON string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return name + ":" + argsJSON
+	}
+	// Extract the query/topic value.
+	q := ""
+	for _, key := range []string{"query", "topic"} {
+		if v, ok := args[key].(string); ok && v != "" {
+			q = v
+			break
+		}
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	// Normalize search-related tools into a shared namespace.
+	prefix := name
+	if name == "web_search" || name == "deep_research" {
+		prefix = "search"
+	}
+	return prefix + ":" + q
+}
+
 // StreamChatWithTools streams a conversation that may include tool calls.
 // The model can call tools up to maxToolRounds times before the final response.
 func StreamChatWithTools(ctx context.Context, ep Endpoint, model string, messages []ChatMessage, params ChatParams, toolDefs []ToolDefinition, executor ToolExecutor) <-chan StreamEvent {
@@ -64,7 +91,8 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 		copy(msgs, messages)
 
 		var lastUsage *UsageStats
-		var prevContent string // tracks previous round content for repetition detection
+		var prevContent string              // tracks previous round content for repetition detection
+		seenToolCalls := make(map[string]bool) // dedup: tracks tool+query keys across rounds
 
 		for round := 0; round < maxRounds; round++ {
 			evtCh, resCh := streamChatRaw(ctx, ep, model, msgs, params, toolDefs)
@@ -194,6 +222,8 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 			var results []toolResult
 
 			for _, tc := range res.ToolCalls {
+				key := toolCallKey(tc.Function.Name, tc.Function.Arguments)
+
 				select {
 				case out <- StreamEvent{ToolStart: &ToolStartEvent{
 					CallID: tc.ID,
@@ -204,7 +234,18 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 					return
 				}
 
-				content, isError := executor(ctx, tc.Function.Name, tc.Function.Arguments)
+				var content string
+				var isError bool
+
+				if seenToolCalls[key] {
+					// Duplicate tool call — skip execution, return nudge.
+					logger.Debug("duplicate tool call skipped", "name", tc.Function.Name, "key", key)
+					content = fmt.Sprintf("Already retrieved results for this query. Use the information you already have to answer the user's question directly.")
+					isError = true
+				} else {
+					seenToolCalls[key] = true
+					content, isError = executor(ctx, tc.Function.Name, tc.Function.Arguments)
+				}
 
 				select {
 				case out <- StreamEvent{ToolResult: &ToolResultEvent{

@@ -308,7 +308,8 @@ func applyEnv(cfg *Config) {
 		"perplexity": "BARYO_PERPLEXITY_API_KEY",
 		"sambanova":  "BARYO_SAMBANOVA_API_KEY",
 		"cohere":     "BARYO_COHERE_API_KEY",
-		"bedrock":    "BARYO_BEDROCK_REGION",
+		"bedrock":      "BARYO_BEDROCK_REGION",
+		"huggingface": "BARYO_HUGGINGFACE_API_KEY",
 	}
 	for provider, envKey := range providerEnvVars {
 		if v := os.Getenv(envKey); v != "" {
