@@ -311,6 +311,7 @@ func applyEnv(cfg *Config) {
 		"bedrock":      "BARYO_BEDROCK_REGION",
 		"huggingface": "BARYO_HUGGINGFACE_API_KEY",
 		"github":      "BARYO_GITHUB_TOKEN",
+		"ollama":      "BARYO_OLLAMA_API_KEY",
 	}
 	for provider, envKey := range providerEnvVars {
 		if v := os.Getenv(envKey); v != "" {

@@ -1,6 +1,6 @@
 # Baryo
 
-An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 17+ cloud providers for inference.
+An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 18+ cloud providers for inference.
 
 Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation. Docker is optional — cloud-only usage works with just an API key.
 
@@ -564,6 +564,7 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_COHERE_API_KEY` | Cohere API key |
 | `BARYO_HUGGINGFACE_API_KEY` | Hugging Face API token |
 | `BARYO_GITHUB_TOKEN` | GitHub personal access token (needs `models:read` scope) |
+| `BARYO_OLLAMA_API_KEY` | Ollama Cloud API key |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
 
 ### Precedence
@@ -764,6 +765,7 @@ Baryo supports 15+ cloud providers alongside local Docker models. Configure an A
 | [SambaNova](https://cloud.sambanova.ai/) | `sambanova` | `BARYO_SAMBANOVA_API_KEY` | — |
 | [Hugging Face](https://huggingface.co/docs/inference-providers/) | `huggingface` | `BARYO_HUGGINGFACE_API_KEY` | `org/model` |
 | [GitHub Models](https://docs.github.com/en/github-models) | `github` | `BARYO_GITHUB_TOKEN` | `publisher/model` |
+| [Ollama Cloud](https://ollama.com/) | `ollama` | `BARYO_OLLAMA_API_KEY` | — |
 
 **Tested providers:** The following have been verified working end-to-end (model listing, streaming chat, tool calls):
 

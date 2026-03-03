@@ -33,6 +33,7 @@ var Providers = map[string]string{
 	"cohere":      "https://api.cohere.ai/compatibility/v1",
 	"huggingface": "https://router.huggingface.co/v1",
 	"github":      "https://models.github.ai/inference",
+	"ollama":      "https://ollama.com/v1",
 }
 
 // prefixToProvider maps model name prefixes to provider names for quick detection.
@@ -117,6 +118,11 @@ func ListProviderModels(provider, apiKey string) ([]Model, error) {
 	// GitHub Models uses a separate catalog API.
 	if provider == "github" {
 		return listGitHubModels(apiKey)
+	}
+
+	// Ollama Cloud uses a hardcoded model list.
+	if provider == "ollama" {
+		return listOllamaCloudModels(), nil
 	}
 
 	baseURL, ok := Providers[provider]
@@ -500,6 +506,26 @@ func listAnthropicModels() []Model {
 			Params:          formatContextLen(d.ContextLen),
 			PromptPrice:     p.PromptPrice,
 			CompletionPrice: p.CompletionPrice,
+		}
+	}
+	return models
+}
+
+// listOllamaCloudModels returns the hardcoded list of Ollama Cloud models.
+func listOllamaCloudModels() []Model {
+	defs := []anthropicModelDef{
+		{"qwen3-coder:480b-cloud", 32000},
+		{"gpt-oss:120b-cloud", 128000},
+		{"gpt-oss:20b-cloud", 128000},
+		{"deepseek-v3.1:671b-cloud", 128000},
+	}
+	models := make([]Model, len(defs))
+	for i, d := range defs {
+		models[i] = Model{
+			Name:     d.ID,
+			Tag:      d.ID,
+			Provider: "ollama",
+			Params:   formatContextLen(d.ContextLen),
 		}
 	}
 	return models
