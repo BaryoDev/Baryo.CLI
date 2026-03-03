@@ -1598,12 +1598,12 @@ func (m *ChatModel) gatedCommand(trimmed string) string {
 	switch modeCfg.Tools {
 	case ToolsNone: // ask mode
 		switch cmd {
-		case "/run", "/commit", "/diff", "/review", "/init", "/plan":
+		case "/run", "/commit", "/diff", "/review", "/init", "/plan", "/test", "/pr":
 			return cmd
 		}
 	case ToolsReadOnly: // architect, review, research
 		switch cmd {
-		case "/run", "/commit", "/init":
+		case "/run", "/commit", "/init", "/test", "/pr":
 			return cmd
 		}
 	}
@@ -1978,6 +1978,14 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		if strings.HasPrefix(text, "/plan ") {
 			return m.handlePlan(strings.TrimPrefix(text, "/plan "))
+		}
+
+		if trimmed == "/test" || strings.HasPrefix(text, "/test ") {
+			return m.handleTest(strings.TrimPrefix(text, "/test"))
+		}
+
+		if trimmed == "/pr" || strings.HasPrefix(text, "/pr ") {
+			return m.handlePR(strings.TrimPrefix(text, "/pr"))
 		}
 
 		m.history = append(m.history, chatEntry{
@@ -2477,10 +2485,14 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 		}
 	}
 
-	// Add meta-tools (web_search, deep_research) for capable models.
-	// The model decides when to search instead of heuristic keyword matching.
+	// Add meta-tools for capable models. Safe meta-tools (search, fetch,
+	// remember, review) are added in all modes; destructive ones (commit, PR,
+	// tests) are only added in non-read-only modes.
 	if m.isCapableModel() && hasTools {
 		toolDefs = append(toolDefs, MetaToolDefinitions()...)
+		if modeCfg.Tools != ToolsReadOnly {
+			toolDefs = append(toolDefs, DestructiveMetaToolDefinitions()...)
+		}
 		executor = m.makeMetaToolExecutor(executor)
 	}
 
@@ -2599,6 +2611,21 @@ func formatConfirmPrompt(name, argsJSON string) string {
 		if cmd, ok := args["command"].(string); ok {
 			return fmt.Sprintf("Allow shell: %s?", cmd)
 		}
+	case "commit_changes":
+		if msg, ok := args["message"].(string); ok && msg != "" {
+			return fmt.Sprintf("Allow commit: %s?", msg)
+		}
+		return "Allow commit with auto-generated message?"
+	case "create_pr":
+		if t, ok := args["title"].(string); ok && t != "" {
+			return fmt.Sprintf("Allow creating PR: %s?", t)
+		}
+		return "Allow creating PR?"
+	case "run_tests":
+		if p, ok := args["path"].(string); ok && p != "" {
+			return fmt.Sprintf("Allow running tests at %s?", p)
+		}
+		return "Allow running tests?"
 	}
 	return fmt.Sprintf("Allow %s?", name)
 }
@@ -3345,6 +3372,8 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /strategy init     Generate a blank strategy template JSON
   /strategy done     Exit strategy mode
   /fetch <url>       Fetch and display a web page
+  /test [path]       Run project tests (auto-detects go/npm/pytest/cargo)
+  /pr [title]        Push current branch and create a GitHub PR
   /skills            List available skills
   /skill <name>      Activate a skill (loads full instructions)
   /remember <fact>   Save a memory (persists across sessions)
@@ -3599,6 +3628,95 @@ func (m ChatModel) handleRun(command string) (ChatModel, tea.Cmd) {
 		out, err := cmd.CombinedOutput()
 		output := strings.TrimSpace(string(out))
 		return RunResultMsg{Command: command, Output: output, Err: err}
+	}
+}
+
+func (m ChatModel) handleTest(path string) (ChatModel, tea.Cmd) {
+	path = strings.TrimSpace(path)
+
+	runner, runArgs := detectTestRunner(path)
+	if runner == "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "Could not detect test framework. No go.mod, package.json, Cargo.toml, or pyproject.toml found.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	label := runner + " " + strings.Join(runArgs, " ")
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: fmt.Sprintf("Running: %s...", label),
+	})
+	m.updateViewport()
+
+	return m, func() tea.Msg {
+		cmd := exec.Command(runner, runArgs...)
+		out, err := cmd.CombinedOutput()
+		output := strings.TrimSpace(string(out))
+		return RunResultMsg{Command: label, Output: output, Err: err}
+	}
+}
+
+func (m ChatModel) handlePR(title string) (ChatModel, tea.Cmd) {
+	title = strings.TrimSpace(title)
+
+	// Check that gh CLI is available.
+	if _, err := exec.LookPath("gh"); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "gh CLI not found. Install it from https://cli.github.com/",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Get current branch.
+	branch, err := gitOutput("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("git error: %v", err),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+	if branch == "main" || branch == "master" {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "Cannot create PR from main/master branch. Create a feature branch first.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: fmt.Sprintf("Pushing %s and creating PR...", branch),
+	})
+	m.updateViewport()
+
+	return m, func() tea.Msg {
+		// Push branch.
+		pushCmd := exec.Command("git", "push", "-u", "origin", branch)
+		if out, err := pushCmd.CombinedOutput(); err != nil {
+			return RunResultMsg{
+				Command: "git push",
+				Output:  strings.TrimSpace(string(out)),
+				Err:     fmt.Errorf("push failed: %w", err),
+			}
+		}
+
+		// Create PR.
+		prArgs := []string{"pr", "create", "--fill"}
+		if title != "" {
+			prArgs = []string{"pr", "create", "--title", title, "--fill"}
+		}
+		prCmd := exec.Command("gh", prArgs...)
+		out, err := prCmd.CombinedOutput()
+		output := strings.TrimSpace(string(out))
+		return RunResultMsg{Command: "gh pr create", Output: output, Err: err}
 	}
 }
 

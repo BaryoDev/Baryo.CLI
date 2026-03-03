@@ -47,18 +47,20 @@ func isToolUnsupportedError(errText string) bool {
 		strings.Contains(lower, "does not support tools")
 }
 
-// toolCallKey returns a normalized key for deduplication: "name:query_lower".
-// It extracts "query" or "topic" from the JSON arguments. Tools with the same
-// subject (web_search and deep_research on the same topic) share a namespace
-// via the "search:" prefix so escalation chains are detected.
+// toolCallKey returns a normalized key for deduplication: "prefix:value_lower".
+// It extracts the primary parameter from JSON arguments. Tools with the same
+// subject share a namespace so escalation chains and redundant calls are detected:
+//   - web_search, deep_research, fetch_page → "search:" (prevents fetching same URL twice)
+//   - remember → "remember:fact"
+//   - other tools → "name:query_or_topic"
 func toolCallKey(name, argsJSON string) string {
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return name + ":" + argsJSON
 	}
-	// Extract the query/topic value.
+	// Extract the primary parameter value.
 	q := ""
-	for _, key := range []string{"query", "topic"} {
+	for _, key := range []string{"query", "topic", "url", "fact"} {
 		if v, ok := args[key].(string); ok && v != "" {
 			q = v
 			break
@@ -67,7 +69,7 @@ func toolCallKey(name, argsJSON string) string {
 	q = strings.ToLower(strings.TrimSpace(q))
 	// Normalize search-related tools into a shared namespace.
 	prefix := name
-	if name == "web_search" || name == "deep_research" {
+	if name == "web_search" || name == "deep_research" || name == "fetch_page" {
 		prefix = "search"
 	}
 	return prefix + ":" + q
