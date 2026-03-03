@@ -310,6 +310,7 @@ func applyEnv(cfg *Config) {
 		"cohere":     "BARYO_COHERE_API_KEY",
 		"bedrock":      "BARYO_BEDROCK_REGION",
 		"huggingface": "BARYO_HUGGINGFACE_API_KEY",
+		"github":      "BARYO_GITHUB_TOKEN",
 	}
 	for provider, envKey := range providerEnvVars {
 		if v := os.Getenv(envKey); v != "" {

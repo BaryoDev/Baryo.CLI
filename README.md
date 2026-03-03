@@ -1,6 +1,6 @@
 # Baryo
 
-An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 15+ cloud providers for inference.
+An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 17+ cloud providers for inference.
 
 Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation. Docker is optional — cloud-only usage works with just an API key.
 
@@ -533,6 +533,8 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_XAI_API_KEY` | xAI (Grok) API key |
 | `BARYO_MISTRAL_API_KEY` | Mistral API key |
 | `BARYO_COHERE_API_KEY` | Cohere API key |
+| `BARYO_HUGGINGFACE_API_KEY` | Hugging Face API token |
+| `BARYO_GITHUB_TOKEN` | GitHub personal access token (needs `models:read` scope) |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
 
 ### Precedence
@@ -731,6 +733,25 @@ Baryo supports 15+ cloud providers alongside local Docker models. Configure an A
 | [Cerebras](https://cloud.cerebras.ai/) | `cerebras` | `BARYO_CEREBRAS_API_KEY` | — |
 | [Perplexity](https://docs.perplexity.ai/) | `perplexity` | `BARYO_PERPLEXITY_API_KEY` | `sonar` |
 | [SambaNova](https://cloud.sambanova.ai/) | `sambanova` | `BARYO_SAMBANOVA_API_KEY` | — |
+| [Hugging Face](https://huggingface.co/docs/inference-providers/) | `huggingface` | `BARYO_HUGGINGFACE_API_KEY` | `org/model` |
+| [GitHub Models](https://docs.github.com/en/github-models) | `github` | `BARYO_GITHUB_TOKEN` | `publisher/model` |
+
+**Tested providers:** The following have been verified working end-to-end (model listing, streaming chat, tool calls):
+
+| Provider | Models tested |
+|----------|--------------|
+| Groq | `llama-3.3-70b-versatile`, `gemma2-9b-it` |
+| Cerebras | `llama-3.3-70b` |
+| Cohere | `command-a-03-2025` |
+| Hugging Face | `deepseek-ai/DeepSeek-V3.2`, `Qwen/Qwen3-8B`, `Qwen/Qwen3.5-35B-A3B` |
+| Gemini | `gemini-2.5-flash` |
+| GitHub Models | `openai/gpt-4.1-nano`, `deepseek/DeepSeek-R1` |
+
+Other providers follow the same OpenAI-compatible pattern and should work, but haven't been individually verified. If you test one, feel free to open a PR updating this list.
+
+**Hugging Face** uses the [Inference Providers](https://huggingface.co/docs/inference-providers/) router API. Free accounts get $0.10/month in credits. Model IDs use `org/model` format (e.g. `deepseek-ai/DeepSeek-V3.2`). No prefix-based auto-detection — select HF models from the model picker tab.
+
+**GitHub Models** uses a [GitHub PAT](https://github.com/settings/tokens) with `models:read` scope. Free tier rate limits depend on your GitHub plan. Gives access to 30+ models (GPT-4o, DeepSeek-R1, Llama, Mistral, etc.) — all free. No prefix-based auto-detection — select models from the picker tab.
 
 All providers use the unified `provider_keys` map:
 

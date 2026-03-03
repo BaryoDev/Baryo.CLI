@@ -32,6 +32,7 @@ var Providers = map[string]string{
 	"sambanova":  "https://api.sambanova.ai/v1",
 	"cohere":      "https://api.cohere.ai/compatibility/v1",
 	"huggingface": "https://router.huggingface.co/v1",
+	"github":      "https://models.github.ai/inference",
 }
 
 // prefixToProvider maps model name prefixes to provider names for quick detection.
@@ -111,6 +112,11 @@ func ListProviderModels(provider, apiKey string) ([]Model, error) {
 	// Bedrock uses the AWS SDK to list foundation models.
 	if provider == "bedrock" {
 		return listBedrockModels(apiKey)
+	}
+
+	// GitHub Models uses a separate catalog API.
+	if provider == "github" {
+		return listGitHubModels(apiKey)
 	}
 
 	baseURL, ok := Providers[provider]
@@ -497,4 +503,89 @@ func listAnthropicModels() []Model {
 		}
 	}
 	return models
+}
+
+// gitHubCatalogEntry represents a model from the GitHub Models catalog API.
+type gitHubCatalogEntry struct {
+	ID                       string   `json:"id"`
+	Name                     string   `json:"name"`
+	Publisher                string   `json:"publisher"`
+	Summary                  string   `json:"summary"`
+	Capabilities             []string `json:"capabilities"`
+	SupportedInputModalities []string `json:"supported_input_modalities"`
+	SupportedOutputModalities []string `json:"supported_output_modalities"`
+	Limits                   struct {
+		MaxInputTokens  int `json:"max_input_tokens"`
+		MaxOutputTokens int `json:"max_output_tokens"`
+	} `json:"limits"`
+}
+
+// listGitHubModels fetches models from the GitHub Models catalog API.
+func listGitHubModels(apiKey string) ([]Model, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	req, err := http.NewRequest("GET", "https://models.github.ai/catalog/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach github models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("github models returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var entries []gitHubCatalogEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("failed to parse model catalog: %w", err)
+	}
+
+	var models []Model
+	for _, e := range entries {
+		// Only keep models that support text output and chat capability.
+		if !sliceContains(e.SupportedOutputModalities, "text") {
+			continue
+		}
+		if !sliceContains(e.SupportedInputModalities, "text") {
+			continue
+		}
+
+		contextLen := e.Limits.MaxInputTokens
+		dm := Model{
+			Name:     e.ID,
+			Tag:      e.ID,
+			Provider: "github",
+		}
+		if contextLen > 0 {
+			dm.Params = formatContextLen(contextLen)
+		}
+		models = append(models, dm)
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Name < models[j].Name
+	})
+
+	return models, nil
+}
+
+// sliceContains returns true if the slice contains the given string.
+func sliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
