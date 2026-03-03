@@ -105,6 +105,19 @@ func (m ChatModel) handleStrategyWizardWith(initialQuestion string) (ChatModel, 
 			"\nDo NOT ask what their goal is — they already stated it above. " +
 			"Acknowledge it briefly and proceed to ask about relevant facts and constraints."
 	}
+
+	// Pre-flight: ensure there's enough room for the strategy prompt.
+	// The gather prompt is ~1400 tokens on tight tokenizers; if context is
+	// too full, trim older messages to make room.
+	promptTokens := estimateTokens([]llm.ChatMessage{llm.NewChatMessage("user", prompt)}) * 4 / 3
+	currentTokens := estimateTokens(m.buildMessages()) * 4 / 3
+	needed := currentTokens + promptTokens + 500 // 500 for model response
+	for needed > m.contextLimit && len(m.messages) > 2 {
+		m.messages = m.messages[2:] // drop oldest user+assistant pair
+		currentTokens = estimateTokens(m.buildMessages()) * 4 / 3
+		needed = currentTokens + promptTokens + 500
+	}
+
 	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
 
 	// Start no-tool stream so model asks the first question

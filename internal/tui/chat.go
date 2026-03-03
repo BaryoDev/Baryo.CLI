@@ -720,13 +720,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			// Natural language research: "research X", "deep dive into X", etc.
-			if topic := isResearchIntent(text); topic != "" {
-				m.history = append(m.history, chatEntry{
-					role:    roleUser,
-					content: text,
-					mode:    m.agentMode,
-				})
-				return m.handleResearch(topic)
+			// Skip if intent is Planning — those get structured thinking instead.
+			if ClassifyIntent(text) != IntentPlanning {
+				if topic := isResearchIntent(text); topic != "" {
+					m.history = append(m.history, chatEntry{
+						role:    roleUser,
+						content: text,
+						mode:    m.agentMode,
+					})
+					return m.handleResearch(topic)
+				}
 			}
 
 			// Auto-remember: if user agrees after model suggested /remember
@@ -801,7 +804,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			needsSearch := false
 			if m.ragPipeline != nil && m.ragPipeline.NeedsFreshInfo(text) {
 				needsSearch = true
-			} else if intent == IntentKnowledge && m.ragPrompt == "" {
+			} else if intent == IntentKnowledge && m.ragPrompt == "" && rag.NeedsFreshInfo(text) {
 				needsSearch = true
 			}
 			if needsSearch && !m.searchPending && !m.searchFallbackUsed {
@@ -1071,7 +1074,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			// Auto-research: if model suggested deep research, trigger /research.
-			if !m.searchFallbackUsed && !m.searchPending && !m.researchPending && m.turnContent != "" {
+			// Skip when planning prompt is active — decision questions use structured
+			// thinking, not the research pipeline.
+			if !m.searchFallbackUsed && !m.searchPending && !m.researchPending && m.turnContent != "" && m.planningPrompt == "" {
 				if m.suggestsResearch(m.turnContent) {
 					query := m.extractSearchTopic()
 					if query != "" {
@@ -1084,7 +1089,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			// Auto-search: if model admitted it doesn't have info and suggested /search,
 			// automatically trigger the search instead of making the user type it.
-			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" {
+			// Skip when planning prompt is active — structured thinking responses
+			// shouldn't be hijacked by auto-search.
+			if !m.searchFallbackUsed && !m.searchPending && m.turnContent != "" && m.planningPrompt == "" {
 				if m.suggestsSearch(m.turnContent) {
 					query := m.extractSearchTopic()
 					if query != "" {
@@ -1220,18 +1227,35 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
-		// Inject raw search content as context (not shown to user)
-		contextMsg := fmt.Sprintf("[Web search results for %q]\n\n%s", msg.Query, msg.Results)
-		m.searchCompactAt = len(m.messages) // remember where to compact later
-		m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
-
-		// Instruct model to summarize the results.
-		// Inject memories directly into the summarize prompt so the model
-		// sees user preferences (e.g. APA style) right next to the instructions.
+		// Pre-flight: estimate available space and truncate results if needed.
+		// This prevents "too many tokens" errors on small-context models.
+		// Budget: current messages + summarize prompt + search results + response must fit.
+		//
+		// We inflate token estimates by 4/3 (33%) because estimateTokens uses a
+		// chars/4 heuristic that undercounts for some tokenizers (notably Cohere).
+		// We also convert back to chars at chars/3 (not chars/4) for the same reason.
+		results := msg.Results
 		summarizePrompt := fmt.Sprintf(searchPromptTemplate, msg.Query)
 		if m.memoriesPrompt != "" {
 			summarizePrompt = m.memoriesPrompt + "\n\n" + summarizePrompt
 		}
+		promptTokens := estimateTokens([]llm.ChatMessage{llm.NewChatMessage("user", summarizePrompt)}) * 4 / 3
+		currentTokens := estimateTokens(m.buildMessages()) * 4 / 3
+		availableTokens := m.contextLimit - currentTokens - promptTokens - 300 // 300 for model response
+		if availableTokens < 200 {
+			availableTokens = 200
+		}
+		availableChars := availableTokens * 3 // conservative: chars/3 ratio
+		if len(results) > availableChars {
+			results = search.TruncateContent(results, availableChars)
+		}
+
+		// Inject raw search content as context (not shown to user)
+		contextMsg := fmt.Sprintf("[Web search results for %q]\n\n%s", msg.Query, results)
+		m.searchCompactAt = len(m.messages) // remember where to compact later
+		m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
+
+		// Instruct model to summarize the results (prompt already built above for budget calc).
 		m.messages = append(m.messages, llm.NewChatMessage("user", summarizePrompt))
 
 		m.history = append(m.history, chatEntry{
@@ -3145,7 +3169,7 @@ func (m *ChatModel) suggestsSearch(response string) bool {
 	suggestsCmd := strings.Contains(lower, "/search") ||
 		strings.Contains(lower, "search for you") ||
 		strings.Contains(lower, "let me search")
-	return admitsNoInfo || suggestsCmd
+	return admitsNoInfo && suggestsCmd
 }
 
 // isResearchIntent detects natural language requests that should route to /research.
@@ -3183,14 +3207,13 @@ func isResearchIntent(text string) string {
 		}
 	}
 
-	// Keywords that signal deep research intent (not just a quick question)
+	// Keywords that signal deep research intent (not just a quick question).
+	// Excludes decision/planning phrases ("pros and cons of", "best options for")
+	// which are handled by the intent classifier + structured thinking prompt.
 	researchSignals := []string{
 		"thorough analysis",
 		"comprehensive analysis",
 		"in-depth analysis",
-		"compare and contrast",
-		"pros and cons of",
-		"what are the best options for",
 		"detailed comparison of",
 		"analyze thoroughly",
 	}

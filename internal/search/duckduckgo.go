@@ -49,9 +49,9 @@ func extractDDGResults(doc *html.Node) []SearchResult {
 	var walk func(*html.Node)
 
 	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "div" && hasClass(n, "result") {
+		if n.Type == html.ElementNode && n.Data == "div" && hasClass(n, "result") && !hasClass(n, "result--ad") {
 			r := extractSingleResult(n)
-			if r.Title != "" && r.URL != "" {
+			if r.Title != "" && r.URL != "" && !isTrackingURL(r.URL) {
 				results = append(results, r)
 			}
 		}
@@ -123,6 +123,23 @@ func hasClass(n *html.Node, class string) bool {
 				}
 			}
 		}
+	}
+	return false
+}
+
+// isTrackingURL returns true if a URL looks like an ad tracking redirect
+// rather than a genuine search result. DuckDuckGo ads use y.js redirects
+// with long encoded parameters.
+func isTrackingURL(rawURL string) bool {
+	if strings.Contains(rawURL, "duckduckgo.com/y.js") {
+		return true
+	}
+	if strings.Contains(rawURL, "ad_provider=") || strings.Contains(rawURL, "ad_domain=") {
+		return true
+	}
+	// Tracking URLs tend to be excessively long
+	if len(rawURL) > 300 {
+		return true
 	}
 	return false
 }
