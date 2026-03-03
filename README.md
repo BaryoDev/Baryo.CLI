@@ -174,21 +174,46 @@ Inside the TUI you can also use:
 
 ### Intelligent routing
 
-Baryo uses **two-tier routing** to match each model's capabilities. Capable models (≥32K context) get `web_search` and `deep_research` as real tool calls — they decide when to search, just like Claude Code. Smaller models get a consolidated heuristic router that triggers the right command automatically.
+Baryo uses **two-tier routing** to match each model's capabilities. Capable models (≥32K context) get 8 meta-tools as real tool calls — they decide when to search, fetch, commit, test, and more. Smaller models get a consolidated heuristic router that triggers the right command automatically.
 
 **Tier 1 — Capable models** (Gemini, GPT, Claude, large Llama, etc.):
 
-The model receives `web_search` and `deep_research` as tool definitions. It calls them directly when needed — no heuristic keyword matching, no false positives.
+The model receives meta-tools as tool definitions and calls them directly when needed — no heuristic keyword matching, no false positives.
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `web_search` | Safe | Search the web for current information |
+| `deep_research` | Safe | Multi-round deep research with report |
+| `fetch_page` | Safe | Fetch and extract content from a URL |
+| `remember` | Safe | Save user preferences to persistent memory |
+| `review_code` | Safe | Get current git diff for code review |
+| `commit_changes` | Destructive | Stage and commit with auto-generated message |
+| `create_pr` | Destructive | Push branch and create a GitHub PR |
+| `run_tests` | Destructive | Auto-detect test framework and run tests |
+
+Safe tools work in all modes (including read-only). Destructive tools are only available in non-read-only modes and respect the permission system (`--yolo`, confirm, suggest).
 
 ```
 You: What are the latest Go features?
 → model calls web_search("latest Go features") → answers with citations
 
-You: Research the best databases for time-series data
-→ model calls deep_research("best databases for time-series data") → multi-round report
+You: Read this page for me: https://go.dev/blog
+→ model calls fetch_page("https://go.dev/blog") → extracts and summarizes content
 
-You: Should I use PostgreSQL or MongoDB?
-→ model answers directly with structured analysis (no unnecessary search)
+You: Remember that I prefer conventional commits
+→ model calls remember("prefer conventional commits") → saved to memory
+
+You: Review my changes
+→ model calls review_code() → shows diff with analysis
+
+You: Run the tests
+→ model calls run_tests() → auto-detects go/npm/pytest/cargo and runs
+
+You: Commit these changes
+→ model calls commit_changes() → stages, generates message, commits
+
+You: Create a PR for this
+→ model calls create_pr() → pushes branch, opens GitHub PR
 ```
 
 **Tier 2 — Small models** (<32K context):
@@ -222,6 +247,8 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/search <query>` | Search the web and summarize results |
 | `/research <topic>` | Multi-round deep research with structured report |
 | `/fetch <url>` | Fetch and display a web page |
+| `/test [path]` | Run project tests (auto-detects go/npm/pytest/cargo) |
+| `/pr [title]` | Push current branch and create a GitHub PR |
 | `/setup` | Download or update starter skills from GitHub |
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill (loads full instructions into context) |
@@ -250,13 +277,15 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 **Workflows:**
 
 ```bash
-# Review → Fix → Commit
+# Review → Fix → Commit → PR
 /review              # Find issues in your changes
 # ... fix the issues ...
+/test                # Run tests to verify
 /commit              # Generate a commit message and commit
+/pr "feat: add user auth"  # Push and create a PR
 
-# Run tests and check output
-/run go test ./...
+# Run tests for a specific path
+/test ./internal/tui/...
 
 # Quick question without tool overhead
 /ask explain what a goroutine is
@@ -880,7 +909,7 @@ Switch between specialized modes that control tool access and model behavior. Ea
 | `review` | Read-only | Code review focus with read-only tools |
 | `research` | Read-only | Web search and exploration |
 
-Destructive commands (`/run`, `/commit`, `/init`) are blocked in restricted modes. The model receives a system message on each mode switch so it adjusts behavior immediately.
+Destructive commands (`/run`, `/commit`, `/init`, `/test`, `/pr`) are blocked in restricted modes. The model receives a system message on each mode switch so it adjusts behavior immediately.
 
 ### MCP support
 
