@@ -196,6 +196,14 @@ func main() {
 			}),
 		}
 
+		if cfg.Hooks.HasAny() {
+			opts = append(opts, tui.WithHooks(cfg.Hooks))
+		}
+
+		if len(cfg.AutoMode) > 0 {
+			opts = append(opts, tui.WithAutoMode(buildAutoModeConfig(cfg.AutoMode)))
+		}
+
 		if len(cfg.MCPServers) > 0 {
 			opts = append(opts, tui.WithMCPConfigs(cfg.MCPServers))
 		}
@@ -337,5 +345,17 @@ func endpointForModel(cfg config.Config, model llm.Model) llm.Endpoint {
 // isProviderModel returns true if the model is a cloud provider model.
 func isProviderModel(model llm.Model) bool {
 	return model.Provider != ""
+}
+
+// buildAutoModeConfig converts config entries into an AutoModeConfig.
+func buildAutoModeConfig(entries []config.AutoModeEntry) tui.AutoModeConfig {
+	cfg := tui.AutoModeConfig{Enabled: true}
+	for _, e := range entries {
+		cfg.Models = append(cfg.Models, tui.AutoModeModel{
+			Tag:  e.Model,
+			Tier: tui.ParseTier(e.Tier),
+		})
+	}
+	return cfg
 }
 

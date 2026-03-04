@@ -186,3 +186,17 @@ type RAGReadyMsg struct {
 // SourceIndexReadyMsg signals that background source file indexing has completed.
 type SourceIndexReadyMsg struct{}
 
+// HookResultMsg carries the result of an async hook execution.
+type HookResultMsg HookResult
+
+// SubagentProgressMsg carries a status update from a running subagent.
+type SubagentProgressMsg struct {
+	ID     int
+	Status string
+}
+
+// SubagentDoneMsg signals that a subagent has finished.
+type SubagentDoneMsg struct {
+	Result SubagentResult
+}
+

@@ -141,6 +141,16 @@ type ChatModel struct {
 	// Auto-fix: run linter/tests after code edits
 	autoFixCfg AutoFixConfig
 
+	// Lifecycle hooks
+	hooksConfig config.HooksConfig
+
+	// Auto mode: automatic model routing by query complexity
+	autoModeCfg AutoModeConfig
+
+	// Subagent task delegation
+	subagents       []SubagentState
+	subagentCounter int
+
 	// Intent-based prompt injection (transient, reset each turn)
 	planningPrompt string // set when intent is Planning; injected into system prompt
 
@@ -801,6 +811,30 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.planningPrompt = structuredThinkingPrompt
 			}
 
+			// Auto mode: route to optimal model based on query complexity
+			if m.autoModeCfg.Enabled {
+				selected := SelectModel(m.autoModeCfg, text, len(m.messages), needsTools(text))
+				if selected.Tag != "" && selected.Tag != m.modelTag {
+					provider := llm.DetectProvider(selected.Tag)
+					newModel := llm.Model{Tag: selected.Tag, Name: selected.Tag, Provider: provider}
+					if provider != "" {
+						p := llm.LookupPricing(provider, selected.Tag)
+						newModel.PromptPrice = p.PromptPrice
+						newModel.CompletionPrice = p.CompletionPrice
+					}
+					m.endpoint = endpointForModel(m.localSocketPath, newModel, m.providerKeys)
+					m.modelTag = selected.Tag
+					m.modelName = selected.Tag
+					m.modelHints = llm.DetectModelHints(selected.Tag)
+					m.promptPrice = newModel.PromptPrice
+					m.completionPrice = newModel.CompletionPrice
+					m.history = append(m.history, chatEntry{
+						role:    roleInfo,
+						content: fmt.Sprintf("[auto:%s] → %s", TierName(selected.Tier), selected.Tag),
+					})
+				}
+			}
+
 			// Route based on current agent mode
 			modeCfg := modeRegistry[m.agentMode]
 			if modeCfg.Tools == ToolsNone {
@@ -1120,10 +1154,19 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			// Incremental repo map refresh after each turn.
+			var cmds []tea.Cmd
 			if m.repoIndex != nil {
-				return m, m.refreshRepoMap()
+				cmds = append(cmds, m.refreshRepoMap())
 			}
 
+			// Fire on_stream_end hook
+			if hookCmd := fireHookCmd(m.hooksConfig, HookOnStreamEnd, HookContext{}); hookCmd != nil {
+				cmds = append(cmds, hookCmd)
+			}
+
+			if len(cmds) > 0 {
+				return m, tea.Batch(cmds...)
+			}
 			return m, nil
 		}
 
@@ -1158,7 +1201,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.messages = m.messages[:len(m.messages)-1]
 			}
 			m.updateViewport()
-			return m, nil
+			// Fire on_error hook
+			return m, fireHookCmd(m.hooksConfig, HookOnError, HookContext{Error: evt.Error})
 		}
 
 		if evt.ContentReplace != nil {
@@ -1266,7 +1310,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
 
 		m.updateViewport()
-		return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+		cmds := []tea.Cmd{waitForEvent(m.eventCh), doSpinTick()}
+		// Fire on_search hook
+		if hookCmd := fireHookCmd(m.hooksConfig, HookOnSearch, HookContext{Query: msg.Query}); hookCmd != nil {
+			cmds = append(cmds, hookCmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case FetchResultMsg:
 		if msg.Err != nil {
@@ -1556,12 +1605,77 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				role:    roleError,
 				content: fmt.Sprintf("Commit failed: %v", msg.Err),
 			})
-		} else {
-			m.history = append(m.history, chatEntry{
-				role:    roleAssistant,
-				content: msg.Message,
-			})
+			m.updateViewport()
+			// Fire on_error hook for commit failure
+			return m, fireHookCmd(m.hooksConfig, HookOnError, HookContext{Error: fmt.Sprintf("Commit failed: %v", msg.Err)})
 		}
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: msg.Message,
+		})
+		m.updateViewport()
+		// Fire on_commit hook
+		return m, fireHookCmd(m.hooksConfig, HookOnCommit, HookContext{CommitMsg: msg.Message})
+
+	case HookResultMsg:
+		if msg.Output != "" {
+			m.history = append(m.history, chatEntry{
+				role:    roleInfo,
+				content: fmt.Sprintf("[hook:%s] %s", msg.Event, msg.Output),
+			})
+			m.updateViewport()
+		}
+		return m, nil
+
+	case SubagentProgressMsg:
+		for i := range m.subagents {
+			if m.subagents[i].ID == msg.ID {
+				m.history = append(m.history, chatEntry{
+					role:    roleInfo,
+					content: fmt.Sprintf("[task #%d] %s", msg.ID, msg.Status),
+				})
+				m.updateViewport()
+				break
+			}
+		}
+		return m, nil
+
+	case SubagentDoneMsg:
+		r := msg.Result
+		for i := range m.subagents {
+			if m.subagents[i].ID == r.ID {
+				if r.Err != nil {
+					m.subagents[i].Status = "failed"
+					m.subagents[i].Result = r.Err.Error()
+					m.history = append(m.history, chatEntry{
+						role:    roleError,
+						content: fmt.Sprintf("[task #%d] Failed: %v (%.1fs)", r.ID, r.Err, r.Elapsed.Seconds()),
+					})
+				} else {
+					m.subagents[i].Status = "completed"
+					m.subagents[i].Result = r.Content
+					// Inject result into conversation context
+					resultContent := r.Content
+					if len(resultContent) > 4000 {
+						resultContent = resultContent[:4000] + "\n... (truncated)"
+					}
+					m.messages = append(m.messages, llm.NewChatMessage("user",
+						fmt.Sprintf("[Subagent #%d result: %s]\n\n%s", r.ID, r.Description, resultContent)))
+					// Show truncated result in history
+					displayContent := r.Content
+					if len(displayContent) > 500 {
+						displayContent = displayContent[:500] + "..."
+					}
+					m.history = append(m.history, chatEntry{
+						role:    roleInfo,
+						content: fmt.Sprintf("[task #%d completed] (%.1fs)\n%s", r.ID, r.Elapsed.Seconds(), displayContent),
+					})
+				}
+				break
+			}
+		}
+		m.contextTokens = estimateTokens(m.buildMessages())
+		m.saveSession()
 		m.updateViewport()
 		return m, nil
 
@@ -1989,6 +2103,14 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		if trimmed == "/pr" || strings.HasPrefix(text, "/pr ") {
 			return m.handlePR(strings.TrimPrefix(text, "/pr"))
+		}
+
+		if strings.HasPrefix(text, "/task ") {
+			return m.handleTask(strings.TrimPrefix(text, "/task "))
+		}
+
+		if trimmed == "/tasks" {
+			return m.handleTasksList()
 		}
 
 		m.history = append(m.history, chatEntry{
@@ -2518,10 +2640,31 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	ch := m.confirmCh
 	mgr := m.mcpManager
 	afCfg := m.autoFixCfg
+	hooks := m.hooksConfig
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Pre-tool hook: runs before execution. Non-zero exit cancels the tool.
+		if hooks.PreTool != "" {
+			hr := runHook(hooks, HookPreTool, HookContext{ToolName: name})
+			if hr.Blocked {
+				msg := fmt.Sprintf("[hook blocked] %s was cancelled by pre_tool hook", name)
+				if hr.Output != "" {
+					msg += ": " + hr.Output
+				}
+				return msg, true
+			}
+		}
+
 		// Route MCP tools to the MCP manager.
 		if mgr != nil && mgr.IsMCPTool(name) {
-			return mgr.Execute(ctx, name, argsJSON)
+			content, isErr := mgr.Execute(ctx, name, argsJSON)
+			// Post-tool hook
+			if hooks.PostTool != "" {
+				hr := runHook(hooks, HookPostTool, HookContext{ToolName: name, Output: content})
+				if hr.Output != "" {
+					content += "\n\n[post_tool hook]\n" + hr.Output
+				}
+			}
+			return content, isErr
 		}
 		if tools.IsDestructive(name) {
 			switch mode {
@@ -2552,6 +2695,13 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 		if !r.IsError && isCodeModifyingTool(name) {
 			if checkOutput := runAutoCheck(ctx, afCfg); checkOutput != "" {
 				r.Content += "\n\n" + checkOutput
+			}
+		}
+		// Post-tool hook
+		if hooks.PostTool != "" {
+			hr := runHook(hooks, HookPostTool, HookContext{ToolName: name, Output: r.Content})
+			if hr.Output != "" {
+				r.Content += "\n\n[post_tool hook]\n" + hr.Output
 			}
 		}
 		return r.Content, r.IsError
@@ -4160,6 +4310,124 @@ func (m ChatModel) handleForget(substring string) (ChatModel, tea.Cmd) {
 	m.history = append(m.history, chatEntry{
 		role:    roleAssistant,
 		content: fmt.Sprintf("Forgot: %s", removed),
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+// handleTask spawns a subagent for a given task description.
+func (m ChatModel) handleTask(desc string) (ChatModel, tea.Cmd) {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: "Usage: /task <description>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	// Count active subagents
+	active := 0
+	for _, s := range m.subagents {
+		if s.Status == "running" {
+			active++
+		}
+	}
+	if active >= maxActiveSubagents {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("Maximum %d concurrent tasks reached. Wait for a task to complete.", maxActiveSubagents),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.subagentCounter++
+	id := m.subagentCounter
+
+	ctx, cancel := context.WithTimeout(context.Background(), subagentTimeout)
+	m.subagents = append(m.subagents, SubagentState{
+		ID:          id,
+		Description: desc,
+		Status:      "running",
+		StartTime:   time.Now(),
+		Cancel:      cancel,
+	})
+
+	// Calculate token budget: 25% of remaining context
+	tokenBudget := (m.contextLimit - m.contextTokens) / 4
+
+	cfg := SubagentConfig{
+		ID:            id,
+		Description:   desc,
+		Endpoint:      m.endpoint,
+		ModelTag:       m.modelTag,
+		SystemPrompt:  m.systemPrompt,
+		TokenBudget:   tokenBudget,
+		MCPManager:    m.mcpManager,
+		MCPInReadOnly: m.mcpInReadOnly,
+	}
+
+	progressCh := make(chan SubagentProgressMsg, 16)
+
+	m.history = append(m.history, chatEntry{
+		role:    roleInfo,
+		content: fmt.Sprintf("[task #%d started] %s", id, desc),
+	})
+	m.updateViewport()
+
+	// Goroutine to run subagent
+	runCmd := func() tea.Msg {
+		defer cancel()
+		result := RunSubagent(ctx, cfg, progressCh)
+		close(progressCh)
+		return SubagentDoneMsg{Result: result}
+	}
+
+	// Goroutine to forward progress
+	progressCmd := func() tea.Msg {
+		for p := range progressCh {
+			// We can only return one message, so we just return the last progress
+			// For simplicity, send each progress as it comes
+			_ = p
+		}
+		return nil
+	}
+
+	// Use a listener pattern: forward progress messages one at a time
+	forwardProgress := func() tea.Msg {
+		p, ok := <-progressCh
+		if !ok {
+			return nil
+		}
+		return p
+	}
+	_ = progressCmd // unused, use forwardProgress instead
+
+	return m, tea.Batch(runCmd, forwardProgress)
+}
+
+// handleTasksList shows the status of all subagents.
+func (m ChatModel) handleTasksList() (ChatModel, tea.Cmd) {
+	if len(m.subagents) == 0 {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: "No tasks. Use /task <description> to start one.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Tasks:\n")
+	for _, s := range m.subagents {
+		elapsed := time.Since(s.StartTime).Truncate(time.Second)
+		sb.WriteString(fmt.Sprintf("  #%d [%s] %s (%s)\n", s.ID, s.Status, s.Description, elapsed))
+	}
+	m.history = append(m.history, chatEntry{
+		role:    roleAssistant,
+		content: sb.String(),
 	})
 	m.updateViewport()
 	return m, nil

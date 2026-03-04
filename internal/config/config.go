@@ -47,6 +47,30 @@ type Config struct {
 	AutoTest         *bool              `yaml:"auto_test"`        // run tests after code edits (default false)
 	LintCommand      string             `yaml:"lint_command"`     // custom lint command override
 	TestCommand      string             `yaml:"test_command"`     // custom test command override
+	Hooks            HooksConfig        `yaml:"hooks"`            // lifecycle hook commands
+	AutoMode         []AutoModeEntry    `yaml:"auto_mode"`        // ordered models for auto-routing
+}
+
+// HooksConfig holds shell commands that run on lifecycle events.
+type HooksConfig struct {
+	PreTool     string `yaml:"pre_tool"`
+	PostTool    string `yaml:"post_tool"`
+	OnError     string `yaml:"on_error"`
+	OnCommit    string `yaml:"on_commit"`
+	OnStreamEnd string `yaml:"on_stream_end"`
+	OnSearch    string `yaml:"on_search"`
+}
+
+// HasAny returns true if any hook is configured.
+func (h HooksConfig) HasAny() bool {
+	return h.PreTool != "" || h.PostTool != "" || h.OnError != "" ||
+		h.OnCommit != "" || h.OnStreamEnd != "" || h.OnSearch != ""
+}
+
+// AutoModeEntry maps a model tag to a capability tier for auto-routing.
+type AutoModeEntry struct {
+	Model string `yaml:"model"` // model tag (e.g. "gemini/gemini-2.0-flash")
+	Tier  string `yaml:"tier"`  // "fast", "normal", "strong"
 }
 
 // RewriteEnabled returns whether the prompt rewrite pass is enabled.
@@ -256,6 +280,29 @@ func loadFile(path string, cfg *Config) {
 	if file.TestCommand != "" {
 		cfg.TestCommand = file.TestCommand
 	}
+	// Hooks: merge each field independently
+	if file.Hooks.PreTool != "" {
+		cfg.Hooks.PreTool = file.Hooks.PreTool
+	}
+	if file.Hooks.PostTool != "" {
+		cfg.Hooks.PostTool = file.Hooks.PostTool
+	}
+	if file.Hooks.OnError != "" {
+		cfg.Hooks.OnError = file.Hooks.OnError
+	}
+	if file.Hooks.OnCommit != "" {
+		cfg.Hooks.OnCommit = file.Hooks.OnCommit
+	}
+	if file.Hooks.OnStreamEnd != "" {
+		cfg.Hooks.OnStreamEnd = file.Hooks.OnStreamEnd
+	}
+	if file.Hooks.OnSearch != "" {
+		cfg.Hooks.OnSearch = file.Hooks.OnSearch
+	}
+	// Auto mode: replace entire list if present
+	if len(file.AutoMode) > 0 {
+		cfg.AutoMode = file.AutoMode
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -317,6 +364,25 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_TEST_COMMAND"); v != "" {
 		cfg.TestCommand = v
+	}
+	// Hook env vars
+	if v := os.Getenv("BARYO_HOOK_PRE_TOOL"); v != "" {
+		cfg.Hooks.PreTool = v
+	}
+	if v := os.Getenv("BARYO_HOOK_POST_TOOL"); v != "" {
+		cfg.Hooks.PostTool = v
+	}
+	if v := os.Getenv("BARYO_HOOK_ON_ERROR"); v != "" {
+		cfg.Hooks.OnError = v
+	}
+	if v := os.Getenv("BARYO_HOOK_ON_COMMIT"); v != "" {
+		cfg.Hooks.OnCommit = v
+	}
+	if v := os.Getenv("BARYO_HOOK_ON_STREAM_END"); v != "" {
+		cfg.Hooks.OnStreamEnd = v
+	}
+	if v := os.Getenv("BARYO_HOOK_ON_SEARCH"); v != "" {
+		cfg.Hooks.OnSearch = v
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{

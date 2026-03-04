@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
@@ -50,6 +51,8 @@ type AppModel struct {
 	mcpInReadOnly    bool               // allow MCP tools in read-only modes
 	exportPath       string             // default directory for /export output
 	autoFixCfg       AutoFixConfig      // auto lint/test after code edits
+	hooksConfig      config.HooksConfig // lifecycle hooks
+	autoModeCfg      AutoModeConfig     // auto model routing
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
@@ -168,6 +171,20 @@ func WithExportPath(path string) AppOption {
 func WithAutoFix(cfg AutoFixConfig) AppOption {
 	return func(a *AppModel) {
 		a.autoFixCfg = cfg
+	}
+}
+
+// WithHooks sets the lifecycle hooks configuration.
+func WithHooks(hooks config.HooksConfig) AppOption {
+	return func(a *AppModel) {
+		a.hooksConfig = hooks
+	}
+}
+
+// WithAutoMode sets the auto model routing configuration.
+func WithAutoMode(cfg AutoModeConfig) AppOption {
+	return func(a *AppModel) {
+		a.autoModeCfg = cfg
 	}
 }
 
@@ -358,6 +375,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenChat
 		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
 		m.chat.autoFixCfg = m.autoFixCfg
+		m.chat.hooksConfig = m.hooksConfig
+		m.chat.autoModeCfg = m.autoModeCfg
 		if m.repoIndex != nil {
 			m.chat.repoIndex = m.repoIndex
 			m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)
@@ -596,6 +615,8 @@ func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
 	m.chat.exportPath = m.exportPath
 	m.chat.autoFixCfg = m.autoFixCfg
+	m.chat.hooksConfig = m.hooksConfig
+	m.chat.autoModeCfg = m.autoModeCfg
 	if m.repoIndex != nil {
 		m.chat.repoIndex = m.repoIndex
 		m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)

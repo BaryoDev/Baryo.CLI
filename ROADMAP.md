@@ -39,14 +39,8 @@ Strengthen research by querying multiple sources simultaneously.
 - Search result caching to avoid re-fetching within a session
 - Configurable number of pages to deep-read (currently 3, allow up to 10)
 
-### Auto-Fix on Lint/Test
-Automatically run linters and tests after code changes, fix issues. Inspired by Aider.
-
-- After tool-based code changes, run configured linter (e.g., `golangci-lint`, `eslint`)
-- If issues found, feed them back to the model and auto-fix
-- Also run tests: `go test`, `npm test`, `pytest` — detected from project type
-- Configurable per-project via BARYO.md or config
-- Can be combined with hooks system
+### ~~Auto-Fix on Lint/Test~~ ✓ (v0.9.0)
+*Moved to Completed.*
 
 ### Hooks System
 Shell commands that run on events — pre-tool, post-tool, on-error, on-commit.
@@ -66,13 +60,8 @@ Spawn specialized sub-tasks for parallel or isolated work. Inspired by Kimi CLI 
 - Results merged back into main conversation
 - Use cases: research one topic while coding another, run tests in background
 
-### RAG (Retrieval-Augmented Generation)
-Index project files and auto-retrieve relevant context.
-
-- Lightweight file-tree + function/type signature index built on startup
-- AST-aware repo map (like Aider's tree-sitter approach) for structural understanding
-- Auto-retrieve relevant files based on user query without sending entire codebase
-- Fall back to existing `glob`/`grep`/`read_file` tools for on-demand access
+### ~~RAG (Retrieval-Augmented Generation)~~ ✓ (v0.9.0)
+*Moved to Completed.*
 
 ---
 
@@ -199,6 +188,24 @@ Allow users to add custom tools via config.
 ---
 
 ## Completed
+
+### Auto-Fix on Lint/Test (v0.9.0)
+- Auto-run linter and/or tests after `edit_file`, `write_file`, `delete_file` tool calls
+- Errors appended to tool result so model sees and self-corrects immediately
+- Auto-detect project type: Go (`golangci-lint`/`go vet`), Node (`eslint`), Rust (`cargo clippy`), Python (`flake8`)
+- Auto-detect test runner: `go test`, `jest`, `cargo test`, `pytest`
+- Custom command overrides via `lint_command` / `test_command` config
+- 30-second timeout per command, output truncated to 4000 chars
+- Config: `auto_lint` / `auto_test` (default false), env vars `BARYO_AUTO_LINT` / `BARYO_AUTO_TEST`
+
+### RAG Source File Indexing (v0.9.0)
+- Third RAG store: indexes project source files (`.go`, `.ts`, `.py`, `.rs`, `.java`, etc.)
+- Symbol-based chunking when tree-sitter index available (one chunk per function/type)
+- Line-based chunking fallback (~800 char windows with 3-line overlap)
+- Three-way budget split: 40% sources, 30% docs, 30% sessions
+- Up to 500 files indexed, code files prioritized over config/docs
+- Async two-phase startup: source indexing starts after both RAG and repo index are ready
+- Respects `.gitignore` and `.baryoignore` rules
 
 ### Agent Modes
 - 6 modes: chat (dynamic tools), ask (no tools), code (all tools), architect (read-only), review (read-only), research (read-only)
