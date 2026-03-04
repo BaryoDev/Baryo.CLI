@@ -1,132 +1,138 @@
- This is the generated BARYO.md file for the given project, as specified in the prompt guidelines.
-
 ```markdown
-# Baryo
+# Baryo CLI
 
-A local AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/). Chat with AI models running entirely on your machine — no API keys, no cloud, no data leaving your laptop.
+A local AI chat CLI powered by Docker Model Runner with cloud provider support, providing both interactive TUI and scriptable print modes.
 
-Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation.
+## Tech Stack
 
-## Prerequisites
+- **Language**: Go 1.25+
+- **Frameworks**: 
+  - Charm Bubble Tea (TUI framework)
+  - AWS SDK for Bedrock support
+  - Tree-sitter for code parsing
+- **Build Tools**: GoReleaser for multi-platform distribution
+- **Packaging**: Homebrew, Scoop, and manual distribution
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Model Runner enabled
-- At least one AI model pulled:
-  ```bash
-  docker model pull ai/mistral
-  ```
-- [Go 1.25+](https://go.dev/dl/) (to build from source)
+## Key Directories
 
-## Installation
+### `/internal/` - Core Application Logic
+- `cli/` - Command-line interface implementation
+- `config/` - Configuration management and memory handling
+- `llm/` - Language model providers (local Docker, cloud APIs)
+- `tui/` - Terminal UI components and state management
+- `tools/` - File operations, git integration, and external tools
+- `rag/` - Retrieval-augmented generation and document handling
+- `search/` - Web search and research capabilities
 
-### macOS / Linux (Homebrew)
+### `/skills/` - Specialized Functionality
+205+ pre-built skills for document processing, testing, and creative workflows including PDF, DOCX, PPTX, XLSX handling and web application testing.
 
+### `/cmd/` - Command Executables
+Entry points for different binary builds (main application).
+
+### Platform Packaging
+- `HomebrewFormula/` - Homebrew tap formula
+- `ScoopBucket/` - Scoop package manifest
+- `/assets/` - Release assets and build artifacts
+
+## Coding Guidelines
+
+### Style & Conventions
+- **Go Standards**: Follow standard Go conventions with gofmt
+- **Error Handling**: Explicit error checking with meaningful error messages
+- **TUI Patterns**: Use Charm Bubble Tea patterns with clear state management
+- **Module Organization**: Internal packages for implementation details
+
+### File Organization
+- Keep related functionality in cohesive internal packages
+- Use descriptive file names matching their primary responsibility
+- Separate concerns: CLI parsing, UI rendering, business logic
+
+### Naming Conventions
+- Package names: lowercase, descriptive (e.g., `cli`, `tui`, `llm`)
+- Exported types/functions: PascalCase
+- Internal implementation: lowercase or mixed case as appropriate
+
+## Build & Development Commands
+
+### Basic Commands
 ```bash
-brew tap BaryoDev/Baryo.CLI https://github.com/BaryoDev/Baryo.CLI
-brew install baryo
-```
-
-### macOS / Linux (shell script)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/BaryoDev/Baryo.CLI/main/install.sh | sh
-```
-
-### Windows (Scoop)
-
-```powershell
-scoop bucket add baryo https://github.com/BaryoDev/Baryo.CLI
-scoop install baryo
-```
-
-### Go install
-
-```bash
-go install github.com/arnelirobles/baryo-cli@latest
-```
-
-### Pre-built binaries
-
-Download from [GitHub Releases](https://github.com/BaryoDev/Baryo.CLI/releases) for macOS, Linux, and Windows (amd64 + arm64).
-
-### Build from source
-
-```bash
-git clone https://github.com/BaryoDev/Baryo.CLI.git
-cd Baryo.CLI
+# Build from source
 go build -o baryo .
+
+# Run tests
+go test ./...
+
+# Format code
+go fmt ./...
 ```
 
-### Publishing a new release
-
-Tag and push — GitHub Actions handles the rest:
-
+### Release Commands
 ```bash
-git tag v0.1.0
+# Build all platform binaries
+goreleaser build --snapshot
+
+# Create release (requires tagging)
+git tag vX.Y.Z
 git push origin main --tags
 ```
 
-This automatically builds binaries for all platforms, creates a GitHub Release, and updates the Homebrew formula and Scoop manifest in this repo.
-
-## Usage
-
-### Interactive mode (TUI)
-
+### Package Management
 ```bash
-# Launch the TUI — pick a model, then chat
-baryo
+# Update dependencies
+go mod tidy
 
-# Skip the model picker
-baryo --model mistral
+# Install to GOPATH
+go install github.com/baryodev/baryo-cli@latest
 ```
 
-The interactive mode gives you:
-- A model picker with parameter and size info
-- A streaming chat interface
-- Input history — press `↑`/`↓` to cycle through previous messages
-- Keyboard navigation (`enter` to send, `ctrl+c` to quit)
+## Skills Commands
 
-### Print mode
+### Core Workflows
+- `/review` - Analyze code changes for bugs and style issues
+- `/commit` - Generate commit message and commit staged changes
+- `/diff` - Show git differences for current changes
+- `/test` - Run project tests and validation
 
-Send a prompt and get the response streamed to stdout. Useful for scripts and pipelines.
+### File Operations
+- `/edit <file>` - Make targeted edits to source files
+- `/create <file>` - Generate new files with appropriate structure
+- `/read <file>` - Examine file contents with line numbers
 
-```bash
-# Ask a question
-baryo -p "what is 2+2"
+### Project Management
+- `/status` - Check git status and current branch
+- `/log` - Show recent commit history
+- `/doctor` - Run diagnostic checks on the project
 
-# Use a specific model
-baryo --model mistral -p "explain docker networking"
+### Research & Documentation
+- `/search <query>` - Web search with summarized results
+- `/research <topic>` - Deep research with structured analysis
+- `/docs` - Generate or update documentation
 
-# Pipe file contents as context
-cat main.go | baryo -p "review this code"
+## Skill-Specific Commands
 
-# Chain with other tools
-baryo -p "generate a .gitignore for Go" > .gitignore
-```
+Activate skills for specialized workflows:
+- `/skill docx` - Word document processing
+- `/skill pdf` - PDF manipulation and analysis
+- `/skill pptx` - PowerPoint presentation handling
+- `/skill webapp-testing` - Browser automation testing
+- `/skill mcp-builder` - Model Context Protocol development
 
-When stdin is piped, it's included as context alongside your prompt.
+## Project-Specific Patterns
 
-### Session persistence
+### Model Provider Architecture
+- Support both local Docker Model Runner and cloud providers
+- Consistent interface abstraction across providers
+- Graceful fallback when Docker unavailable
 
-Conversations are automatically saved after each turn to `~/.baryo/sessions/`.
+### Skill System
+- Auto-activation based on user intent
+- Pluggable architecture for extensibility
+- Skill-specific tools and workflows
 
-```bash
-# Resume the most recent session in this directory
-baryo -c
-
-# Pick a saved session from a list
-baryo -r
-
-# Resume a specific session by ID
-baryo --resume-id abc123
-```
-
-Inside the TUI you can also use:
-- `/sessions` — list and pick a saved session to resume
-- `/resume` — alias for `/sessions`
-- `/clear` — start a fresh conversation
-
-### Model browser
-
-Browse downloaded and available models from Docker Hub with
-... (truncated)
+### TUI Design Principles
+- Clean, muted interface with minimal visual clutter
+- Tabbed navigation for complex feature sets
+- Structured tool call visualization
+- Quirky, personality-driven status indicators
 ```

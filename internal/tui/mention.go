@@ -7,6 +7,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,10 +18,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 const (
-	maxMentionFileSize = 100 * 1024 // 100 KB
+	maxMentionFileSize = 100 * 1024    // 100 KB
+	maxImageFileSize   = 10 * 1024 * 1024 // 10 MB
+	maxImagesPerMsg    = 4
 	maxCompletions     = 50
 )
 
@@ -311,9 +315,10 @@ func (m *ChatModel) applyCompletion() {
 
 // processAtMentions finds all @path tokens in the text, reads each file,
 // and returns the original text, file contexts, and any errors.
-func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []string) {
+func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []llm.ContentPart, []string) {
 	fields := strings.Fields(text)
 	var contexts []fileContext
+	var images []llm.ContentPart
 	var errors []string
 	seen := make(map[string]bool)
 
@@ -339,6 +344,21 @@ func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []str
 		}
 		seen[path] = true
 
+		// Check if it's an image file
+		if isImageFile(path) {
+			if len(images) >= maxImagesPerMsg {
+				errors = append(errors, fmt.Sprintf("@%s: max %d images per message", path, maxImagesPerMsg))
+				continue
+			}
+			part, err := readImageForMention(path)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("@%s: %s", path, err.Error()))
+				continue
+			}
+			images = append(images, *part)
+			continue
+		}
+
 		fc, err := readFileForMention(path)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("@%s: %s", path, err.Error()))
@@ -347,7 +367,64 @@ func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []str
 		contexts = append(contexts, *fc)
 	}
 
-	return text, contexts, errors
+	return text, contexts, images, errors
+}
+
+// isImageFile checks if a file path has an image extension.
+func isImageFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg":
+		return true
+	}
+	return false
+}
+
+// readImageForMention reads an image file and returns a ContentPart with base64 data URI.
+func readImageForMention(path string) (*llm.ContentPart, error) {
+	absPath := path
+	if !filepath.IsAbs(absPath) {
+		cwd, _ := os.Getwd()
+		absPath = filepath.Join(cwd, absPath)
+	}
+	absPath = filepath.Clean(absPath)
+
+	fi, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("file not found")
+		}
+		return nil, fmt.Errorf("cannot access: %v", err)
+	}
+	if fi.Size() > maxImageFileSize {
+		return nil, fmt.Errorf("image too large (%d MB, max %d MB)", fi.Size()/(1024*1024), maxImageFileSize/(1024*1024))
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read: %v", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	mimeType := "image/png"
+	switch ext {
+	case ".jpg", ".jpeg":
+		mimeType = "image/jpeg"
+	case ".gif":
+		mimeType = "image/gif"
+	case ".webp":
+		mimeType = "image/webp"
+	case ".svg":
+		mimeType = "image/svg+xml"
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return &llm.ContentPart{
+		Type: "image_url",
+		ImageURL: &llm.ImageURL{
+			URL: fmt.Sprintf("data:%s;base64,%s", mimeType, encoded),
+		},
+	}, nil
 }
 
 // readFileForMention reads a file for @-mention injection.

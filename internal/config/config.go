@@ -49,6 +49,9 @@ type Config struct {
 	TestCommand      string             `yaml:"test_command"`     // custom test command override
 	Hooks            HooksConfig        `yaml:"hooks"`            // lifecycle hook commands
 	AutoMode         []AutoModeEntry    `yaml:"auto_mode"`        // ordered models for auto-routing
+	Notifications    *bool              `yaml:"notifications"`    // desktop notifications on completion (default false)
+	SessionRetentionDays int            `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
+	Sandbox          *bool              `yaml:"sandbox"`          // run code in Docker sandbox (default false)
 }
 
 // HooksConfig holds shell commands that run on lifecycle events.
@@ -107,6 +110,24 @@ func (c *Config) AutoTestEnabled() bool {
 		return false
 	}
 	return *c.AutoTest
+}
+
+// NotificationsEnabled returns whether desktop notifications are enabled.
+// Defaults to false when not explicitly set.
+func (c *Config) NotificationsEnabled() bool {
+	if c.Notifications == nil {
+		return false
+	}
+	return *c.Notifications
+}
+
+// SandboxEnabled returns whether sandboxed code execution is enabled.
+// Defaults to false when not explicitly set.
+func (c *Config) SandboxEnabled() bool {
+	if c.Sandbox == nil {
+		return false
+	}
+	return *c.Sandbox
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -303,6 +324,15 @@ func loadFile(path string, cfg *Config) {
 	if len(file.AutoMode) > 0 {
 		cfg.AutoMode = file.AutoMode
 	}
+	if file.Notifications != nil {
+		cfg.Notifications = file.Notifications
+	}
+	if file.SessionRetentionDays > 0 {
+		cfg.SessionRetentionDays = file.SessionRetentionDays
+	}
+	if file.Sandbox != nil {
+		cfg.Sandbox = file.Sandbox
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -383,6 +413,19 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_HOOK_ON_SEARCH"); v != "" {
 		cfg.Hooks.OnSearch = v
+	}
+	if v := os.Getenv("BARYO_NOTIFICATIONS"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.Notifications = &b
+	}
+	if v := os.Getenv("BARYO_SESSION_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.SessionRetentionDays = n
+		}
+	}
+	if v := os.Getenv("BARYO_SANDBOX"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.Sandbox = &b
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{

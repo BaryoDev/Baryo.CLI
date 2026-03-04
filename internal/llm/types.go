@@ -4,6 +4,8 @@
 
 package llm
 
+import "encoding/json"
+
 // modelRaw matches the actual JSON from `docker model list --json`.
 type modelRaw struct {
 	ID     string   `json:"id"`
@@ -108,18 +110,63 @@ type ToolResultEvent struct {
 	IsError bool
 }
 
+// ContentPart represents a part of a multipart message (text or image).
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL holds an image URL (can be data: URI with base64 encoding).
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
 // ChatMessage is a single message in the conversation.
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    *string    `json:"content"`
-	Name       string     `json:"name,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role         string        `json:"role"`
+	Content      *string       `json:"content"`
+	ContentParts []ContentPart `json:"content_parts,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
 }
 
 // NewChatMessage creates a ChatMessage with a non-nil content string.
 func NewChatMessage(role, content string) ChatMessage {
 	return ChatMessage{Role: role, Content: &content}
+}
+
+// NewMultipartMessage creates a ChatMessage with text and image parts.
+func NewMultipartMessage(role, text string, images []ContentPart) ChatMessage {
+	parts := []ContentPart{{Type: "text", Text: text}}
+	parts = append(parts, images...)
+	return ChatMessage{Role: role, ContentParts: parts, Content: &text}
+}
+
+// MarshalJSON customizes JSON encoding for ChatMessage.
+// When ContentParts is non-empty, the "content" field is serialized as an array
+// of content parts (OpenAI vision API format) instead of a plain string.
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	type plain struct {
+		Role       string      `json:"role"`
+		Content    interface{} `json:"content"`
+		Name       string      `json:"name,omitempty"`
+		ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+		ToolCallID string      `json:"tool_call_id,omitempty"`
+	}
+	p := plain{
+		Role:       m.Role,
+		Name:       m.Name,
+		ToolCalls:  m.ToolCalls,
+		ToolCallID: m.ToolCallID,
+	}
+	if len(m.ContentParts) > 0 {
+		p.Content = m.ContentParts
+	} else if m.Content != nil {
+		p.Content = *m.Content
+	}
+	return json.Marshal(p)
 }
 
 // ChatParams holds optional model parameters for inference.

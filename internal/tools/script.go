@@ -13,10 +13,24 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/sandbox"
 )
 
 const scriptTimeout = 120 * time.Second
 const maxScriptOutput = 200 * 1024 // 200 KB
+
+// sandboxInstance holds the optional sandbox for code execution.
+// Set via EnableSandbox() at startup when --sandbox is active.
+var sandboxInstance *sandbox.Sandbox
+
+// EnableSandbox activates sandboxed code execution via Docker containers.
+func EnableSandbox() {
+	s := sandbox.New()
+	if s.Available {
+		sandboxInstance = s
+	}
+}
 
 func init() {
 	Register("run_script", Tool{
@@ -158,6 +172,24 @@ func executeRunCode(ctx context.Context, argsJSON string) Result {
 
 	if args.Code == "" {
 		return Result{Content: "code is required", IsError: true}
+	}
+
+	// Route through sandbox if enabled
+	if sandboxInstance != nil && sandboxInstance.Available {
+		workDir, _ := os.Getwd()
+		if args.WorkingDir != "" {
+			if absDir, err := filepath.Abs(args.WorkingDir); err == nil {
+				workDir = absDir
+			}
+		}
+		output, err := sandboxInstance.Execute(ctx, args.Language, args.Code, workDir)
+		if err != nil {
+			return Result{Content: fmt.Sprintf("[sandbox] %v\n%s", err, output), IsError: true}
+		}
+		if output == "" {
+			output = "(no output)"
+		}
+		return Result{Content: "[sandbox] " + output}
 	}
 
 	// Determine working directory

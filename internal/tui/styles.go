@@ -122,6 +122,11 @@ var (
 
 	FitTooLargeStyle = lipgloss.NewStyle().
 				Foreground(adaptive("160", "167"))
+
+	// Shell mode indicator
+	ShellModeStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(adaptive("208", "214"))
 )
 
 // FitTagStyle returns the lipgloss style for a given fit tag.

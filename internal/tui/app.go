@@ -53,6 +53,9 @@ type AppModel struct {
 	autoFixCfg       AutoFixConfig      // auto lint/test after code edits
 	hooksConfig      config.HooksConfig // lifecycle hooks
 	autoModeCfg      AutoModeConfig     // auto model routing
+	notifications    bool               // desktop notifications on completion
+	sandbox          bool               // sandboxed code execution
+	worktreeBranch   string             // git worktree branch name
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
@@ -199,6 +202,27 @@ func WithMCPManager(mgr MCPManager) AppOption {
 func WithMCPConfigs(configs []mcp.ServerConfig) AppOption {
 	return func(a *AppModel) {
 		a.mcpConfigs = configs
+	}
+}
+
+// WithNotifications enables desktop notifications on completion.
+func WithNotifications(enabled bool) AppOption {
+	return func(a *AppModel) {
+		a.notifications = enabled
+	}
+}
+
+// WithSandbox enables sandboxed code execution.
+func WithSandbox(enabled bool) AppOption {
+	return func(a *AppModel) {
+		a.sandbox = enabled
+	}
+}
+
+// WithWorktree sets the worktree branch name for display.
+func WithWorktree(branch string) AppOption {
+	return func(a *AppModel) {
+		a.worktreeBranch = branch
 	}
 }
 
@@ -617,6 +641,9 @@ func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.chat.autoFixCfg = m.autoFixCfg
 	m.chat.hooksConfig = m.hooksConfig
 	m.chat.autoModeCfg = m.autoModeCfg
+	m.chat.notifications = m.notifications
+	m.chat.sandbox = m.sandbox
+	m.chat.worktreeBranch = m.worktreeBranch
 	if m.repoIndex != nil {
 		m.chat.repoIndex = m.repoIndex
 		m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)

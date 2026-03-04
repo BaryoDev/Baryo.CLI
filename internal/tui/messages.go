@@ -201,3 +201,10 @@ type SubagentDoneMsg struct {
 	Result SubagentResult
 }
 
+// ShellExecMsg is the result of a shell command execution.
+type ShellExecMsg struct {
+	Command string
+	Output  string
+	Err     error
+}
+

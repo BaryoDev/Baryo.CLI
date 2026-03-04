@@ -26,6 +26,7 @@ const (
 	ModeVersion
 	ModeHelp
 	ModeDoctor
+	ModeCompletion
 )
 
 // Config holds the parsed CLI flags and stdin data.
@@ -49,6 +50,9 @@ type Config struct {
 	NoTools      bool
 	Debug        bool
 	Strategy     string // --strategy flag: path to strategy JSON file
+	Completion   string // completion subcommand shell type (zsh/bash/fish/powershell)
+	Worktree     bool   // --worktree flag
+	Sandbox      bool   // --sandbox flag (CLI override)
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -80,16 +84,32 @@ func Parse() Config {
 	fs.BoolVar(&cfg.NoTools, "no-tools", false, "disable tool calling in print mode")
 	fs.BoolVar(&cfg.Debug, "debug", false, "enable debug logging to ~/.baryo/debug.log")
 	fs.StringVar(&cfg.Strategy, "strategy", "", "path to strategy JSON file (use with -p)")
+	fs.BoolVar(&cfg.Worktree, "worktree", false, "run in an isolated git worktree")
+	fs.BoolVar(&cfg.Sandbox, "sandbox", false, "run code in Docker sandbox")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
-	// Check for "doctor" subcommand — can appear as first arg or after flags.
-	// Filter it out before parsing so flag.Parse doesn't choke on it.
+	// Check for subcommands — can appear as first arg or after flags.
+	// Filter them out before parsing so flag.Parse doesn't choke on them.
 	args := os.Args[1:]
 	for i, a := range args {
-		if a == "doctor" {
+		switch a {
+		case "doctor":
 			cfg.Doctor = true
 			args = append(args[:i], args[i+1:]...)
+		case "completion":
+			shell := ""
+			if i+1 < len(args) {
+				shell = args[i+1]
+			}
+			cfg.Completion = shell
+			if shell != "" {
+				args = append(args[:i], args[i+2:]...)
+			} else {
+				args = append(args[:i], args[i+1:]...)
+			}
+		}
+		if cfg.Doctor || cfg.Completion != "" {
 			break
 		}
 	}
@@ -142,6 +162,9 @@ func (c Config) Mode() Mode {
 	if c.Doctor {
 		return ModeDoctor
 	}
+	if c.Completion != "" {
+		return ModeCompletion
+	}
 	if c.Prompt != "" || c.StdinData != "" || c.Strategy != "" {
 		return ModePrint
 	}
@@ -188,6 +211,8 @@ Flags:
   --output <fmt>        Output format for print mode: text or json
   --no-tools            Disable tool calling in print mode
   --strategy <file>     Path to strategy JSON file (use with -p)
+  --worktree            Run in an isolated git worktree
+  --sandbox             Run code in Docker sandbox containers
   --debug               Enable debug logging to ~/.baryo/debug.log
   --skip-checks         Skip startup health checks
   --version             Print version and exit
@@ -195,10 +220,12 @@ Flags:
 
 Subcommands:
   doctor            Run full diagnostic check (Docker, Model Runner, models)
+  completion <sh>   Generate shell completion script (zsh, bash, fish, powershell)
 
 TUI Commands:
   /clear            Start a fresh conversation
   /sessions         List and pick a saved session to resume
+  /sessions search  Search sessions by content
   /resume           Alias for /sessions
   /models           Browse downloaded and available models
   /system           View or edit the active system prompt
@@ -210,9 +237,22 @@ TUI Commands:
   /search <query>   Search the web (DuckDuckGo, Brave, or Tavily)
   /strategy [file]  Analyze facts+constraints+goal → optimal steps
   /fetch <url>      Fetch a URL and inject its content into the conversation
+  /pin <file>       Pin a file to context (re-read each turn)
+  /unpin <file>     Unpin a file from context
+  /pins             List pinned files
+  /checkpoint <n>   Save conversation state as a named checkpoint
+  /rewind [name]    List checkpoints or rewind to one
+  /task <desc>      Run a focused sub-task (read-only agent)
+  /bg <desc>        Run a background sub-task
+  /tasks            Show running and completed tasks
+  /new <type>       Scaffold a new project (go-api, react-app, etc.)
+
+Keyboard Shortcuts:
+  Ctrl+X            Toggle shell mode (run shell commands directly)
 
 Mentions:
   @filepath         Attach a file's contents as context (tab to complete)
+  @image.png        Attach an image for vision models
                     Example: explain @main.go    compare @go.mod @go.sum
 
 Examples:

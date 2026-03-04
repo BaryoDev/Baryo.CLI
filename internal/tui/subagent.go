@@ -29,6 +29,7 @@ type SubagentState struct {
 	StartTime   time.Time
 	Result      string
 	Cancel      context.CancelFunc
+	Background  bool // true for /bg tasks
 }
 
 // SubagentConfig holds all parameters needed to run a subagent.

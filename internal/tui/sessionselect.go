@@ -115,7 +115,11 @@ func (m SessionSelectModel) View() string {
 			style = SelectedModelStyle
 		}
 
-		label := style.Render(fmt.Sprintf("%s — %s", s.ModelName, s.ID[:8]))
+		title := s.ID[:8]
+		if s.Title != "" {
+			title = s.Title
+		}
+		label := style.Render(fmt.Sprintf("%s — %s", s.ModelName, title))
 		detail := ModelDetailStyle.Render(
 			fmt.Sprintf("%d messages • %s • %s",
 				s.Messages,

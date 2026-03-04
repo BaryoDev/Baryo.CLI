@@ -81,9 +81,12 @@ The interactive mode gives you:
 - A clean, muted terminal UI inspired by modern CLI tools — no visual clutter
 - A **tabbed model picker** — Local, Groq, Gemini, Bedrock, etc. each get their own tab with model counts and pricing
 - A streaming chat interface with personality — the status bar cycles through quirky fourth-wall-breaking phrases while the model thinks
+- **Streaming speed metrics** — live tok/s display in the status bar while the model generates
 - Structured tool call display with left-border blocks for clear visual hierarchy
 - Input history — press `↑`/`↓` to cycle through previous messages
-- Keyboard navigation (`enter` to send, `↑`/`↓` scroll, `ctrl+p`/`ctrl+n` history, `ctrl+c` to quit)
+- **Shell mode** — press `Ctrl+X` to toggle direct shell command execution
+- **Desktop notifications** — get notified when long-running responses complete
+- Keyboard navigation (`enter` to send, `↑`/`↓` scroll, `ctrl+p`/`ctrl+n` history, `ctrl+x` shell toggle, `ctrl+c` to quit)
 
 ### Print mode
 
@@ -169,8 +172,16 @@ baryo --resume-id abc123
 
 Inside the TUI you can also use:
 - `/sessions` — list and pick a saved session to resume
+- `/sessions search <query>` — search sessions by content
 - `/resume` — alias for `/sessions`
 - `/clear` — start a fresh conversation
+
+Sessions are automatically titled from the first user message. Configure automatic cleanup of old sessions:
+
+```yaml
+# ~/.baryo/config.yaml
+session_retention_days: 30   # delete sessions older than 30 days (0 = keep all)
+```
 
 ### Intelligent routing
 
@@ -269,6 +280,15 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/context` | Show token usage breakdown |
 | `/cost` | Show session API cost (cloud providers) |
 | `/compact` | Summarize older messages to free context |
+| `/pin <file>` | Pin a file to context (re-read each turn) |
+| `/unpin <file>` | Unpin a file from context |
+| `/pins` | List pinned files |
+| `/checkpoint <name>` | Save conversation state as a named checkpoint |
+| `/rewind [name]` | List checkpoints or rewind to one |
+| `/task <desc>` | Run a focused sub-task (read-only agent) |
+| `/bg <desc>` | Run a background sub-task |
+| `/tasks` | Show running and completed tasks |
+| `/new <type>` | Scaffold a new project (go-api, react-app, etc.) |
 | `/export [file]` | Export conversation to a file |
 | `/copy` | Copy last response to clipboard |
 | `/markdown` | Toggle markdown rendering |
@@ -514,10 +534,15 @@ params:
 | `--max-turns <n>` | Max tool-call rounds in print mode (default: 5) |
 | `--output <fmt>` | Output format for print mode: `text` or `json` |
 | `--no-tools` | Disable tool calling in print mode |
+| `--strategy <file>` | Path to strategy JSON file (use with `-p`) |
+| `--worktree` | Run in an isolated git worktree |
+| `--sandbox` | Run code in Docker sandbox containers |
+| `--debug` | Enable debug logging to `~/.baryo/debug.log` |
 | `--skip-checks` | Skip startup health checks |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
 | `doctor` | Run full diagnostic check (subcommand) |
+| `completion <shell>` | Generate shell completion script (zsh, bash, fish, powershell) |
 
 ### Model matching
 
@@ -572,6 +597,9 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_AUTO_TEST` | Enable auto-test after code edits (`true`/`1`/`yes`) |
 | `BARYO_LINT_COMMAND` | Custom lint command override |
 | `BARYO_TEST_COMMAND` | Custom test command override |
+| `BARYO_NOTIFICATIONS` | Enable desktop notifications (`true`/`1`/`yes`) |
+| `BARYO_SESSION_RETENTION_DAYS` | Auto-delete sessions older than N days |
+| `BARYO_SANDBOX` | Enable sandboxed code execution (`true`/`1`/`yes`) |
 
 ### Precedence
 
@@ -656,6 +684,10 @@ Attach file contents as context by typing `@filepath` in your message. Tab compl
 # Multiple files in one message
 explain @main.go @go.mod
 
+# Attach images for vision models
+explain @screenshot.png
+compare @before.png @after.png
+
 # Recursive matching — typing @cha finds internal/tui/chat.go
 @cha               # shows matches across all subdirectories
 ```
@@ -668,7 +700,7 @@ explain @main.go @go.mod
 - **Esc** — dismiss suggestions
 - Press **Enter** again to send — file contents are injected as context for the model
 
-Files must be under 100KB, non-binary, and not gitignored. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
+Text files must be under 100KB, non-binary, and not gitignored. **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`) are base64-encoded and sent as vision content — up to 10MB per image, max 4 images per message. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
 
 ### Web search
 
@@ -1086,6 +1118,110 @@ Skills are **lazy-loaded** — only names and descriptions are indexed on startu
 # Or install additional skills manually
 cp -r skills/pdf ~/.baryo/skills/pdf
 ```
+
+### Context pinning
+
+Pin files to the conversation context so they're re-read on every turn. Useful for keeping key files visible as you iterate.
+
+```bash
+/pin main.go          # pin a file
+/pin @internal/tui/   # @ prefix is stripped automatically
+/unpin main.go        # remove from pinned context
+/pins                 # list all pinned files
+```
+
+Pinned files are re-read each turn (catching edits) and injected into the system prompt. A warning appears if pinned content exceeds 25% of the context limit. Pins survive `/clear` but not app restart.
+
+### Checkpoints & rewind
+
+Save snapshots of your conversation state and rewind to them.
+
+```bash
+/checkpoint before-refactor    # save current state
+# ... make changes ...
+/rewind                        # list all checkpoints
+/rewind before-refactor        # restore that checkpoint
+```
+
+Checkpoints capture the full message history and git HEAD hash. Rewind restores the conversation to that point. The git hash is shown so you can manually `git checkout` if needed.
+
+### Background agents
+
+Run sub-tasks in the background while you continue chatting.
+
+```bash
+/task summarize internal/tui/chat.go   # focused read-only sub-task
+/bg research golang error handling     # background sub-task
+/tasks                                 # show running and completed tasks
+```
+
+Background tasks run concurrently and notify you when complete (if notifications are enabled). Up to 3 concurrent sub-tasks are supported.
+
+### Project scaffolding
+
+Generate new projects from templates using the model's knowledge.
+
+```bash
+/new go-api        # scaffold a Go API project
+/new react-app     # scaffold a React app
+/new               # list available project types
+```
+
+Supported types: `go-api`, `go-cli`, `react-app`, `next-app`, `python-cli`, `python-api`, `node-api`, `rust-cli`. The model generates all necessary files using the `write_file` tool.
+
+### Shell completions
+
+Generate shell completion scripts for tab completion of flags and subcommands.
+
+```bash
+# Generate and install completions
+baryo completion zsh >> ~/.zshrc
+baryo completion bash >> ~/.bashrc
+baryo completion fish > ~/.config/fish/completions/baryo.fish
+baryo completion powershell >> $PROFILE
+```
+
+Supported shells: `zsh`, `bash`, `fish`, `powershell`.
+
+### Worktree isolation
+
+Run Baryo in an isolated git worktree for safe experimentation without affecting your working tree.
+
+```bash
+baryo --worktree
+```
+
+This creates a new git worktree with a fresh branch based on HEAD. All file operations happen in the worktree. On exit:
+- If the worktree has uncommitted changes, the branch name is printed for manual merging
+- If no changes were made, the worktree is cleaned up automatically
+
+### Sandboxed code execution
+
+Run generated code in Docker containers for safety — network-isolated, memory-limited, and read-only mounted.
+
+```bash
+baryo --sandbox
+```
+
+Or enable permanently:
+
+```yaml
+# ~/.baryo/config.yaml
+sandbox: true
+```
+
+When enabled, `run_code` and `run_script` tool calls execute inside Docker containers instead of directly on the host. Each language maps to an appropriate image (`python:3-slim`, `node:20-slim`, `golang:1.22-alpine`, etc.). Containers have no network access, 512MB memory limit, and a 30-second timeout.
+
+### Notifications
+
+Get desktop notifications when the model finishes a response. Useful for long-running tasks.
+
+```yaml
+# ~/.baryo/config.yaml
+notifications: true
+```
+
+Or via environment variable: `BARYO_NOTIFICATIONS=true`. Uses native notification systems — `osascript` on macOS, `notify-send` on Linux. Falls back to a terminal bell character.
 
 ## How it works
 

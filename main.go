@@ -19,8 +19,10 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	"github.com/arnelirobles/baryo-cli/internal/tools"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
 	"github.com/arnelirobles/baryo-cli/internal/tunnel"
+	"github.com/arnelirobles/baryo-cli/internal/worktree"
 )
 
 func main() {
@@ -60,6 +62,38 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case cli.ModeCompletion:
+		script, err := cli.GenerateCompletion(flags.Completion)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(script)
+		return
+	}
+
+	// Create git worktree if requested
+	var wt *worktree.Worktree
+	if flags.Worktree {
+		var err error
+		wt, err = worktree.Create("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating worktree: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Working in worktree: %s (branch: %s)\n", wt.Path, wt.Branch)
+		if err := os.Chdir(wt.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot chdir to worktree: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() {
+			if wt.HasChanges() {
+				fmt.Fprintf(os.Stderr, "\nWorktree %s has uncommitted changes on branch %s\n", wt.Path, wt.Branch)
+				fmt.Fprintf(os.Stderr, "Merge with: git merge %s\n", wt.Branch)
+			} else {
+				wt.Remove()
+			}
+		}()
 	}
 
 	// Load config and apply CLI flag overrides
@@ -81,6 +115,18 @@ func main() {
 	var memoriesPrompt string
 	if memories := config.LoadMemories(); len(memories) > 0 {
 		memoriesPrompt = config.FormatMemoriesForPrompt(memories)
+	}
+
+	// Enable sandbox if configured or CLI flag set
+	if cfg.SandboxEnabled() || flags.Sandbox {
+		tools.EnableSandbox()
+	}
+
+	// Clean old sessions if retention is configured.
+	if cfg.SessionRetentionDays > 0 {
+		if deleted, _ := session.CleanOld(cfg.SessionRetentionDays); deleted > 0 {
+			logger.Debug("session cleanup", "deleted", deleted, "retention_days", cfg.SessionRetentionDays)
+		}
 	}
 
 	// Run startup health checks unless skipped or using a cloud provider model.
@@ -194,6 +240,18 @@ func main() {
 				LintCommand: cfg.LintCommand,
 				TestCommand: cfg.TestCommand,
 			}),
+		}
+
+		if cfg.NotificationsEnabled() {
+			opts = append(opts, tui.WithNotifications(true))
+		}
+
+		if cfg.SandboxEnabled() {
+			opts = append(opts, tui.WithSandbox(true))
+		}
+
+		if wt != nil {
+			opts = append(opts, tui.WithWorktree(wt.Branch))
 		}
 
 		if cfg.Hooks.HasAny() {

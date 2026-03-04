@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -67,8 +68,9 @@ type ChatModel struct {
 	toolStatus   string    // shown in status bar during tool execution
 	initPending  bool      // when true, write streaming result to BARYO.md on completion
 	commitPending bool     // when true, auto-commit with streaming result as message
-	thinking     bool      // true while model is inside a <think> block
-	streamStart  time.Time // when streaming began (for elapsed time display)
+	thinking         bool      // true while model is inside a <think> block
+	streamStart      time.Time // when streaming began (for elapsed time display)
+	streamTokenCount int       // number of tokens received during current stream
 
 	// @ mention completion
 	mention mentionCompletion
@@ -147,6 +149,24 @@ type ChatModel struct {
 	// Auto mode: automatic model routing by query complexity
 	autoModeCfg AutoModeConfig
 
+	// Desktop notifications on completion
+	notifications bool
+
+	// Shell mode (Ctrl-X toggle)
+	shellMode bool
+
+	// Sandboxed code execution
+	sandbox bool
+
+	// Worktree branch name (empty if not in a worktree)
+	worktreeBranch string
+
+	// Context pinning
+	pinnedFiles map[string]string // path -> content
+
+	// Checkpoints
+	checkpoints []checkpoint
+
 	// Subagent task delegation
 	subagents       []SubagentState
 	subagentCounter int
@@ -194,17 +214,39 @@ type chatEntry struct {
 	mode    AgentMode // agent mode when entry was created (user entries only)
 }
 
+// checkpoint is a saved conversation state for /checkpoint and /rewind.
+type checkpoint struct {
+	Name     string
+	Messages []llm.ChatMessage
+	History  []chatEntry
+	GitHash  string
+	Created  time.Time
+}
+
 // resetStreamState clears all fields associated with an active stream.
 func (m *ChatModel) resetStreamState() {
 	m.streaming = ""
 	m.turnContent = ""
 	m.isStream = false
 	m.toolStatus = ""
+	m.streamTokenCount = 0
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 		m.cancelFunc = nil
 	}
 	m.eventCh = nil
+}
+
+// sendNotification sends a desktop notification when enabled.
+func sendNotification(title string) {
+	// Terminal bell
+	fmt.Print("\a")
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("osascript", "-e", fmt.Sprintf(`display notification "%s" with title "baryo"`, title)).Start()
+	case "linux":
+		exec.Command("notify-send", "baryo", title).Start()
+	}
 }
 
 // NewChat creates a new chat screen for the given model.
@@ -241,6 +283,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatPar
 		agentMode:        ModeChat,
 		rewrite:          rewrite,
 		mcpInReadOnly:    mcpInReadOnly,
+		pinnedFiles:      make(map[string]string),
 	}
 }
 
@@ -309,6 +352,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		agentMode:        ModeChat,
 		rewrite:          rewrite,
 		mcpInReadOnly:    mcpInReadOnly,
+		pinnedFiles:      make(map[string]string),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -659,6 +703,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		// Shell mode toggle — ctrl+x switches between chat and shell.
+		if msg.String() == "ctrl+x" && !m.isStream {
+			m.shellMode = !m.shellMode
+			mode := "Shell mode enabled. Commands run in your shell."
+			if !m.shellMode {
+				mode = "Shell mode disabled. Back to chat."
+			}
+			m.history = append(m.history, chatEntry{role: roleInfo, content: mode})
+			m.updateViewport()
+			return m, nil
+		}
+
 		// Input history navigation — ctrl+p/ctrl+n (readline-style).
 		if msg.String() == "ctrl+p" && !m.isStream {
 			if len(m.inputHistory) == 0 {
@@ -714,6 +770,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.inputHistory = append(m.inputHistory, text)
 			m.historyIdx = -1
 
+			// Shell mode: execute as shell command
+			if m.shellMode && !strings.HasPrefix(text, "/") {
+				m.history = append(m.history, chatEntry{role: roleUser, content: "$ " + text})
+				m.updateViewport()
+				cmdText := text
+				return m, func() tea.Msg {
+					cmd := exec.Command("sh", "-c", cmdText)
+					out, err := cmd.CombinedOutput()
+					return ShellExecMsg{Command: cmdText, Output: string(out), Err: err}
+				}
+			}
+
 			// Handle slash commands
 			if strings.HasPrefix(text, "/") {
 				return m.handleCommand(text)
@@ -758,7 +826,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 
 			// Process @mentions — inject file contents as context
-			_, fileContexts, mentionErrors := m.processAtMentions(text)
+			_, fileContexts, imageParts, mentionErrors := m.processAtMentions(text)
 			for _, fc := range fileContexts {
 				contextMsg := fmt.Sprintf("[File: %s]\n\n%s", fc.path, fc.content)
 				m.messages = append(m.messages, llm.NewChatMessage("user", contextMsg))
@@ -777,8 +845,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Auto-activate matching skill before sending to model
 			m.autoActivateSkill(text)
 
-			// Add user message
-			m.messages = append(m.messages, llm.NewChatMessage("user", text))
+			// Add user message (multipart if images are attached)
+			if len(imageParts) > 0 {
+				m.messages = append(m.messages, llm.NewMultipartMessage("user", text, imageParts))
+				m.history = append(m.history, chatEntry{
+					role:    roleTool,
+					content: fmt.Sprintf("Attached: %d image(s)", len(imageParts)),
+				})
+			} else {
+				m.messages = append(m.messages, llm.NewChatMessage("user", text))
+			}
 			m.history = append(m.history, chatEntry{
 				role:    roleUser,
 				content: text,
@@ -1147,6 +1223,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					float64(evt.Usage.CompletionTokens)*m.completionPrice
 			}
 
+			// Send notification on stream completion (not during compaction/search/research)
+			if m.notifications && !m.compactPending && !m.searchPending && !m.researchPending && !m.strategyPending {
+				sendNotification("Response complete")
+			}
+
 			m.resetStreamState()
 			m.contextTokens = estimateTokens(m.buildMessages())
 			m.saveSession()
@@ -1260,6 +1341,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		if evt.Token != "" {
 			m.streaming += evt.Token
+			m.streamTokenCount++
 			_, m.thinking = stripThinkBlock(m.streaming)
 			m.updateViewport()
 		}
@@ -1593,6 +1675,25 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case ShellExecMsg:
+		if msg.Err != nil {
+			m.history = append(m.history, chatEntry{
+				role:    roleError,
+				content: fmt.Sprintf("$ %s\n%v\n%s", msg.Command, msg.Err, msg.Output),
+			})
+		} else {
+			output := msg.Output
+			if output == "" {
+				output = "(no output)"
+			}
+			m.history = append(m.history, chatEntry{
+				role:    roleTool,
+				content: output,
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
 	case RunResultMsg:
 		if msg.Err != nil {
 			m.history = append(m.history, chatEntry{
@@ -1686,6 +1787,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 						role:    roleInfo,
 						content: fmt.Sprintf("[task #%d completed] (%.1fs)\n%s", r.ID, r.Elapsed.Seconds(), displayContent),
 					})
+				}
+				// Send notification for background tasks
+				if m.subagents[i].Background && m.notifications {
+					sendNotification(fmt.Sprintf("Task #%d completed", r.ID))
 				}
 				break
 			}
@@ -1791,6 +1896,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			}
 			return ShowSessionsMsg{Sessions: summaries}
 		}
+
 
 	case "/models":
 		socketPath := m.localSocketPath
@@ -1993,6 +2099,40 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		return m, nil
 
 	default:
+		if strings.HasPrefix(trimmed, "/sessions search ") || strings.HasPrefix(trimmed, "/resume search ") {
+			var query string
+			if strings.HasPrefix(trimmed, "/sessions search ") {
+				query = strings.TrimPrefix(trimmed, "/sessions search ")
+			} else {
+				query = strings.TrimPrefix(trimmed, "/resume search ")
+			}
+			query = strings.TrimSpace(query)
+			if query == "" {
+				m.history = append(m.history, chatEntry{role: roleAssistant, content: "Usage: /sessions search <query>"})
+				m.updateViewport()
+				return m, nil
+			}
+			results, err := session.Search(query)
+			if err != nil || len(results) == 0 {
+				m.history = append(m.history, chatEntry{role: roleAssistant, content: fmt.Sprintf("No sessions found matching %q", query)})
+				m.updateViewport()
+				return m, nil
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("Sessions matching %q:\n", query))
+			for _, s := range results {
+				title := s.Title
+				if title == "" {
+					title = s.ID[:8]
+				}
+				sb.WriteString(fmt.Sprintf("  %s  %s  %d msgs  %s\n", s.ID[:8], title, s.Messages, s.UpdatedAt.Format("Jan 02 15:04")))
+			}
+			sb.WriteString("\nUse --resume-id <id> to resume.")
+			m.history = append(m.history, chatEntry{role: roleAssistant, content: sb.String()})
+			m.updateViewport()
+			return m, nil
+		}
+
 		if strings.HasPrefix(text, "/system ") {
 			m.systemPrompt = strings.TrimPrefix(text, "/system ")
 			m.history = append(m.history, chatEntry{
@@ -2129,6 +2269,34 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handlePR(strings.TrimPrefix(text, "/pr"))
 		}
 
+		if strings.HasPrefix(trimmed, "/pin ") {
+			return m.handlePin(strings.TrimPrefix(trimmed, "/pin "))
+		}
+		if strings.HasPrefix(trimmed, "/unpin ") {
+			return m.handleUnpin(strings.TrimPrefix(trimmed, "/unpin "))
+		}
+		if trimmed == "/pins" {
+			return m.handlePinsList()
+		}
+
+		if strings.HasPrefix(trimmed, "/checkpoint ") {
+			return m.handleCheckpoint(strings.TrimPrefix(trimmed, "/checkpoint "))
+		}
+		if trimmed == "/rewind" {
+			return m.handleRewindList()
+		}
+		if strings.HasPrefix(trimmed, "/rewind ") {
+			return m.handleRewind(strings.TrimPrefix(trimmed, "/rewind "))
+		}
+
+		if strings.HasPrefix(trimmed, "/bg ") {
+			return m.handleBgTask(strings.TrimPrefix(trimmed, "/bg "))
+		}
+
+		if trimmed == "/new" || strings.HasPrefix(trimmed, "/new ") {
+			return m.handleNew(strings.TrimPrefix(trimmed, "/new"))
+		}
+
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
 			content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", text),
@@ -2136,6 +2304,251 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 	}
+}
+
+// --- Pin, Checkpoint, Background, and New command handlers ---
+
+func (m ChatModel) handlePin(arg string) (ChatModel, tea.Cmd) {
+	path := strings.TrimSpace(strings.TrimPrefix(arg, "@"))
+	if path == "" {
+		m.history = append(m.history, chatEntry{role: roleAssistant, content: "Usage: /pin <filepath>"})
+		m.updateViewport()
+		return m, nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("Invalid path: %v", err)})
+		m.updateViewport()
+		return m, nil
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("Cannot read %s: %v", path, err)})
+		m.updateViewport()
+		return m, nil
+	}
+	content := string(data)
+	lines := strings.Count(content, "\n") + 1
+	m.pinnedFiles[absPath] = content
+	m.history = append(m.history, chatEntry{role: roleInfo, content: fmt.Sprintf("Pinned %s (%d lines)", path, lines)})
+	// Warn if pinned content is large relative to context
+	pinnedTokens := 0
+	for _, c := range m.pinnedFiles {
+		pinnedTokens += len(c) / 4
+	}
+	if m.contextLimit > 0 && float64(pinnedTokens) > float64(m.contextLimit)*0.25 {
+		m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("Warning: pinned files use ~%s tokens (>25%% of context)", formatTokenCount(pinnedTokens))})
+	}
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleUnpin(arg string) (ChatModel, tea.Cmd) {
+	path := strings.TrimSpace(strings.TrimPrefix(arg, "@"))
+	absPath, _ := filepath.Abs(path)
+	if _, ok := m.pinnedFiles[absPath]; !ok {
+		m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("%s is not pinned", path)})
+		m.updateViewport()
+		return m, nil
+	}
+	delete(m.pinnedFiles, absPath)
+	m.history = append(m.history, chatEntry{role: roleInfo, content: fmt.Sprintf("Unpinned %s", path)})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handlePinsList() (ChatModel, tea.Cmd) {
+	if len(m.pinnedFiles) == 0 {
+		m.history = append(m.history, chatEntry{role: roleAssistant, content: "No pinned files. Use /pin <path> to pin."})
+		m.updateViewport()
+		return m, nil
+	}
+	var sb strings.Builder
+	sb.WriteString("Pinned files:\n")
+	for path, content := range m.pinnedFiles {
+		lines := strings.Count(content, "\n") + 1
+		sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", path, lines))
+	}
+	m.history = append(m.history, chatEntry{role: roleAssistant, content: sb.String()})
+	m.updateViewport()
+	return m, nil
+}
+
+// buildPinnedContext returns the formatted pinned files for system prompt injection.
+func (m *ChatModel) buildPinnedContext() string {
+	if len(m.pinnedFiles) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("<pinned-files>\n")
+	for path, _ := range m.pinnedFiles {
+		// Re-read file to catch edits
+		data, err := os.ReadFile(path)
+		content := ""
+		if err == nil {
+			content = string(data)
+			m.pinnedFiles[path] = content
+		} else {
+			content = m.pinnedFiles[path]
+		}
+		sb.WriteString(fmt.Sprintf("[%s]\n%s\n\n", path, content))
+	}
+	sb.WriteString("</pinned-files>")
+	return sb.String()
+}
+
+func (m ChatModel) handleCheckpoint(name string) (ChatModel, tea.Cmd) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		m.history = append(m.history, chatEntry{role: roleAssistant, content: "Usage: /checkpoint <name>"})
+		m.updateViewport()
+		return m, nil
+	}
+	// Deep-copy messages
+	msgs := make([]llm.ChatMessage, len(m.messages))
+	copy(msgs, m.messages)
+	hist := make([]chatEntry, len(m.history))
+	copy(hist, m.history)
+	// Capture git hash
+	gitHash := ""
+	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
+		gitHash = strings.TrimSpace(string(out))
+	}
+	m.checkpoints = append(m.checkpoints, checkpoint{
+		Name:     name,
+		Messages: msgs,
+		History:  hist,
+		GitHash:  gitHash,
+		Created:  time.Now(),
+	})
+	m.history = append(m.history, chatEntry{role: roleInfo, content: fmt.Sprintf("Checkpoint %q saved (git: %s)", name, gitHash)})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleRewindList() (ChatModel, tea.Cmd) {
+	if len(m.checkpoints) == 0 {
+		m.history = append(m.history, chatEntry{role: roleAssistant, content: "No checkpoints. Use /checkpoint <name> to save."})
+		m.updateViewport()
+		return m, nil
+	}
+	var sb strings.Builder
+	sb.WriteString("Checkpoints:\n")
+	for _, cp := range m.checkpoints {
+		sb.WriteString(fmt.Sprintf("  %s (git: %s, %s)\n", cp.Name, cp.GitHash, cp.Created.Format("15:04:05")))
+	}
+	sb.WriteString("\nUse /rewind <name> to restore.")
+	m.history = append(m.history, chatEntry{role: roleAssistant, content: sb.String()})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleRewind(name string) (ChatModel, tea.Cmd) {
+	name = strings.TrimSpace(name)
+	for _, cp := range m.checkpoints {
+		if cp.Name == name {
+			m.messages = make([]llm.ChatMessage, len(cp.Messages))
+			copy(m.messages, cp.Messages)
+			m.history = make([]chatEntry, len(cp.History))
+			copy(m.history, cp.History)
+			m.history = append(m.history, chatEntry{
+				role:    roleInfo,
+				content: fmt.Sprintf("Rewound to checkpoint %q (git: %s)", name, cp.GitHash),
+			})
+			m.contextTokens = estimateTokens(m.buildMessages())
+			m.updateViewport()
+			return m, nil
+		}
+	}
+	m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("Checkpoint %q not found", name)})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleBgTask(desc string) (ChatModel, tea.Cmd) {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		m.history = append(m.history, chatEntry{role: roleAssistant, content: "Usage: /bg <description>"})
+		m.updateViewport()
+		return m, nil
+	}
+	// Count active subagents
+	active := 0
+	for _, s := range m.subagents {
+		if s.Status == "running" {
+			active++
+		}
+	}
+	if active >= maxActiveSubagents {
+		m.history = append(m.history, chatEntry{role: roleError, content: fmt.Sprintf("Maximum %d concurrent tasks reached.", maxActiveSubagents)})
+		m.updateViewport()
+		return m, nil
+	}
+	m.subagentCounter++
+	id := m.subagentCounter
+	ctx, cancel := context.WithTimeout(context.Background(), subagentTimeout)
+	m.subagents = append(m.subagents, SubagentState{
+		ID:          id,
+		Description: desc,
+		Status:      "running",
+		StartTime:   time.Now(),
+		Cancel:      cancel,
+		Background:  true,
+	})
+	tokenBudget := (m.contextLimit - m.contextTokens) / 4
+	if tokenBudget < 1024 {
+		tokenBudget = 1024
+	}
+	cfg := SubagentConfig{
+		ID: id, Description: desc, Endpoint: m.endpoint,
+		ModelTag: m.modelTag, SystemPrompt: m.systemPrompt,
+		TokenBudget: tokenBudget, MCPManager: m.mcpManager,
+		MCPInReadOnly: m.mcpInReadOnly,
+	}
+	progressCh := make(chan SubagentProgressMsg, 16)
+	m.history = append(m.history, chatEntry{role: roleInfo, content: fmt.Sprintf("[bg #%d started] %s", id, desc)})
+	m.updateViewport()
+	runCmd := func() tea.Msg {
+		defer cancel()
+		defer close(progressCh)
+		result := RunSubagent(ctx, cfg, progressCh)
+		return SubagentDoneMsg{Result: result}
+	}
+	return m, tea.Batch(runCmd, waitForSubagentProgress(progressCh))
+}
+
+func (m ChatModel) handleNew(arg string) (ChatModel, tea.Cmd) {
+	projectType := strings.TrimSpace(arg)
+	knownTypes := []string{"go-api", "go-cli", "react-app", "next-app", "python-cli", "python-api", "node-api", "rust-cli"}
+	if projectType == "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: "Usage: /new <type>\n\nAvailable types: " + strings.Join(knownTypes, ", "),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+	// Validate type
+	valid := false
+	for _, t := range knownTypes {
+		if t == projectType {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("Unknown project type %q. Available: %s", projectType, strings.Join(knownTypes, ", ")),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+	cwd, _ := os.Getwd()
+	prompt := fmt.Sprintf("Create a new %s project in the current directory (%s). Generate all necessary files including a README, .gitignore, and basic project structure with a working entry point. Use the write_file tool to create each file.", projectType, cwd)
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
+	m.history = append(m.history, chatEntry{role: roleUser, content: "/new " + projectType, mode: m.agentMode})
+	return m.startToolStream(prompt, true, false)
 }
 
 // toolSystemPrompt is injected to instruct the model to use available tools.
@@ -2418,6 +2831,10 @@ func (m *ChatModel) buildMessagesWithToolGating(hasTools bool) []llm.ChatMessage
 
 	if m.ragPrompt != "" {
 		sysPrompt += "\n\n" + m.ragPrompt
+	}
+
+	if pinnedCtx := m.buildPinnedContext(); pinnedCtx != "" {
+		sysPrompt += "\n\n" + pinnedCtx
 	}
 
 	if m.planningPrompt != "" {
@@ -3569,7 +3986,18 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /markdown          Toggle markdown rendering
   /mcp               List connected MCP servers and tools
   /setup             Download/update starter skills
-  /doctor            Run diagnostic checks`
+  /doctor            Run diagnostic checks
+  /pin <file>        Pin a file to context (re-read each turn)
+  /unpin <file>      Unpin a file
+  /pins              List pinned files
+  /checkpoint <n>    Save conversation state as a named checkpoint
+  /rewind [name]     List checkpoints or rewind to one
+  /task <desc>       Run a focused sub-task (read-only agent)
+  /bg <desc>         Run a background sub-task
+  /tasks             Show running and completed tasks
+  /new <type>        Scaffold a new project (go-api, react-app, etc.)
+
+  ctrl+x             Toggle shell mode (run shell commands directly)`
 
 	m.history = append(m.history, chatEntry{
 		role:    roleAssistant,
@@ -4422,7 +4850,11 @@ func (m ChatModel) handleTasksList() (ChatModel, tea.Cmd) {
 	sb.WriteString("Tasks:\n")
 	for _, s := range m.subagents {
 		elapsed := time.Since(s.StartTime).Truncate(time.Second)
-		sb.WriteString(fmt.Sprintf("  #%d [%s] %s (%s)\n", s.ID, s.Status, s.Description, elapsed))
+		bgLabel := ""
+		if s.Background {
+			bgLabel = " [bg]"
+		}
+		sb.WriteString(fmt.Sprintf("  #%d [%s]%s %s (%s)\n", s.ID, s.Status, bgLabel, s.Description, elapsed))
 	}
 	m.history = append(m.history, chatEntry{
 		role:    roleAssistant,
@@ -4791,6 +5223,12 @@ func (m ChatModel) View() string {
 	header := TitleStyle.Render("baryo") + sep +
 		AssistantLabelStyle.Render(m.modelName) + sep +
 		ModeStyle(m.agentMode).Render(modeLabel)
+	if m.worktreeBranch != "" {
+		header += sep + DimStyle.Render(m.worktreeBranch)
+	}
+	if m.shellMode {
+		header += sep + ShellModeStyle.Render("shell")
+	}
 
 	frame := spinnerFrames[m.spinFrame]
 	// Separator line
@@ -4826,15 +5264,26 @@ func (m ChatModel) View() string {
 	} else if m.isStream && m.thinking {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
 		verb, style := thinkingStatus(elapsed, true)
-		status = style.Render(fmt.Sprintf("%s %s... (%s)", frame, verb, elapsed))
+		tokRate := ""
+		if secs := time.Since(m.streamStart).Seconds(); secs > 0.5 && m.streamTokenCount > 0 {
+			tokRate = fmt.Sprintf(" · %.0f tok/s", float64(m.streamTokenCount)/secs)
+		}
+		status = style.Render(fmt.Sprintf("%s %s... (%s)%s", frame, verb, elapsed, tokRate))
 	} else if m.isStream {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
 		verb, style := thinkingStatus(elapsed, false)
-		status = style.Render(fmt.Sprintf("%s %s... (%s)", frame, verb, elapsed))
+		tokRate := ""
+		if secs := time.Since(m.streamStart).Seconds(); secs > 0.5 && m.streamTokenCount > 0 {
+			tokRate = fmt.Sprintf(" · %.0f tok/s", float64(m.streamTokenCount)/secs)
+		}
+		status = style.Render(fmt.Sprintf("%s %s... (%s)%s", frame, verb, elapsed, tokRate))
 	} else if m.mention.active && len(m.mention.candidates) > 0 {
 		status = m.renderCompletionStatus()
 	} else {
-		help := "enter send · ↑↓ scroll · ctrl+p/n history · ctrl+c quit"
+		help := "enter send · ↑↓ scroll · ctrl+x shell · ctrl+c quit"
+		if m.shellMode {
+			help = "enter run · ↑↓ scroll · ctrl+x chat · ctrl+c quit"
+		}
 		tokenInfo := fmt.Sprintf("~%s / %s", formatTokenCount(m.contextTokens), formatTokenCount(m.contextLimit))
 
 		// Color-code based on usage ratio.
