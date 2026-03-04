@@ -396,10 +396,12 @@ echo "Always use conventional commits: feat, fix, chore, docs." > ~/.baryo/knowl
 
 **How it works:**
 
-1. On startup, Baryo indexes knowledge files and up to 20 recent sessions in the background (same pattern as the repo map)
-2. On each user message, BM25 keyword search ranks the most relevant chunks
-3. Matching content is injected as a `<context>` block in the system prompt (after memories, before repo map)
+1. On startup, Baryo indexes knowledge files, up to 20 recent sessions, and project source files in the background
+2. On each user message, BM25 keyword search ranks the most relevant chunks across all three stores
+3. Matching content is injected as a `<context>` block in the system prompt (with `<sources>`, `<documents>`, and `<sessions>` sections)
 4. Budget scales with context window: 0% for <16K, 3-10% for larger windows
+
+**Source file indexing:** Baryo automatically indexes your project's source files (`.go`, `.ts`, `.py`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, and more). When you ask about your codebase, relevant code chunks are included in the context — no need to manually `@`-mention files. If tree-sitter parsing is available (CGO build), chunks are split at symbol boundaries (one chunk per function/type); otherwise, line-based chunking is used as a fallback. Up to 500 files are indexed, with code files prioritized over config/docs.
 
 **Session memory:** Past conversations are automatically indexed. If you discussed something in a previous session, relevant Q&A pairs surface as context for new questions.
 
@@ -415,8 +417,8 @@ echo "Always use conventional commits: feat, fix, chore, docs." > ~/.baryo/knowl
 System prompt:   ~2.1k tokens
 Conversation:    ~800 tokens (4 messages)
 Repo map:        ~1.5k tokens (42 files)
-RAG:             ~150 tokens (3 docs, 12 sessions)
-Total estimated: ~4.6k / 128k (3%)
+RAG:             ~350 tokens (85 sources, 3 docs, 12 sessions)
+Total estimated: ~4.8k / 128k (3%)
 ```
 
 RAG is skipped entirely for small models (<16K context) to avoid wasting limited space.
@@ -566,6 +568,10 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_GITHUB_TOKEN` | GitHub personal access token (needs `models:read` scope) |
 | `BARYO_OLLAMA_API_KEY` | Ollama Cloud API key |
 | `DOCKER_MODEL_SOCKET` | Docker Model Runner socket path (legacy) |
+| `BARYO_AUTO_LINT` | Enable auto-lint after code edits (`true`/`1`/`yes`) |
+| `BARYO_AUTO_TEST` | Enable auto-test after code edits (`true`/`1`/`yes`) |
+| `BARYO_LINT_COMMAND` | Custom lint command override |
+| `BARYO_TEST_COMMAND` | Custom test command override |
 
 ### Precedence
 
@@ -834,6 +840,43 @@ The `gh` tool requires the [GitHub CLI](https://cli.github.com/) to be installed
 Models that support the native OpenAI tool-calling API will use it directly. For models that don't, Baryo includes a text-based fallback parser that detects tool calls in the model's output and executes them transparently.
 
 If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models, or models that return "tool calling is not supported"), Baryo automatically retries the request without tools and disables them for the rest of the session. You'll see an info message in the chat and subsequent messages skip tools entirely — no repeated errors.
+
+### Auto-fix on lint/test
+
+When enabled, Baryo automatically runs your project's linter and/or tests after every code-modifying tool call (`edit_file`, `write_file`, `delete_file`). Errors are appended to the tool result so the model sees them immediately and self-corrects.
+
+```yaml
+# ~/.baryo/config.yaml or .baryo/config.yaml
+auto_lint: true
+auto_test: true
+```
+
+**Auto-detection:** Baryo detects the right commands based on your project:
+
+| Project marker | Lint command | Test command |
+|---------------|--------------|--------------|
+| `go.mod` | `golangci-lint run` (fallback: `go vet ./...`) | `go test -short ./...` |
+| `package.json` | `npx eslint .` | `npx jest --bail` |
+| `Cargo.toml` | `cargo clippy` | `cargo test` |
+| `pyproject.toml` | `python -m flake8` | `python -m pytest --tb=short -q` |
+
+**Custom commands:** Override auto-detection with your own commands:
+
+```yaml
+auto_lint: true
+lint_command: "golangci-lint run --fix"
+auto_test: true
+test_command: "go test -count=1 ./..."
+```
+
+Each command has a 30-second timeout. Output is truncated to 4000 characters. Both options default to `false`.
+
+| Variable | Description |
+|----------|-------------|
+| `BARYO_AUTO_LINT` | Enable auto-lint (`true`/`1`/`yes`) |
+| `BARYO_AUTO_TEST` | Enable auto-test (`true`/`1`/`yes`) |
+| `BARYO_LINT_COMMAND` | Custom lint command |
+| `BARYO_TEST_COMMAND` | Custom test command |
 
 ### Plan mode
 
