@@ -43,6 +43,10 @@ type Config struct {
 	Rewrite          *bool              `yaml:"rewrite"`          // prompt rewrite pass (default true)
 	MCPInReadOnly    *bool              `yaml:"mcp_in_read_only"` // allow MCP tools in read-only modes (default true)
 	ExportPath       string             `yaml:"export_path"`      // default directory for /export output
+	AutoLint         *bool              `yaml:"auto_lint"`        // run linter after code edits (default false)
+	AutoTest         *bool              `yaml:"auto_test"`        // run tests after code edits (default false)
+	LintCommand      string             `yaml:"lint_command"`     // custom lint command override
+	TestCommand      string             `yaml:"test_command"`     // custom test command override
 }
 
 // RewriteEnabled returns whether the prompt rewrite pass is enabled.
@@ -61,6 +65,24 @@ func (c *Config) MCPInReadOnlyEnabled() bool {
 		return true
 	}
 	return *c.MCPInReadOnly
+}
+
+// AutoLintEnabled returns whether auto-lint after code edits is enabled.
+// Defaults to false when not explicitly set.
+func (c *Config) AutoLintEnabled() bool {
+	if c.AutoLint == nil {
+		return false
+	}
+	return *c.AutoLint
+}
+
+// AutoTestEnabled returns whether auto-test after code edits is enabled.
+// Defaults to false when not explicitly set.
+func (c *Config) AutoTestEnabled() bool {
+	if c.AutoTest == nil {
+		return false
+	}
+	return *c.AutoTest
 }
 
 // defaultSocketPath returns the platform-specific default socket path.
@@ -222,6 +244,18 @@ func loadFile(path string, cfg *Config) {
 	if file.ExportPath != "" {
 		cfg.ExportPath = file.ExportPath
 	}
+	if file.AutoLint != nil {
+		cfg.AutoLint = file.AutoLint
+	}
+	if file.AutoTest != nil {
+		cfg.AutoTest = file.AutoTest
+	}
+	if file.LintCommand != "" {
+		cfg.LintCommand = file.LintCommand
+	}
+	if file.TestCommand != "" {
+		cfg.TestCommand = file.TestCommand
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -269,6 +303,20 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BARYO_EXPORT_PATH"); v != "" {
 		cfg.ExportPath = v
+	}
+	if v := os.Getenv("BARYO_AUTO_LINT"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.AutoLint = &b
+	}
+	if v := os.Getenv("BARYO_AUTO_TEST"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.AutoTest = &b
+	}
+	if v := os.Getenv("BARYO_LINT_COMMAND"); v != "" {
+		cfg.LintCommand = v
+	}
+	if v := os.Getenv("BARYO_TEST_COMMAND"); v != "" {
+		cfg.TestCommand = v
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{

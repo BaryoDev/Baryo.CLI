@@ -9,15 +9,19 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/arnelirobles/baryo-cli/internal/index"
 )
 
-// RAG orchestrates retrieval from document and session stores.
+// RAG orchestrates retrieval from document, session, and source stores.
 type RAG struct {
 	mu       sync.RWMutex
 	docs     *DocumentStore
 	sessions *SessionStore
+	sources  *SourceStore
 	docIndex *BM25Index
 	sesIndex *BM25Index
+	srcIndex *BM25Index
 	ready    bool
 }
 
@@ -28,6 +32,7 @@ func New(projectRoot, cwd string) *RAG {
 		sessions: NewSessionStore(cwd),
 		docIndex: NewBM25Index(),
 		sesIndex: NewBM25Index(),
+		srcIndex: NewBM25Index(),
 	}
 }
 
@@ -56,6 +61,23 @@ func (r *RAG) Build(ctx context.Context) error {
 	return nil
 }
 
+// BuildSources creates and indexes a SourceStore for project source files.
+// This is called after both the RAG pipeline and repo index are ready.
+func (r *RAG) BuildSources(ctx context.Context, root string, idx *index.Index) error {
+	ss := NewSourceStore(root, idx)
+	if err := ss.Build(ctx); err != nil {
+		return fmt.Errorf("rag: source build: %w", err)
+	}
+
+	r.mu.Lock()
+	r.sources = ss
+	if chunks := ss.Chunks(); len(chunks) > 0 {
+		r.srcIndex.Add(chunks)
+	}
+	r.mu.Unlock()
+	return nil
+}
+
 // Ready returns true once the initial build has completed.
 func (r *RAG) Ready() bool {
 	r.mu.RLock()
@@ -77,35 +99,64 @@ func (r *RAG) SessionCount() int {
 	return len(r.sessions.Chunks())
 }
 
+// SourceCount returns the number of indexed source chunks.
+func (r *RAG) SourceCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.sources == nil {
+		return 0
+	}
+	return len(r.sources.Chunks())
+}
+
 // NeedsFreshInfo checks whether the query needs up-to-date web info.
 func (r *RAG) NeedsFreshInfo(query string) bool {
 	return NeedsFreshInfo(query)
 }
 
-// Query runs BM25 search across both indexes and returns a formatted context
+// Query runs BM25 search across all indexes and returns a formatted context
 // block within the given token budget.
 func (r *RAG) Query(userMessage string, budgetTokens int) string {
 	if budgetTokens <= 0 || !r.Ready() {
 		return ""
 	}
 
-	// Budget split: 60% documents, 40% sessions.
-	docBudget := budgetTokens * 60 / 100
-	sesBudget := budgetTokens - docBudget
+	r.mu.RLock()
+	hasSources := r.sources != nil && len(r.sources.Chunks()) > 0
+	r.mu.RUnlock()
 
+	var srcBudget, docBudget, sesBudget int
+	if hasSources {
+		// Three-way split: 40% source, 30% docs, 30% sessions.
+		srcBudget = budgetTokens * 40 / 100
+		docBudget = budgetTokens * 30 / 100
+		sesBudget = budgetTokens - srcBudget - docBudget
+	} else {
+		// Two-way split: 60% docs, 40% sessions (existing behavior).
+		docBudget = budgetTokens * 60 / 100
+		sesBudget = budgetTokens - docBudget
+	}
+
+	srcChunks := r.srcIndex.Query(userMessage, 10)
 	docChunks := r.docIndex.Query(userMessage, 10)
 	sesChunks := r.sesIndex.Query(userMessage, 10)
 
 	// Format within budget (approximate: 4 chars per token).
+	srcSection := formatChunks(srcChunks, srcBudget*4)
 	docSection := formatChunks(docChunks, docBudget*4)
 	sesSection := formatChunks(sesChunks, sesBudget*4)
 
-	if docSection == "" && sesSection == "" {
+	if srcSection == "" && docSection == "" && sesSection == "" {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString("<context>")
+	if srcSection != "" {
+		b.WriteString("\n<sources>\n")
+		b.WriteString(srcSection)
+		b.WriteString("\n</sources>")
+	}
 	if docSection != "" {
 		b.WriteString("\n<documents>\n")
 		b.WriteString(docSection)

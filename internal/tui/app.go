@@ -49,6 +49,7 @@ type AppModel struct {
 	rewrite          bool               // prompt rewrite pass enabled
 	mcpInReadOnly    bool               // allow MCP tools in read-only modes
 	exportPath       string             // default directory for /export output
+	autoFixCfg       AutoFixConfig      // auto lint/test after code edits
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
 	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
@@ -64,6 +65,7 @@ type AppModel struct {
 
 	repoIndex          *index.Index // background repo map index
 	ragPipeline        *rag.RAG    // background RAG index
+	pendingSourceIdx   *index.Index // stashed until RAG is also ready
 
 	pendingModel       *llm.Model // model waiting to be loaded
 	loadStart          time.Time  // when model loading began
@@ -159,6 +161,13 @@ func WithMCPInReadOnly(enabled bool) AppOption {
 func WithExportPath(path string) AppOption {
 	return func(a *AppModel) {
 		a.exportPath = path
+	}
+}
+
+// WithAutoFix sets the auto-fix configuration for post-edit lint/test.
+func WithAutoFix(cfg AutoFixConfig) AppOption {
+	return func(a *AppModel) {
+		a.autoFixCfg = cfg
 	}
 }
 
@@ -264,6 +273,16 @@ func (m AppModel) startRAGIndex() tea.Cmd {
 	}
 }
 
+// startSourceIndex builds the RAG source index in the background.
+func (m AppModel) startSourceIndex(idx *index.Index) tea.Cmd {
+	r := m.ragPipeline
+	return func() tea.Msg {
+		cwd, _ := os.Getwd()
+		r.BuildSources(context.Background(), cwd, idx)
+		return SourceIndexReadyMsg{}
+	}
+}
+
 // startMCPServers starts MCP server connections in the background.
 func (m AppModel) startMCPServers() tea.Cmd {
 	configs := m.mcpConfigs
@@ -309,6 +328,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chat.repoIndex = msg.Index
 			m.chat.repoMap = buildRepoMapPrompt(msg.Index, m.chat.contextLimit)
 		}
+		// If RAG is ready, start source indexing now.
+		if m.ragPipeline != nil && msg.Index != nil {
+			return m, m.startSourceIndex(msg.Index)
+		}
+		m.pendingSourceIdx = msg.Index
 		return m, nil
 
 	case RAGReadyMsg:
@@ -316,6 +340,14 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenChat && msg.RAG != nil {
 			m.chat.ragPipeline = msg.RAG
 		}
+		// If repo index is ready, start source indexing now.
+		if m.pendingSourceIdx != nil && msg.RAG != nil {
+			return m, m.startSourceIndex(m.pendingSourceIdx)
+		}
+		return m, nil
+
+	case SourceIndexReadyMsg:
+		// Sources are already integrated into the RAG pipeline dynamically.
 		return m, nil
 
 	case SessionLoadedMsg:
@@ -325,6 +357,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenChat
 		m.chat = NewChatFromSession(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, msg.Session, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
+		m.chat.autoFixCfg = m.autoFixCfg
 		if m.repoIndex != nil {
 			m.chat.repoIndex = m.repoIndex
 			m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)
@@ -562,6 +595,7 @@ func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.screen = screenChat
 	m.chat = NewChat(m.socketPath, m.systemPrompt, m.memoriesPrompt, m.params, model, m.searchProvider, m.searchAPIKey, m.permissionMode, m.providerKeys, m.rewrite, m.mcpInReadOnly, m.mcpManager)
 	m.chat.exportPath = m.exportPath
+	m.chat.autoFixCfg = m.autoFixCfg
 	if m.repoIndex != nil {
 		m.chat.repoIndex = m.repoIndex
 		m.chat.repoMap = buildRepoMapPrompt(m.repoIndex, m.chat.contextLimit)

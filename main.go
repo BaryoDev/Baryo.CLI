@@ -188,6 +188,12 @@ func main() {
 			tui.WithRewrite(cfg.RewriteEnabled()),
 			tui.WithMCPInReadOnly(cfg.MCPInReadOnlyEnabled()),
 			tui.WithExportPath(cfg.ExportPath),
+			tui.WithAutoFix(tui.AutoFixConfig{
+				AutoLint:    cfg.AutoLintEnabled(),
+				AutoTest:    cfg.AutoTestEnabled(),
+				LintCommand: cfg.LintCommand,
+				TestCommand: cfg.TestCommand,
+			}),
 		}
 
 		if len(cfg.MCPServers) > 0 {

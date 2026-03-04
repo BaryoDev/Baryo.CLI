@@ -155,6 +155,13 @@ func (idx *Index) FileCount() int {
 	return len(idx.files)
 }
 
+// FileSymbolsFor returns the parsed symbols for a relative path, or nil if not indexed.
+func (idx *Index) FileSymbolsFor(rel string) *FileSymbols {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.files[rel]
+}
+
 // RepoMap generates a formatted repo map string within the given token budget.
 // It applies progressive truncation when the full map exceeds the budget.
 func (idx *Index) RepoMap(budgetTokens int) string {

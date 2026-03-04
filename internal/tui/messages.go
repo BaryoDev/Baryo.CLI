@@ -183,3 +183,6 @@ type RAGReadyMsg struct {
 	RAG *rag.RAG
 }
 
+// SourceIndexReadyMsg signals that background source file indexing has completed.
+type SourceIndexReadyMsg struct{}
+

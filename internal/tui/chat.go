@@ -138,6 +138,9 @@ type ChatModel struct {
 	ragPipeline *rag.RAG  // shared RAG index reference
 	ragPrompt   string    // pre-rendered <context> block for system prompt
 
+	// Auto-fix: run linter/tests after code edits
+	autoFixCfg AutoFixConfig
+
 	// Intent-based prompt injection (transient, reset each turn)
 	planningPrompt string // set when intent is Planning; injected into system prompt
 
@@ -2514,6 +2517,7 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	mode := m.permissionMode
 	ch := m.confirmCh
 	mgr := m.mcpManager
+	afCfg := m.autoFixCfg
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		// Route MCP tools to the MCP manager.
 		if mgr != nil && mgr.IsMCPTool(name) {
@@ -2544,6 +2548,12 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 			// "auto" falls through to execute
 		}
 		r := tools.Execute(ctx, name, argsJSON)
+		// Auto-fix: run linter/tests after successful code-modifying tool calls.
+		if !r.IsError && isCodeModifyingTool(name) {
+			if checkOutput := runAutoCheck(ctx, afCfg); checkOutput != "" {
+				r.Content += "\n\n" + checkOutput
+			}
+		}
 		return r.Content, r.IsError
 	}
 }
