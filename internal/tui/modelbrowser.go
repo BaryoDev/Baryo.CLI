@@ -64,7 +64,7 @@ type ModelBrowserModel struct {
 func NewModelBrowser(downloaded []llm.Model, available []llm.SearchModel) (ModelBrowserModel, tea.Cmd) {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(adaptive("55", "183"))),
 	)
 	m := ModelBrowserModel{
 		downloaded: downloaded,

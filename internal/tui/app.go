@@ -213,7 +213,7 @@ func WithSessionList(summaries []session.Summary) AppOption {
 func NewApp(opts ...AppOption) AppModel {
 	s := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
-		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("183"))),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(adaptive("55", "183"))),
 	)
 	m := AppModel{
 		screen:  screenLoading,

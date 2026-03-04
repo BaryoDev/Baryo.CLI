@@ -193,6 +193,7 @@ type HookResultMsg HookResult
 type SubagentProgressMsg struct {
 	ID     int
 	Status string
+	ch     <-chan SubagentProgressMsg // stashed for re-queuing the listener
 }
 
 // SubagentDoneMsg signals that a subagent has finished.

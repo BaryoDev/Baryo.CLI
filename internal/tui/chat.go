@@ -816,24 +816,37 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				selected := SelectModel(m.autoModeCfg, text, len(m.messages), needsTools(text))
 				if selected.Tag != "" && selected.Tag != m.modelTag {
 					provider := llm.DetectProvider(selected.Tag)
-					newModel := llm.Model{Tag: selected.Tag, Name: selected.Tag, Provider: provider}
+					// Skip switch if provider requires an API key we don't have
 					if provider != "" {
-						p := llm.LookupPricing(provider, selected.Tag)
-						newModel.PromptPrice = p.PromptPrice
-						newModel.CompletionPrice = p.CompletionPrice
+						if _, hasKey := m.providerKeys[provider]; !hasKey {
+							m.history = append(m.history, chatEntry{
+								role:    roleError,
+								content: fmt.Sprintf("[auto mode] skipped %s — no API key for %q", selected.Tag, provider),
+							})
+							goto skipAutoMode
+						}
 					}
-					m.endpoint = endpointForModel(m.localSocketPath, newModel, m.providerKeys)
-					m.modelTag = selected.Tag
-					m.modelName = selected.Tag
-					m.modelHints = llm.DetectModelHints(selected.Tag)
-					m.promptPrice = newModel.PromptPrice
-					m.completionPrice = newModel.CompletionPrice
-					m.history = append(m.history, chatEntry{
-						role:    roleInfo,
-						content: fmt.Sprintf("[auto:%s] → %s", TierName(selected.Tier), selected.Tag),
-					})
+					{
+						newModel := llm.Model{Tag: selected.Tag, Name: selected.Tag, Provider: provider}
+						if provider != "" {
+							p := llm.LookupPricing(provider, selected.Tag)
+							newModel.PromptPrice = p.PromptPrice
+							newModel.CompletionPrice = p.CompletionPrice
+						}
+						m.endpoint = endpointForModel(m.localSocketPath, newModel, m.providerKeys)
+						m.modelTag = selected.Tag
+						m.modelName = selected.Tag
+						m.modelHints = llm.DetectModelHints(selected.Tag)
+						m.promptPrice = newModel.PromptPrice
+						m.completionPrice = newModel.CompletionPrice
+						m.history = append(m.history, chatEntry{
+							role:    roleInfo,
+							content: fmt.Sprintf("[auto:%s] → %s", TierName(selected.Tier), selected.Tag),
+						})
+					}
 				}
 			}
+		skipAutoMode:
 
 			// Route based on current agent mode
 			modeCfg := modeRegistry[m.agentMode]
@@ -1618,6 +1631,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		return m, fireHookCmd(m.hooksConfig, HookOnCommit, HookContext{CommitMsg: msg.Message})
 
 	case HookResultMsg:
+		// Only async hooks arrive here: on_stream_end, on_error, on_search, on_commit.
+		// pre_tool and post_tool run synchronously in the executor.
 		if msg.Output != "" {
 			m.history = append(m.history, chatEntry{
 				role:    roleInfo,
@@ -1635,7 +1650,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					content: fmt.Sprintf("[task #%d] %s", msg.ID, msg.Status),
 				})
 				m.updateViewport()
-				break
+				// Re-queue the progress listener via the stashed channel
+				return m, waitForSubagentProgress(msg.ch)
 			}
 		}
 		return m, nil
@@ -2007,6 +2023,14 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if strings.HasPrefix(trimmed, "/task ") {
+			return m.handleTask(strings.TrimPrefix(trimmed, "/task "))
+		}
+
+		if trimmed == "/tasks" {
+			return m.handleTasksList()
+		}
+
 		if strings.HasPrefix(text, "/search ") {
 			return m.handleSearch(strings.TrimPrefix(text, "/search "))
 		}
@@ -2103,14 +2127,6 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 
 		if trimmed == "/pr" || strings.HasPrefix(text, "/pr ") {
 			return m.handlePR(strings.TrimPrefix(text, "/pr"))
-		}
-
-		if strings.HasPrefix(text, "/task ") {
-			return m.handleTask(strings.TrimPrefix(text, "/task "))
-		}
-
-		if trimmed == "/tasks" {
-			return m.handleTasksList()
 		}
 
 		m.history = append(m.history, chatEntry{
@@ -4355,8 +4371,11 @@ func (m ChatModel) handleTask(desc string) (ChatModel, tea.Cmd) {
 		Cancel:      cancel,
 	})
 
-	// Calculate token budget: 25% of remaining context
+	// Calculate token budget: 25% of remaining context (min 1024)
 	tokenBudget := (m.contextLimit - m.contextTokens) / 4
+	if tokenBudget < 1024 {
+		tokenBudget = 1024
+	}
 
 	cfg := SubagentConfig{
 		ID:            id,
@@ -4380,32 +4399,12 @@ func (m ChatModel) handleTask(desc string) (ChatModel, tea.Cmd) {
 	// Goroutine to run subagent
 	runCmd := func() tea.Msg {
 		defer cancel()
+		defer close(progressCh)
 		result := RunSubagent(ctx, cfg, progressCh)
-		close(progressCh)
 		return SubagentDoneMsg{Result: result}
 	}
 
-	// Goroutine to forward progress
-	progressCmd := func() tea.Msg {
-		for p := range progressCh {
-			// We can only return one message, so we just return the last progress
-			// For simplicity, send each progress as it comes
-			_ = p
-		}
-		return nil
-	}
-
-	// Use a listener pattern: forward progress messages one at a time
-	forwardProgress := func() tea.Msg {
-		p, ok := <-progressCh
-		if !ok {
-			return nil
-		}
-		return p
-	}
-	_ = progressCmd // unused, use forwardProgress instead
-
-	return m, tea.Batch(runCmd, forwardProgress)
+	return m, tea.Batch(runCmd, waitForSubagentProgress(progressCh))
 }
 
 // handleTasksList shows the status of all subagents.
@@ -4884,6 +4883,20 @@ func waitForEvent(ch <-chan llm.StreamEvent) tea.Cmd {
 			return StreamTokenMsg{Event: llm.StreamEvent{Done: true}}
 		}
 		return StreamTokenMsg{Event: evt}
+	}
+}
+
+// waitForSubagentProgress listens for the next progress message from a subagent.
+// Returns nil when the channel is closed (subagent done). The channel is stashed
+// in the message so the handler can re-queue the listener.
+func waitForSubagentProgress(ch <-chan SubagentProgressMsg) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		p.ch = ch // stash for re-queuing
+		return p
 	}
 }
 

@@ -71,8 +71,12 @@ func RunSubagent(ctx context.Context, cfg SubagentConfig, progressCh chan<- Suba
 		toolDefs = append(toolDefs, cfg.MCPManager.CompactToolDefinitions(tools.Names(), 0)...)
 	}
 
-	// Stream with tool loop
-	ch := llm.StreamChatWithToolsN(ctx, cfg.Endpoint, cfg.ModelTag, messages, llm.ChatParams{}, toolDefs, executor, subagentMaxRounds)
+	// Stream with tool loop, applying token budget if set
+	params := llm.ChatParams{}
+	if cfg.TokenBudget > 0 {
+		params.MaxTokens = &cfg.TokenBudget
+	}
+	ch := llm.StreamChatWithToolsN(ctx, cfg.Endpoint, cfg.ModelTag, messages, params, toolDefs, executor, subagentMaxRounds)
 
 	var content strings.Builder
 	for evt := range ch {
