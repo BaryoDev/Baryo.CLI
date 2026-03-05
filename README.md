@@ -688,6 +688,14 @@ explain @main.go @go.mod
 explain @screenshot.png
 compare @before.png @after.png
 
+# Quoted paths for files with spaces
+@"path/to/my file.png"
+@'notes with spaces.md'
+
+# Absolute and home-relative paths for images
+@~/Desktop/screenshot.png
+@/tmp/diagram.png
+
 # Recursive matching — typing @cha finds internal/tui/chat.go
 @cha               # shows matches across all subdirectories
 ```
@@ -700,7 +708,7 @@ compare @before.png @after.png
 - **Esc** — dismiss suggestions
 - Press **Enter** again to send — file contents are injected as context for the model
 
-Text files must be under 100KB, non-binary, and not gitignored. **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`) are base64-encoded and sent as vision content — up to 10MB per image, max 4 images per message. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
+Text files must be under 100KB, non-binary, and not gitignored. **Images** (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`) are base64-encoded and sent as vision content — up to 20MB per image, max 4 images per message. Paths with spaces can be quoted (`@"my file.png"` or `@'my file.png'`), and `~/` paths are expanded for images outside the project. If the current model doesn't appear to support vision, a warning is shown when images are attached. Directories can be browsed via tab completion but not attached directly. Duplicate mentions are deduplicated.
 
 ### Web search
 

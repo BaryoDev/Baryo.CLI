@@ -238,6 +238,26 @@ func (m *ChatModel) resetStreamState() {
 }
 
 // sendNotification sends a desktop notification when enabled.
+// looksLikeVisionModel checks if the model name suggests vision/multimodal support.
+func looksLikeVisionModel(name string) bool {
+	n := strings.ToLower(name)
+	// Known vision-capable model families
+	visionKeywords := []string{
+		"vision", "vl", "visual", "multimodal",
+		"gpt-4o", "gpt-4-turbo", "gpt-4.1",
+		"gemini", "claude-3", "claude-4",
+		"llava", "bakllava", "moondream",
+		"gemma3", "pixtral", "qwen2-vl", "qwen2.5-vl",
+		"minicpm-v", "internvl", "phi-3-vision", "phi-3.5-vision",
+	}
+	for _, kw := range visionKeywords {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func sendNotification(title string) {
 	// Terminal bell
 	fmt.Print("\a")
@@ -848,9 +868,13 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Add user message (multipart if images are attached)
 			if len(imageParts) > 0 {
 				m.messages = append(m.messages, llm.NewMultipartMessage("user", text, imageParts))
+				infoMsg := fmt.Sprintf("Attached: %d image(s)", len(imageParts))
+				if !looksLikeVisionModel(m.modelName) {
+					infoMsg += " — note: this model may not support vision"
+				}
 				m.history = append(m.history, chatEntry{
 					role:    roleTool,
-					content: fmt.Sprintf("Attached: %d image(s)", len(imageParts)),
+					content: infoMsg,
 				})
 			} else {
 				m.messages = append(m.messages, llm.NewChatMessage("user", text))

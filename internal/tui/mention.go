@@ -23,7 +23,7 @@ import (
 
 const (
 	maxMentionFileSize = 100 * 1024    // 100 KB
-	maxImageFileSize   = 10 * 1024 * 1024 // 10 MB
+	maxImageFileSize   = 20 * 1024 * 1024 // 20 MB
 	maxImagesPerMsg    = 4
 	maxCompletions     = 50
 )
@@ -313,38 +313,92 @@ func (m *ChatModel) applyCompletion() {
 	m.textarea.SetValue(newText)
 }
 
-// processAtMentions finds all @path tokens in the text, reads each file,
-// and returns the original text, file contexts, and any errors.
-func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []llm.ContentPart, []string) {
-	fields := strings.Fields(text)
-	var contexts []fileContext
-	var images []llm.ContentPart
-	var errors []string
-	seen := make(map[string]bool)
-
-	for _, field := range fields {
-		if !strings.HasPrefix(field, "@") {
-			continue
+// extractMentions parses @-mentions from text, supporting quoted paths with spaces.
+// Supports: @file.go, @"path with spaces.png", @'path with spaces.png'
+func extractMentions(text string) []string {
+	var mentions []string
+	i := 0
+	for i < len(text) {
+		// Find next @
+		idx := strings.IndexByte(text[i:], '@')
+		if idx < 0 {
+			break
 		}
-		path := strings.TrimPrefix(field, "@")
-		if path == "" {
-			continue
+		pos := i + idx
+
+		// @ must be at start or preceded by whitespace
+		if pos > 0 {
+			prev := text[pos-1]
+			if prev != ' ' && prev != '\t' && prev != '\n' {
+				i = pos + 1
+				continue
+			}
+		}
+
+		// Skip the @
+		start := pos + 1
+		if start >= len(text) {
+			break
+		}
+
+		var path string
+		var end int
+
+		// Check for quoted path
+		if text[start] == '\'' || text[start] == '"' {
+			quote := text[start]
+			closeIdx := strings.IndexByte(text[start+1:], quote)
+			if closeIdx >= 0 {
+				path = text[start+1 : start+1+closeIdx]
+				end = start + 1 + closeIdx + 1 // past closing quote
+			} else {
+				// No closing quote — treat as unquoted
+				field := text[start:]
+				if spIdx := strings.IndexAny(field, " \t\n"); spIdx >= 0 {
+					field = field[:spIdx]
+				}
+				path = field
+				end = start + len(field)
+			}
+		} else {
+			// Unquoted: read until whitespace
+			field := text[start:]
+			if spIdx := strings.IndexAny(field, " \t\n"); spIdx >= 0 {
+				field = field[:spIdx]
+			}
+			path = field
+			end = start + len(field)
 		}
 
 		// Strip trailing punctuation (e.g. @main.go, or @main.go.)
 		path = strings.TrimRight(path, ".,;:!?)")
 
-		if path == "" {
-			continue
+		if path != "" {
+			mentions = append(mentions, path)
 		}
+		i = end
+	}
+	return mentions
+}
 
+// processAtMentions finds all @path tokens in the text, reads each file,
+// and returns the original text, file contexts, and any errors.
+// Supports quoted paths for files with spaces: @"path/to/my file.png" or @'my file.png'
+func (m *ChatModel) processAtMentions(text string) (string, []fileContext, []llm.ContentPart, []string) {
+	paths := extractMentions(text)
+	var contexts []fileContext
+	var images []llm.ContentPart
+	var errors []string
+	seen := make(map[string]bool)
+
+	for _, path := range paths {
 		// Deduplicate
 		if seen[path] {
 			continue
 		}
 		seen[path] = true
 
-		// Check if it's an image file
+		// Check if it's an image file (allow absolute and ~/paths)
 		if isImageFile(path) {
 			if len(images) >= maxImagesPerMsg {
 				errors = append(errors, fmt.Sprintf("@%s: max %d images per message", path, maxImagesPerMsg))
@@ -380,9 +434,20 @@ func isImageFile(path string) bool {
 	return false
 }
 
+// expandHome expands a leading ~ to the user's home directory.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[1:])
+		}
+	}
+	return path
+}
+
 // readImageForMention reads an image file and returns a ContentPart with base64 data URI.
+// Accepts absolute paths and ~/paths for images outside the project directory.
 func readImageForMention(path string) (*llm.ContentPart, error) {
-	absPath := path
+	absPath := expandHome(path)
 	if !filepath.IsAbs(absPath) {
 		cwd, _ := os.Getwd()
 		absPath = filepath.Join(cwd, absPath)
