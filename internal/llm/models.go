@@ -171,6 +171,53 @@ func PreloadModel(socketPath, model string) error {
 	return nil
 }
 
+// ListLocalOllama probes the default local Ollama server (localhost:11434)
+// and returns any models it finds. Returns nil (no error) if Ollama is not running.
+// This allows listing Ollama models alongside Docker Model Runner models.
+func ListLocalOllama() []Model {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://localhost:11434/api/tags")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil
+	}
+
+	var tags ollamaTagsResponse
+	if err := json.Unmarshal(body, &tags); err != nil {
+		return nil
+	}
+
+	models := make([]Model, 0, len(tags.Models))
+	for _, m := range tags.Models {
+		name := m.Name
+		displayName := strings.TrimSuffix(name, ":latest")
+
+		size := ""
+		if m.Size > 0 {
+			size = FormatBytes(m.Size)
+		}
+
+		models = append(models, Model{
+			Name:     displayName,
+			Tag:      name,
+			Params:   m.Details.ParameterSize,
+			Size:     size,
+			Provider: "ollama-local",
+		})
+	}
+
+	return models
+}
+
 func FormatBytes(b int64) string {
 	const gib = 1024 * 1024 * 1024
 	const mib = 1024 * 1024

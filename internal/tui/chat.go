@@ -380,6 +380,9 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 
 // endpointForModel returns the appropriate endpoint based on a model's provider.
 func endpointForModel(socketPath string, model llm.Model, keys map[string]string) llm.Endpoint {
+	if model.Provider == "ollama-local" {
+		return llm.LocalEndpoint("tcp://localhost:11434")
+	}
 	if model.Provider != "" {
 		if key, ok := keys[model.Provider]; ok {
 			return llm.ProviderEndpoint(model.Provider, key)
@@ -1941,6 +1944,10 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			} else {
 				if m, err := llm.ListModels(); err == nil {
 					downloaded = append(downloaded, m...)
+				}
+				// Also probe local Ollama (non-fatal).
+				if om := llm.ListLocalOllama(); len(om) > 0 {
+					downloaded = append(downloaded, om...)
 				}
 			}
 

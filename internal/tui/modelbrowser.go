@@ -317,6 +317,10 @@ func (m ModelBrowserModel) Update(msg tea.Msg) (ModelBrowserModel, tea.Cmd) {
 				if err != nil {
 					return ShowModelsMsg{Err: err}
 				}
+				// Also include local Ollama models.
+				if om := llm.ListLocalOllama(); len(om) > 0 {
+					downloaded = append(downloaded, om...)
+				}
 				return ShowModelsMsg{Downloaded: downloaded, Available: avail}
 			}
 		}

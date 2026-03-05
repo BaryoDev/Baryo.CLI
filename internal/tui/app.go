@@ -598,6 +598,10 @@ func (m AppModel) loadModels() tea.Cmd {
 			if m, err := llm.ListModels(); err == nil {
 				models = append(models, m...)
 			}
+			// Also probe local Ollama (non-fatal).
+			if om := llm.ListLocalOllama(); len(om) > 0 {
+				models = append(models, om...)
+			}
 		}
 
 		// Append cloud provider models (non-fatal on error).
