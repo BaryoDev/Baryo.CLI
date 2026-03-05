@@ -1860,12 +1860,19 @@ func (m *ChatModel) gatedCommand(trimmed string) string {
 	switch modeCfg.Tools {
 	case ToolsNone: // ask mode
 		switch cmd {
-		case "/run", "/commit", "/diff", "/review", "/init", "/plan", "/test", "/pr":
+		case "/run", "/commit", "/diff", "/review", "/init", "/plan", "/test", "/pr", "/issue", "/branch":
 			return cmd
 		}
 	case ToolsReadOnly: // architect, review, research
+		// Allow read-only PR subcommands (/pr review, /pr status) and /issue.
+		if cmd == "/pr" {
+			if strings.HasPrefix(trimmed, "/pr review") || trimmed == "/pr status" {
+				return "" // allowed
+			}
+			return cmd // block /pr (create)
+		}
 		switch cmd {
-		case "/run", "/commit", "/init", "/test", "/pr":
+		case "/run", "/commit", "/init", "/test", "/branch":
 			return cmd
 		}
 	}
@@ -2289,8 +2296,22 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return m.handleTest(strings.TrimPrefix(text, "/test"))
 		}
 
+		if trimmed == "/pr status" {
+			return m.handlePRStatus()
+		}
+		if strings.HasPrefix(text, "/pr review") {
+			return m.handlePRReview(strings.TrimPrefix(text, "/pr review"))
+		}
 		if trimmed == "/pr" || strings.HasPrefix(text, "/pr ") {
 			return m.handlePR(strings.TrimPrefix(text, "/pr"))
+		}
+
+		if strings.HasPrefix(text, "/issue ") {
+			return m.handleIssue(strings.TrimPrefix(text, "/issue "))
+		}
+
+		if strings.HasPrefix(text, "/branch ") {
+			return m.handleBranch(strings.TrimPrefix(text, "/branch "))
 		}
 
 		if strings.HasPrefix(trimmed, "/pin ") {
@@ -4346,6 +4367,210 @@ func (m ChatModel) handlePR(title string) (ChatModel, tea.Cmd) {
 		output := strings.TrimSpace(string(out))
 		return RunResultMsg{Command: "gh pr create", Output: output, Err: err}
 	}
+}
+
+func (m ChatModel) handlePRReview(number string) (ChatModel, tea.Cmd) {
+	number = strings.TrimSpace(number)
+
+	if _, err := exec.LookPath("gh"); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "gh CLI not found. Install it from https://cli.github.com/",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: "Fetching PR for review...",
+	})
+	m.updateViewport()
+
+	// Determine PR ref.
+	prRef := number
+	if prRef == "" {
+		out, _ := exec.Command("gh", "pr", "list", "--limit", "1", "--json", "number", "--jq", ".[0].number").CombinedOutput()
+		prRef = strings.TrimSpace(string(out))
+		if prRef == "" {
+			m.history = append(m.history, chatEntry{
+				role:    roleError,
+				content: "No open PRs found.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+	}
+
+	// Fetch PR metadata.
+	meta, _ := exec.Command("gh", "pr", "view", prRef, "--json", "title,body,state,reviewDecision,reviews,comments").CombinedOutput()
+	// Fetch diff.
+	diff, _ := exec.Command("gh", "pr", "diff", prRef).CombinedOutput()
+
+	prContext := fmt.Sprintf("## PR #%s\n%s\n\n## Diff\n%s", prRef, strings.TrimSpace(string(meta)), strings.TrimSpace(string(diff)))
+
+	// Truncate to fit context.
+	budget := m.contextLimit * 2
+	prContext = search.TruncateContent(prContext, budget)
+
+	prompt := fmt.Sprintf(`Review this pull request for bugs, logic errors, security issues, and potential improvements. Be concise and actionable.
+
+%s`, prContext)
+
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
+	m.history = append(m.history, chatEntry{
+		role:    roleUser,
+		content: fmt.Sprintf("/pr review %s", prRef),
+		mode:    m.agentMode,
+	})
+
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
+func (m ChatModel) handlePRStatus() (ChatModel, tea.Cmd) {
+	if _, err := exec.LookPath("gh"); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "gh CLI not found. Install it from https://cli.github.com/",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	out, err := exec.Command("gh", "pr", "status").CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("gh pr status failed: %s", output),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: output,
+	})
+	m.updateViewport()
+	return m, nil
+}
+
+func (m ChatModel) handleIssue(number string) (ChatModel, tea.Cmd) {
+	number = strings.TrimSpace(number)
+	if number == "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: "Usage: /issue <number>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	if _, err := exec.LookPath("gh"); err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "gh CLI not found. Install it from https://cli.github.com/",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	out, err := exec.Command("gh", "issue", "view", number, "--json", "title,body,state,labels,comments").CombinedOutput()
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("gh issue view failed: %s", strings.TrimSpace(string(out))),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	issueContext := strings.TrimSpace(string(out))
+	budget := m.contextLimit * 2
+	issueContext = search.TruncateContent(issueContext, budget)
+
+	prompt := fmt.Sprintf(`Here is GitHub issue #%s. Summarize it and suggest how to approach implementing it. If it's a bug, suggest debugging steps. If it's a feature, suggest an implementation plan.
+
+%s`, number, issueContext)
+
+	m.messages = append(m.messages, llm.NewChatMessage("user", prompt))
+	m.history = append(m.history, chatEntry{
+		role:    roleUser,
+		content: fmt.Sprintf("/issue %s", number),
+		mode:    m.agentMode,
+	})
+
+	m.isStream = true
+	m.streaming = ""
+	m.turnContent = ""
+	m.toolStatus = ""
+	m.streamStart = time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.eventCh = llm.StreamChat(ctx, m.endpoint, m.modelTag, m.buildMessages(), m.params)
+
+	m.updateViewport()
+	return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick())
+}
+
+func (m ChatModel) handleBranch(name string) (ChatModel, tea.Cmd) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: "Usage: /branch <name>",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	if strings.ContainsAny(name, " \t") {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "Branch name cannot contain spaces.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	if name == "main" || name == "master" {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: "Cannot create a branch named main or master.",
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	out, err := gitOutput("checkout", "-b", name)
+	if err != nil {
+		m.history = append(m.history, chatEntry{
+			role:    roleError,
+			content: fmt.Sprintf("git checkout -b failed: %v\n%s", err, out),
+		})
+		m.updateViewport()
+		return m, nil
+	}
+
+	m.history = append(m.history, chatEntry{
+		role:    roleTool,
+		content: fmt.Sprintf("Created and switched to branch: %s", name),
+	})
+	m.updateViewport()
+	return m, nil
 }
 
 func (m ChatModel) handleAsk(question string) (ChatModel, tea.Cmd) {

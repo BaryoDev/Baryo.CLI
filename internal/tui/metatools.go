@@ -145,6 +145,71 @@ var metaToolCreatePR = llm.ToolDefinition{
 	},
 }
 
+var metaToolReviewPR = llm.ToolDefinition{
+	Type: "function",
+	Function: llm.FunctionDefinition{
+		Name:        "review_pr",
+		Description: "Fetch a GitHub PR (diff + comments) for code review. Use when user asks to review a specific pull request.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"number": map[string]interface{}{
+					"type":        "string",
+					"description": "PR number to review. If empty, reviews the latest PR.",
+				},
+			},
+		},
+	},
+}
+
+var metaToolReadIssue = llm.ToolDefinition{
+	Type: "function",
+	Function: llm.FunctionDefinition{
+		Name:        "read_issue",
+		Description: "Read a GitHub issue (body + comments). Use when user mentions an issue number or asks about issues.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"number": map[string]interface{}{
+					"type":        "string",
+					"description": "Issue number to read.",
+				},
+			},
+			"required": []string{"number"},
+		},
+	},
+}
+
+var metaToolPRStatus = llm.ToolDefinition{
+	Type: "function",
+	Function: llm.FunctionDefinition{
+		Name:        "pr_status",
+		Description: "Show PR review status for the current repository. Use when user asks about PR status or pending reviews.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{},
+		},
+	},
+}
+
+var metaToolCreateBranch = llm.ToolDefinition{
+	Type: "function",
+	Function: llm.FunctionDefinition{
+		Name:        "create_branch",
+		Description: "Create and checkout a new git branch. Use when starting work on a new feature or issue.",
+		Parameters: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "Branch name (e.g. feat/add-auth, fix/login-bug).",
+				},
+			},
+			"required": []string{"name"},
+		},
+	},
+}
+
 var metaToolRunTests = llm.ToolDefinition{
 	Type: "function",
 	Function: llm.FunctionDefinition{
@@ -172,6 +237,10 @@ var metaToolRegistry = map[string]bool{
 	"commit_changes": true,
 	"create_pr":      true,
 	"run_tests":      true,
+	"review_pr":      true,
+	"read_issue":     true,
+	"pr_status":      true,
+	"create_branch":  true,
 }
 
 // MetaToolDefinitions returns safe meta-tool definitions (usable in all modes including read-only).
@@ -182,6 +251,9 @@ func MetaToolDefinitions() []llm.ToolDefinition {
 		metaToolFetchPage,
 		metaToolRemember,
 		metaToolReviewCode,
+		metaToolReviewPR,
+		metaToolReadIssue,
+		metaToolPRStatus,
 	}
 }
 
@@ -192,6 +264,7 @@ func DestructiveMetaToolDefinitions() []llm.ToolDefinition {
 		metaToolCommitChanges,
 		metaToolCreatePR,
 		metaToolRunTests,
+		metaToolCreateBranch,
 	}
 }
 
@@ -234,6 +307,16 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor) llm.ToolExecuto
 		case "run_tests":
 			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
 				return executeRunTests(ctx, argsJSON)
+			})
+		case "review_pr":
+			return executeReviewPR(ctx, contextLimit, argsJSON)
+		case "read_issue":
+			return executeReadIssue(ctx, contextLimit, argsJSON)
+		case "pr_status":
+			return executePRStatus(ctx, argsJSON)
+		case "create_branch":
+			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+				return executeCreateBranch(ctx, argsJSON)
 			})
 		default:
 			return inner(ctx, name, argsJSON)
@@ -604,4 +687,129 @@ func detectTestRunner(path string) (string, []string) {
 		return "python", args
 	}
 	return "", nil
+}
+
+// executeReviewPR fetches a PR's metadata, comments, and diff for model analysis.
+func executeReviewPR(ctx context.Context, contextLimit int, argsJSON string) (string, bool) {
+	var args struct {
+		Number string `json:"number"`
+	}
+	if argsJSON != "" {
+		json.Unmarshal([]byte(argsJSON), &args)
+	}
+
+	if _, err := exec.LookPath("gh"); err != nil {
+		return "gh CLI not found. Install it from https://cli.github.com/", true
+	}
+
+	logger.Debug("meta-tool review_pr", "number", args.Number)
+
+	// Determine which PR to review.
+	prRef := args.Number
+	if prRef == "" {
+		// Get the latest PR number.
+		out, err := ghOutput(ctx, "pr", "list", "--limit", "1", "--json", "number", "--jq", ".[0].number")
+		if err != nil || strings.TrimSpace(out) == "" {
+			return "No open PRs found.", true
+		}
+		prRef = strings.TrimSpace(out)
+	}
+
+	// Fetch PR metadata + comments.
+	meta, err := ghOutput(ctx, "pr", "view", prRef, "--json", "title,body,state,reviewDecision,reviews,comments")
+	if err != nil {
+		return fmt.Sprintf("gh pr view failed: %v", err), true
+	}
+
+	// Fetch PR diff.
+	diff, err := ghOutput(ctx, "pr", "diff", prRef)
+	if err != nil {
+		return fmt.Sprintf("gh pr diff failed: %v", err), true
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## PR #%s Metadata\n%s\n\n## Diff\n%s", prRef, meta, diff)
+
+	budget := contextLimit * 2
+	return search.TruncateContent(b.String(), budget), false
+}
+
+// executeReadIssue fetches a GitHub issue's body and comments.
+func executeReadIssue(ctx context.Context, contextLimit int, argsJSON string) (string, bool) {
+	var args struct {
+		Number string `json:"number"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), true
+	}
+	if args.Number == "" {
+		return "missing required parameter: number", true
+	}
+
+	if _, err := exec.LookPath("gh"); err != nil {
+		return "gh CLI not found. Install it from https://cli.github.com/", true
+	}
+
+	logger.Debug("meta-tool read_issue", "number", args.Number)
+
+	out, err := ghOutput(ctx, "issue", "view", args.Number, "--json", "title,body,state,labels,comments")
+	if err != nil {
+		return fmt.Sprintf("gh issue view failed: %v", err), true
+	}
+
+	budget := contextLimit * 2
+	return search.TruncateContent(out, budget), false
+}
+
+// executePRStatus shows the PR review status for the current repository.
+func executePRStatus(ctx context.Context, argsJSON string) (string, bool) {
+	if _, err := exec.LookPath("gh"); err != nil {
+		return "gh CLI not found. Install it from https://cli.github.com/", true
+	}
+
+	logger.Debug("meta-tool pr_status")
+
+	out, err := ghOutput(ctx, "pr", "status")
+	if err != nil {
+		return fmt.Sprintf("gh pr status failed: %v", err), true
+	}
+
+	return out, false
+}
+
+// executeCreateBranch creates and checks out a new git branch.
+func executeCreateBranch(ctx context.Context, argsJSON string) (string, bool) {
+	var args struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), true
+	}
+	if args.Name == "" {
+		return "missing required parameter: name", true
+	}
+
+	logger.Debug("meta-tool create_branch", "name", args.Name)
+
+	// Validate branch name: no spaces, not main/master.
+	name := strings.TrimSpace(args.Name)
+	if strings.ContainsAny(name, " \t") {
+		return "branch name cannot contain spaces", true
+	}
+	if name == "main" || name == "master" {
+		return "cannot create a branch named main or master", true
+	}
+
+	if _, err := gitOutput("checkout", "-b", name); err != nil {
+		return fmt.Sprintf("git checkout -b failed: %v", err), true
+	}
+
+	return fmt.Sprintf("Created and switched to branch: %s", name), false
+}
+
+// ghOutput runs a gh CLI command and returns its trimmed output.
+func ghOutput(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }

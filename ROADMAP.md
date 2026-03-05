@@ -19,15 +19,8 @@ The tradeoff is intentional: **privacy and cost vs. capability**. Most daily tas
 
 ## High Impact — Major Features
 
-### GitHub Workflow (PR, Issues, Code Review)
-End-to-end GitHub workflow via the `gh` CLI.
-
-- `/pr` — create a PR from current branch with AI-generated title and description
-- `/pr review` — review an open PR (fetch diff, analyze, comment)
-- `/issue <number>` — read a GitHub issue, create a branch, start implementing
-- `/pr status` — show PR review status (approved/pending/changes requested)
-- Respond to PR review comments and push fixes
-- Branch management: create, switch, merge, delete
+### ~~GitHub Workflow (PR, Issues, Code Review)~~ ✓ (v0.11.0)
+*Moved to Completed.*
 
 ### Multi-Source Search
 Strengthen research by querying multiple sources simultaneously.
@@ -74,93 +67,41 @@ Purpose-built tools for infrastructure, deployment, and container management.
 - `/docker` — manage local containers (list, build, run, stop, logs, exec)
 - Docker Compose awareness and CI/CD pipeline generation by project type
 
-### Project Scaffolding
-Generate new projects from templates.
+### ~~Project Scaffolding~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- `/new <type>` — scaffold a new project (go-api, react-app, python-cli, etc.)
-- Generate boilerplate: main file, config, Dockerfile, CI/CD, README, .gitignore
-- Customizable templates stored in `~/.baryo/templates/` or `.baryo/templates/`
-- Model fills in project-specific details (name, description, dependencies)
+### ~~Shell Toggle (Ctrl-X)~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-### Shell Toggle (Ctrl-X)
-Switch between AI chat and direct shell execution without leaving Baryo. Inspired by Kimi CLI.
+### ~~Model Switching Mid-Session~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- `Ctrl-X` toggles between chat mode and shell mode
-- Shell mode: type commands directly, output shown inline
-- Prefix with `!` for quick one-off commands (already possible via `/run`)
-- Shell history shared with input history
+### ~~Context Pinning~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-### Model Switching Mid-Session
-Switch between models during a conversation without losing context.
+### ~~Checkpoints & Rewind~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- `/model <name>` command to switch mid-session
-- Conversation history preserved across model switches
-- Use a fast model for simple questions, a powerful one for complex reasoning
+### ~~Notification on Completion~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-### Context Pinning
-Always include specific files as context.
+### ~~Streaming Speed Metrics~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- `/pin @file` — pin a file so it's always included in context
-- `/unpin @file` — remove a pinned file
-- `/pins` — list currently pinned files
-- Pinned content injected into every model call alongside system prompt
+### ~~Multi-Modal Input~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-### Checkpoints & Rewind
-Named save-points mid-conversation. Inspired by Claude Code.
+### ~~Shell Completions~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- `/checkpoint <name>` — save current conversation + git state
-- `/rewind` — roll back to a previous point
-- Integrates with git: can restore code state alongside conversation
-- Like save-points in a game — explore freely, restore if it goes wrong
+### ~~Worktree Isolation~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-### Notification on Completion
-Terminal bell or OS notification when a long task finishes.
+### ~~Background Agents~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
-- Terminal bell on stream completion
-- Optional OS notification via `osascript` (macOS) / `notify-send` (Linux)
-- Configurable: `notifications: true` in config
-
-### Streaming Speed Metrics
-Show tokens/second during streaming.
-
-- Display in status bar alongside token count
-- Useful for comparing model performance on local hardware
-
-### Multi-Modal Input
-Support image attachments for vision-capable models (LLaVA, etc.).
-
-- `@image path/to/screenshot.png` syntax
-- Model capability detection — only enable for vision-capable models
-- Useful for UI work, diagram analysis, and visual debugging
-
-### Shell Completions
-Tab completion scripts for shell environments.
-
-- `baryo completion zsh/bash/fish/powershell` subcommand
-- Complete flags, model names, session IDs
-
-### Worktree Isolation
-Agent works on a git worktree so it can't break your main branch.
-
-- Auto-create git worktree for agent code changes
-- Changes only merge back on user approval
-- `--worktree` flag to enable
-
-### Background Agents
-Delegate tasks to background workers.
-
-- Prefix with `&` or `/bg <prompt>` to run in background
-- `/tasks` to list running background agents
-- Results available when done, don't block main conversation
-- Useful for long-running research or code generation
-
-### Sandboxed Code Execution
-Run AI-generated code in isolated containers.
-
-- Use Docker (already a dependency) for sandboxing `run_code` and `run_script`
-- Prevent accidental damage to the host filesystem
-- Optional — users can opt into direct execution for trusted workflows
-- `--sandbox` flag to enable
+### ~~Sandboxed Code Execution~~ ✓ (v0.10.0)
+*Moved to Completed.*
 
 ### Session Management Improvements
 Better organization and discovery of saved sessions.
@@ -188,6 +129,63 @@ Allow users to add custom tools via config.
 ---
 
 ## Completed
+
+### GitHub Workflow (v0.11.0)
+- `/pr` — create a PR from current branch with AI-generated title and description
+- `/pr review [number]` — review a PR (fetch diff + comments, stream analysis)
+- `/pr status` — show PR review status (approved/pending/changes requested)
+- `/issue <number>` — read a GitHub issue and get implementation suggestions
+- `/branch <name>` — create and checkout a feature branch
+- Meta-tools: `review_pr`, `read_issue`, `pr_status`, `create_branch`
+- Read-only tools work in all modes; `create_branch` gated behind permission system
+
+### Project Scaffolding (v0.10.0)
+- `/new <type>` — scaffold a new project (go-api, react-app, python-cli, etc.)
+- Generate boilerplate: main file, config, Dockerfile, CI/CD, README, .gitignore
+- Customizable templates stored in `~/.baryo/templates/` or `.baryo/templates/`
+
+### Shell Toggle (v0.10.0)
+- `Ctrl-X` toggles between chat mode and shell mode
+- Shell mode: type commands directly, output shown inline
+- Shell history shared with input history
+
+### Model Switching Mid-Session (v0.10.0)
+- `/models` command to switch mid-session
+- Conversation history preserved across model switches
+
+### Context Pinning (v0.10.0)
+- `/pin @file`, `/unpin @file`, `/pins` commands
+- Pinned content injected into every model call alongside system prompt
+
+### Checkpoints & Rewind (v0.10.0)
+- `/checkpoint <name>` — save current conversation + git state
+- `/rewind` — roll back to a previous checkpoint
+
+### Notification on Completion (v0.10.0)
+- Terminal bell on stream completion
+- OS notification via `osascript` (macOS) / `notify-send` (Linux)
+
+### Streaming Speed Metrics (v0.10.0)
+- Tokens/second in status bar alongside token count
+
+### Multi-Modal Input (v0.10.0)
+- `@image path/to/screenshot.png` syntax for vision-capable models
+- Model capability detection — only enable for vision-capable models
+
+### Shell Completions (v0.10.0)
+- `baryo completion zsh/bash/fish/powershell` subcommand
+
+### Worktree Isolation (v0.10.0)
+- `--worktree` flag for isolated agent code changes
+- Changes only merge back on user approval
+
+### Background Agents (v0.10.0)
+- `/bg <prompt>` to run in background, `/tasks` to list
+- Results available when done, don't block main conversation
+
+### Sandboxed Code Execution (v0.10.0)
+- Docker-based sandboxing for `run_code` and `run_script`
+- `--sandbox` flag to enable
 
 ### Auto-Fix on Lint/Test (v0.9.0)
 - Auto-run linter and/or tests after `edit_file`, `write_file`, `delete_file` tool calls

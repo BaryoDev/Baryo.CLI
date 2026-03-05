@@ -198,9 +198,13 @@ The model receives meta-tools as tool definitions and calls them directly when n
 | `fetch_page` | Safe | Fetch and extract content from a URL |
 | `remember` | Safe | Save user preferences to persistent memory |
 | `review_code` | Safe | Get current git diff for code review |
+| `review_pr` | Safe | Fetch a GitHub PR (diff + comments) for review |
+| `read_issue` | Safe | Read a GitHub issue (body + comments) |
+| `pr_status` | Safe | Show PR review status for the repo |
 | `commit_changes` | Destructive | Stage and commit with auto-generated message |
 | `create_pr` | Destructive | Push branch and create a GitHub PR |
 | `run_tests` | Destructive | Auto-detect test framework and run tests |
+| `create_branch` | Destructive | Create and checkout a new git branch |
 
 Safe tools work in all modes (including read-only). Destructive tools are only available in non-read-only modes and respect the permission system (`--yolo`, confirm, suggest).
 
@@ -225,6 +229,18 @@ You: Commit these changes
 
 You: Create a PR for this
 → model calls create_pr() → pushes branch, opens GitHub PR
+
+You: Review PR #42
+→ model calls review_pr(42) → fetches diff + comments, analyzes
+
+You: What's issue #5 about?
+→ model calls read_issue(5) → fetches issue body + comments
+
+You: Any PRs need my attention?
+→ model calls pr_status() → shows pending reviews and status
+
+You: Create a branch for the auth feature
+→ model calls create_branch("feat/auth") → creates and checks out branch
 ```
 
 **Tier 2 — Small models** (<32K context):
@@ -260,6 +276,10 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/fetch <url>` | Fetch and display a web page |
 | `/test [path]` | Run project tests (auto-detects go/npm/pytest/cargo) |
 | `/pr [title]` | Push current branch and create a GitHub PR |
+| `/pr review [number]` | Review a PR (fetches diff + comments, streams analysis) |
+| `/pr status` | Show PR review status for the repo |
+| `/issue <number>` | Read a GitHub issue and get implementation suggestions |
+| `/branch <name>` | Create and checkout a new git branch |
 | `/setup` | Download or update starter skills from GitHub |
 | `/skills` | List available skills |
 | `/skill <name>` | Activate a skill (loads full instructions into context) |
@@ -297,12 +317,18 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 **Workflows:**
 
 ```bash
-# Review → Fix → Commit → PR
-/review              # Find issues in your changes
-# ... fix the issues ...
-/test                # Run tests to verify
-/commit              # Generate a commit message and commit
+# Issue → Branch → Code → Test → Commit → PR
+/issue 42               # Read the issue, get implementation plan
+/branch feat/issue-42   # Create a feature branch
+# ... implement the feature ...
+/test                    # Run tests to verify
+/review                  # Review your local changes
+/commit                  # Generate a commit message and commit
 /pr "feat: add user auth"  # Push and create a PR
+
+# Review someone else's PR
+/pr review 15            # Fetch PR #15 diff + comments, stream analysis
+/pr status               # Check pending reviews across the repo
 
 # Run tests for a specific path
 /test ./internal/tui/...
