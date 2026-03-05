@@ -1,19 +1,19 @@
 {
-    "version": "0.10.0",
+    "version": "0.9.0",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_windows_amd64.zip",
+            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.9.0/baryo_0.9.0_windows_amd64.zip",
             "bin": [
                 "baryo.exe"
             ],
-            "hash": "4408a5ac9906ff070a53bfd4ef37869524c0bd22383dfe42797866a74fa1f298"
+            "hash": "30509bc9a26404d22ef441c1bc96a75538a19835ed641acec26f3a8d0a5f7069"
         },
         "arm64": {
-            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_windows_arm64.zip",
+            "url": "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.9.0/baryo_0.9.0_windows_arm64.zip",
             "bin": [
                 "baryo.exe"
             ],
-            "hash": "9facf93d91e51d3cbf49a28e083f3bf470d4ac28dbc086dfdf9e6197607e5eb5"
+            "hash": "3454c4ddeddc2ea391729b8d4f1092c95c28583915bc6e99cd5a081f093d3e61"
         }
     },
     "homepage": "https://github.com/BaryoDev/Baryo.CLI",
