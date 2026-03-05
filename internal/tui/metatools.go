@@ -273,6 +273,75 @@ func IsMetaTool(name string) bool {
 	return metaToolRegistry[name]
 }
 
+// MetaToolsSystemPrompt returns the embedded metatools.md content for injection
+// into the system prompt when meta-tools are enabled.
+func MetaToolsSystemPrompt() string {
+	return metaToolsPrompt
+}
+
+// HeadlessMetaToolOpts holds configuration for the headless meta-tool executor.
+type HeadlessMetaToolOpts struct {
+	Endpoint       llm.Endpoint
+	ModelTag       string
+	SearchProvider string
+	SearchAPIKey   string
+	ContextLimit   int
+	PermissionMode string
+}
+
+// MakeHeadlessMetaToolExecutor wraps a standard tool executor to intercept
+// meta-tool calls in headless (print) mode. Destructive tools are gated by
+// PermissionMode: only "auto" allows execution; all other modes block.
+func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolOpts) llm.ToolExecutor {
+	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		switch name {
+		case "web_search":
+			return executeWebSearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.ContextLimit, argsJSON)
+		case "deep_research":
+			return executeDeepResearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.Endpoint, opts.ModelTag, opts.ContextLimit, argsJSON)
+		case "fetch_page":
+			return executeFetchPage(ctx, opts.ContextLimit, argsJSON)
+		case "remember":
+			return executeRemember(ctx, argsJSON)
+		case "review_code":
+			return executeReviewCode(ctx, opts.ContextLimit)
+		case "commit_changes":
+			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+				return executeCommitChanges(ctx, argsJSON)
+			})
+		case "create_pr":
+			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+				return executeCreatePR(ctx, argsJSON)
+			})
+		case "run_tests":
+			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+				return executeRunTests(ctx, argsJSON)
+			})
+		case "review_pr":
+			return executeReviewPR(ctx, opts.ContextLimit, argsJSON)
+		case "read_issue":
+			return executeReadIssue(ctx, opts.ContextLimit, argsJSON)
+		case "pr_status":
+			return executePRStatus(ctx, argsJSON)
+		case "create_branch":
+			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+				return executeCreateBranch(ctx, argsJSON)
+			})
+		default:
+			return inner(ctx, name, argsJSON)
+		}
+	}
+}
+
+// headlessDestructiveGate blocks destructive tools unless PermissionMode is "auto".
+// Headless mode has no confirmation dialog, so non-auto modes simply block.
+func headlessDestructiveGate(mode, name string, fn func() (string, bool)) (string, bool) {
+	if mode != "auto" {
+		return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
+	}
+	return fn()
+}
+
 // makeMetaToolExecutor wraps a standard tool executor to intercept meta-tool
 // calls. All other tool names pass through to the inner executor.
 func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor) llm.ToolExecutor {

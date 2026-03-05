@@ -218,6 +218,8 @@ func main() {
 			EnableTools:    enableTools,
 			MCPManager:     mcpMgr,
 			StrategyInput:  strategyInput,
+			SearchProvider: cfg.SearchProvider,
+			SearchAPIKey:   cfg.SearchAPIKey,
 		}
 		os.Exit(cli.RunPrint(printOpts))
 		return

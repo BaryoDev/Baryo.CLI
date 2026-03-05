@@ -41,6 +41,8 @@ type PrintOptions struct {
 	EnableTools    bool
 	MCPManager     MCPToolProvider // nil when no MCP servers configured
 	StrategyInput  string          // pre-formatted strategy context (from --strategy flag)
+	SearchProvider string
+	SearchAPIKey   string
 }
 
 // RunPrint runs a single prompt through the model in headless mode.
@@ -68,6 +70,22 @@ func runPrintText(opts PrintOptions) int {
 		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
 	}
 	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
+
+	// Add meta-tool definitions and wrap executor.
+	contextLimit := contextWindowForModel(opts.Model.Tag)
+	toolDefs = append(toolDefs, tui.MetaToolDefinitions()...)
+	if opts.PermissionMode == "auto" {
+		toolDefs = append(toolDefs, tui.DestructiveMetaToolDefinitions()...)
+	}
+	executor = tui.MakeHeadlessMetaToolExecutor(executor, tui.HeadlessMetaToolOpts{
+		Endpoint:       opts.Endpoint,
+		ModelTag:       opts.Model.Tag,
+		SearchProvider: opts.SearchProvider,
+		SearchAPIKey:   opts.SearchAPIKey,
+		ContextLimit:   contextLimit,
+		PermissionMode: opts.PermissionMode,
+	})
+
 	maxRounds := opts.MaxTurns
 	if maxRounds <= 0 {
 		maxRounds = 5
@@ -162,6 +180,22 @@ func runPrintJSON(opts PrintOptions) int {
 		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
 	}
 	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
+
+	// Add meta-tool definitions and wrap executor.
+	contextLimit := contextWindowForModel(opts.Model.Tag)
+	toolDefs = append(toolDefs, tui.MetaToolDefinitions()...)
+	if opts.PermissionMode == "auto" {
+		toolDefs = append(toolDefs, tui.DestructiveMetaToolDefinitions()...)
+	}
+	executor = tui.MakeHeadlessMetaToolExecutor(executor, tui.HeadlessMetaToolOpts{
+		Endpoint:       opts.Endpoint,
+		ModelTag:       opts.Model.Tag,
+		SearchProvider: opts.SearchProvider,
+		SearchAPIKey:   opts.SearchAPIKey,
+		ContextLimit:   contextLimit,
+		PermissionMode: opts.PermissionMode,
+	})
+
 	maxRounds := opts.MaxTurns
 	if maxRounds <= 0 {
 		maxRounds = 5
@@ -224,9 +258,18 @@ func runPrintJSON(opts PrintOptions) int {
 // buildMessages constructs the initial message list for print mode.
 func buildMessages(opts PrintOptions) []llm.ChatMessage {
 	var messages []llm.ChatMessage
-	if opts.SystemPrompt != "" {
-		messages = append(messages, llm.NewChatMessage("system", opts.SystemPrompt))
+
+	sysPrompt := opts.SystemPrompt
+	// Inject meta-tools prompt so the model knows about available tools.
+	if opts.EnableTools {
+		if p := tui.MetaToolsSystemPrompt(); p != "" {
+			sysPrompt += "\n\n" + p
+		}
 	}
+	if sysPrompt != "" {
+		messages = append(messages, llm.NewChatMessage("system", sysPrompt))
+	}
+
 	if opts.StrategyInput != "" {
 		messages = append(messages, llm.NewChatMessage("user", opts.StrategyInput))
 	}
