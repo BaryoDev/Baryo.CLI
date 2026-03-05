@@ -5,21 +5,21 @@
 class Baryo < Formula
   desc "A local AI chat CLI powered by Docker Model Runner"
   homepage "https://github.com/BaryoDev/Baryo.CLI"
-  version "0.8.0"
+  version "0.10.0"
   license "MPL-2.0"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.8.0/baryo_0.8.0_darwin_amd64.tar.gz"
-      sha256 "f2147c576e21f3a4ea7e84e6e96a6ef0f3c51874af33b9134036e6e0eb584331"
+      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_darwin_amd64.tar.gz"
+      sha256 "3e0836ae4f9e8a456a6b6b78bec7ef289b8a4fad20ea43fb5b87f957cfe4f0b0"
 
       define_method(:install) do
         bin.install "baryo"
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.8.0/baryo_0.8.0_darwin_arm64.tar.gz"
-      sha256 "959aceee93a4383c4ec4e47eec7aa73d5566dbd6807e1a8284c56f12fdc6e3f4"
+      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_darwin_arm64.tar.gz"
+      sha256 "db3b741f51fa764737c980d32a7a7a54e2fa1d310b529d00be7115562541a433"
 
       define_method(:install) do
         bin.install "baryo"
@@ -29,15 +29,15 @@ class Baryo < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.8.0/baryo_0.8.0_linux_amd64.tar.gz"
-      sha256 "75f5936f01ccdb801c0ccab43698363f2efb24960e836d8af4128b84f9fae5f6"
+      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_linux_amd64.tar.gz"
+      sha256 "f012b01debfb0eb67701a7b70b6dc96120b5d6ddae540bc7e263db4a6c0e8dd1"
       define_method(:install) do
         bin.install "baryo"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.8.0/baryo_0.8.0_linux_arm64.tar.gz"
-      sha256 "9e894b5aa5f43655651e4e5f12067b7fdd2dbebb57e5865773ad08b1a8efadbe"
+      url "https://github.com/BaryoDev/Baryo.CLI/releases/download/v0.10.0/baryo_0.10.0_linux_arm64.tar.gz"
+      sha256 "aaa8f24904bc97e1569e7a847426612a6af7da9d1f7a5c23edea05b04abc91dc"
       define_method(:install) do
         bin.install "baryo"
       end
