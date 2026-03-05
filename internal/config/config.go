@@ -7,11 +7,13 @@ package config
 import (
 	_ "embed"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/mcp"
@@ -130,23 +132,49 @@ func (c *Config) SandboxEnabled() bool {
 	return *c.Sandbox
 }
 
+// ollamaRunning returns true if Ollama is accepting connections on localhost:11434.
+func ollamaRunning() bool {
+	conn, err := net.DialTimeout("tcp", "localhost:11434", 1*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // defaultSocketPath returns the platform-specific default socket path.
-// It checks environment variables first, then probes known locations.
+// It checks environment variables first, then probes known Docker locations,
+// and falls back to Ollama's TCP endpoint if Docker isn't available.
 func defaultSocketPath() string {
 	if p := os.Getenv("DOCKER_MODEL_SOCKET"); p != "" {
 		return p
 	}
 	home, _ := os.UserHomeDir()
+
+	var dockerPath string
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(home, "Library", "Containers", "com.llm.docker", "Data", "inference.sock")
+		dockerPath = filepath.Join(home, "Library", "Containers", "com.llm.docker", "Data", "inference.sock")
 	case "linux":
-		return probeLinuxSocket(home)
+		dockerPath = probeLinuxSocket(home)
 	case "windows":
-		return `//./pipe/docker_model_runner`
+		dockerPath = `//./pipe/docker_model_runner`
 	default:
-		return filepath.Join(home, ".docker", "desktop", "inference.sock")
+		dockerPath = filepath.Join(home, ".docker", "desktop", "inference.sock")
 	}
+
+	// If the Docker socket exists, use it.
+	if _, err := os.Stat(dockerPath); err == nil {
+		return dockerPath
+	}
+
+	// Docker socket not found — fall back to Ollama if it's running.
+	if ollamaRunning() {
+		return "tcp://localhost:11434"
+	}
+
+	// Return Docker path as default (doctor checks will guide the user).
+	return dockerPath
 }
 
 // probeLinuxSocket checks known Linux socket paths and returns the first that exists.

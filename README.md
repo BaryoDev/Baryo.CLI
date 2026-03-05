@@ -1,17 +1,30 @@
 # Baryo
 
-An AI chat CLI powered by [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), with optional cloud provider support. Chat with local models running on your machine, or connect to 18+ cloud providers for inference.
+An AI chat CLI for local and cloud models. Chat with models running on your machine via [Ollama](https://ollama.com) or [Docker Model Runner](https://docs.docker.com/desktop/features/model-runner/), or connect to 18+ cloud providers for inference.
 
-Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation. Docker is optional — cloud-only usage works with just an API key.
+Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation.
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Model Runner enabled (for local models)
-- At least one AI model pulled (for local models):
+For local models (pick one):
+
+- **Ollama (recommended)** — lightweight, easy to install:
+  ```bash
+  # macOS
+  brew install ollama
+  # Linux
+  curl -fsSL https://ollama.com/install.sh | sh
+
+  ollama serve
+  ollama pull qwen3:0.6b
+  ```
+- **Docker Desktop** with [Model Runner](https://docs.docker.com/desktop/features/model-runner/) enabled:
   ```bash
   docker model pull ai/gemma3
   ```
-- Or a cloud provider API key — no Docker needed for cloud-only usage
+
+Or skip local models entirely — cloud-only usage works with just an API key.
+
 - [Go 1.25+](https://go.dev/dl/) (to build from source)
 
 ## Installation

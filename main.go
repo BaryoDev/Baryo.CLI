@@ -148,11 +148,30 @@ func main() {
 				}
 			}
 			if hasProviders {
-				fmt.Fprintf(os.Stderr, "Baryo — local Docker not available (cloud providers will still work)\n")
+				fmt.Fprintf(os.Stderr, "Baryo — local inference not available (cloud providers will still work)\n")
+			} else if doctor.IsOllamaRunning() {
+				// Ollama is running — check if it has models.
+				if models := llm.ListLocalOllama(); len(models) > 0 {
+					cfg.SocketPath = "tcp://localhost:11434"
+					fmt.Fprintf(os.Stderr, "Baryo — Docker not available, using Ollama (%d model(s))\n", len(models))
+				} else {
+					fmt.Fprintf(os.Stderr, "Baryo — Ollama is running but has no models\n\n")
+					fmt.Fprintf(os.Stderr, "  Pull a model to get started:\n\n")
+					fmt.Fprintf(os.Stderr, "    ollama pull qwen3:0.6b\n\n")
+					os.Exit(1)
+				}
+			} else if doctor.HasOllama() {
+				fmt.Fprintf(os.Stderr, "Baryo — Ollama is installed but not running\n\n")
+				fmt.Fprintf(os.Stderr, "  Start it with: ollama serve\n\n")
+				os.Exit(1)
 			} else {
-				fmt.Fprintf(os.Stderr, "Baryo — startup check failed\n\n")
+				fmt.Fprintf(os.Stderr, "Baryo — no local inference available\n\n")
 				fmt.Fprint(os.Stderr, doctor.FormatResults(results))
-				fmt.Fprintf(os.Stderr, "\nRun 'baryo doctor' for full diagnostics or use --skip-checks to bypass.\n")
+				fmt.Fprintf(os.Stderr, "\nInstall Ollama (easiest option):\n")
+				fmt.Fprintf(os.Stderr, "  macOS:  brew install ollama\n")
+				fmt.Fprintf(os.Stderr, "  Linux:  curl -fsSL https://ollama.com/install.sh | sh\n\n")
+				fmt.Fprintf(os.Stderr, "Then: ollama serve && ollama pull qwen3:0.6b\n\n")
+				fmt.Fprintf(os.Stderr, "Or run 'baryo doctor' for full diagnostics or use --skip-checks to bypass.\n")
 				os.Exit(1)
 			}
 		}
@@ -359,10 +378,15 @@ func resolveModel(cfg *config.Config) (llm.Model, error) {
 
 	models, err := llm.ListModels()
 	if err != nil {
-		return llm.Model{}, err
+		// Docker not available — still try Ollama.
+		models = nil
+	}
+	// Also include local Ollama models.
+	if om := llm.ListLocalOllama(); len(om) > 0 {
+		models = append(models, om...)
 	}
 	if len(models) == 0 {
-		return llm.Model{}, fmt.Errorf("no models available — pull a model with: docker model pull <name>")
+		return llm.Model{}, fmt.Errorf("no models available — pull a model with: docker model pull <name> or ollama pull <name>")
 	}
 	if cfg.Model == "" {
 		return models[0], nil
@@ -394,6 +418,9 @@ func tryProviderModel(cfg *config.Config) (llm.Model, bool) {
 
 // endpointForModel returns the appropriate endpoint for a model.
 func endpointForModel(cfg config.Config, model llm.Model) llm.Endpoint {
+	if model.Provider == "ollama-local" {
+		return llm.LocalEndpoint("tcp://localhost:11434")
+	}
 	if model.Provider != "" {
 		if key, ok := cfg.ProviderKeys[model.Provider]; ok {
 			return llm.ProviderEndpoint(model.Provider, key)

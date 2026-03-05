@@ -19,6 +19,7 @@ import (
 type CheckResult struct {
 	Name    string
 	Passed  bool
+	Warning bool   // non-blocking failure (another backend rescued it)
 	Message string // guidance shown on failure
 }
 
@@ -70,49 +71,115 @@ func runTCPChecks(socketPath string) []CheckResult {
 	return results
 }
 
+// HasOllama returns true if the ollama binary is on PATH.
+func HasOllama() bool {
+	_, err := exec.LookPath("ollama")
+	return err == nil
+}
+
+// IsOllamaRunning returns true if Ollama is accepting connections on localhost:11434.
+func IsOllamaRunning() bool {
+	conn, err := net.DialTimeout("tcp", "localhost:11434", 1*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// runOllamaChecks validates the local Ollama setup.
+func runOllamaChecks() []CheckResult {
+	var results []CheckResult
+
+	if !HasOllama() {
+		results = append(results, CheckResult{
+			Name:   "Ollama installed",
+			Passed: false,
+			Message: `Ollama is not installed.
+
+  Install Ollama:
+    macOS:  brew install ollama
+    Linux:  curl -fsSL https://ollama.com/install.sh | sh
+
+  Then run: ollama serve`,
+		})
+		return results
+	}
+	results = append(results, CheckResult{Name: "Ollama installed", Passed: true})
+
+	if !IsOllamaRunning() {
+		results = append(results, CheckResult{
+			Name:   "Ollama running",
+			Passed: false,
+			Message: `Ollama is installed but not running.
+
+  Start it with: ollama serve`,
+		})
+		return results
+	}
+	results = append(results, CheckResult{Name: "Ollama running", Passed: true})
+
+	models := llm.ListLocalOllama()
+	if len(models) == 0 {
+		results = append(results, CheckResult{
+			Name:   "Ollama models",
+			Passed: false,
+			Message: `Ollama is running but has no models.
+
+  Pull a model to get started:
+
+    ollama pull qwen3:0.6b
+
+  Then run baryo again.`,
+		})
+		return results
+	}
+	results = append(results, CheckResult{
+		Name:    "Ollama models",
+		Passed:  true,
+		Message: fmt.Sprintf("%d model(s) found", len(models)),
+	})
+
+	return results
+}
+
 // runLocalChecks validates the local Docker Model Runner setup.
+// If Docker is unavailable, falls through to Ollama checks.
 func runLocalChecks(socketPath string) []CheckResult {
 	var results []CheckResult
 
 	// 1. Is Docker installed?
+	dockerInstalled := true
 	if _, err := exec.LookPath("docker"); err != nil {
+		dockerInstalled = false
 		results = append(results, CheckResult{
 			Name:   "Docker installed",
 			Passed: false,
-			Message: `Baryo needs Docker Desktop to run AI models locally.
-
-  1. Download Docker Desktop from https://www.llm.com/products/docker-desktop
-  2. Install and launch it
-  3. Run baryo again`,
 		})
-		return results
+	} else {
+		results = append(results, CheckResult{Name: "Docker installed", Passed: true})
 	}
-	results = append(results, CheckResult{Name: "Docker installed", Passed: true})
 
-	// 2. Is Docker running?
-	cmd := exec.Command("docker", "info")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		results = append(results, CheckResult{
-			Name:   "Docker running",
-			Passed: false,
-			Message: `Docker Desktop is installed but not started.
+	dockerReady := false
+	if dockerInstalled {
+		// 2. Is Docker running?
+		cmd := exec.Command("docker", "info")
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Run(); err != nil {
+			results = append(results, CheckResult{
+				Name:   "Docker running",
+				Passed: false,
+			})
+		} else {
+			results = append(results, CheckResult{Name: "Docker running", Passed: true})
 
-  • Open Docker Desktop from your Applications folder
-  • Wait for the whale icon to stop animating
-  • Run baryo again`,
-		})
-		return results
-	}
-	results = append(results, CheckResult{Name: "Docker running", Passed: true})
-
-	// 3. Is Model Runner enabled? (inference socket exists)
-	if _, err := os.Stat(socketPath); err != nil {
-		results = append(results, CheckResult{
-			Name:   "Model Runner enabled",
-			Passed: false,
-			Message: fmt.Sprintf(`Docker Desktop is running, but the Model Runner feature is off.
+			// 3. Is Model Runner enabled? (inference socket exists)
+			if _, err := os.Stat(socketPath); err != nil {
+				results = append(results, CheckResult{
+					Name:   "Model Runner enabled",
+					Passed: false,
+					Message: fmt.Sprintf(`Docker Desktop is running, but the Model Runner feature is off.
 
   1. Open Docker Desktop → Settings → Features in development
   2. Enable "Docker Model Runner"
@@ -121,28 +188,26 @@ func runLocalChecks(socketPath string) []CheckResult {
 
   Expected socket: %s
   Learn more: https://docs.llm.com/desktop/features/model-runner/`, socketPath),
-		})
-		return results
-	}
-	results = append(results, CheckResult{Name: "Model Runner enabled", Passed: true})
+				})
+				// Docker is running but Model Runner is off — still check Ollama.
+			} else {
+				results = append(results, CheckResult{Name: "Model Runner enabled", Passed: true})
 
-	// 4. Are any models pulled?
-	models, err := llm.ListModels()
-	if err != nil {
-		results = append(results, CheckResult{
-			Name:   "Models available",
-			Passed: false,
-			Message: fmt.Sprintf(`Could not list models: %v
+				// 4. Are any models pulled?
+				models, err := llm.ListModels()
+				if err != nil {
+					results = append(results, CheckResult{
+						Name:   "Models available",
+						Passed: false,
+						Message: fmt.Sprintf(`Could not list models: %v
 
   Try running: docker model list`, err),
-		})
-		return results
-	}
-	if len(models) == 0 {
-		results = append(results, CheckResult{
-			Name:   "Models available",
-			Passed: false,
-			Message: `Docker Model Runner is ready, but no models are installed yet.
+					})
+				} else if len(models) == 0 {
+					results = append(results, CheckResult{
+						Name:   "Models available",
+						Passed: false,
+						Message: `Docker Model Runner is ready, but no models are installed yet.
 
   Pull a model to get started:
 
@@ -150,15 +215,45 @@ func runLocalChecks(socketPath string) []CheckResult {
     docker model pull ai/llama3.2
 
   Then run baryo again.`,
-		})
+					})
+				} else {
+					results = append(results, CheckResult{
+						Name:    "Models available",
+						Passed:  true,
+						Message: fmt.Sprintf("%d model(s) found", len(models)),
+					})
+					dockerReady = true
+				}
+			}
+		}
+	}
+
+	// If Docker is fully working, no need to check Ollama.
+	if dockerReady {
 		return results
 	}
-	results = append(results, CheckResult{
-		Name:   "Models available",
-		Passed: true,
-		Message: fmt.Sprintf("%d model(s) found", len(models)),
-	})
 
+	// Fall through to Ollama checks.
+	ollamaResults := runOllamaChecks()
+	ollamaOK := true
+	for _, r := range ollamaResults {
+		if !r.Passed {
+			ollamaOK = false
+			break
+		}
+	}
+
+	// If Ollama rescued the situation, demote Docker failures to warnings.
+	if ollamaOK {
+		for i := range results {
+			if !results[i].Passed {
+				results[i].Warning = true
+				results[i].Message = "" // drop verbose guidance
+			}
+		}
+	}
+
+	results = append(results, ollamaResults...)
 	return results
 }
 
@@ -173,6 +268,13 @@ func FormatResults(results []CheckResult) string {
 				b.WriteString(fmt.Sprintf(" — %s", r.Message))
 			}
 			b.WriteString("\n")
+		} else if r.Warning {
+			// Non-blocking failure — another backend rescued it.
+			b.WriteString(fmt.Sprintf("  \033[33m⚠\033[0m %s", r.Name))
+			if r.Message != "" {
+				b.WriteString(fmt.Sprintf(" — %s", r.Message))
+			}
+			b.WriteString("\n")
 		} else {
 			b.WriteString(fmt.Sprintf("  \033[31m✗\033[0m %s\n\n", r.Name))
 			b.WriteString(r.Message)
@@ -183,10 +285,10 @@ func FormatResults(results []CheckResult) string {
 	return b.String()
 }
 
-// AllPassed returns true if every check in the results passed.
+// AllPassed returns true if every check passed or is a non-blocking warning.
 func AllPassed(results []CheckResult) bool {
 	for _, r := range results {
-		if !r.Passed {
+		if !r.Passed && !r.Warning {
 			return false
 		}
 	}
