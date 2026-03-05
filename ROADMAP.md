@@ -17,12 +17,130 @@ The tradeoff is intentional: **privacy and cost vs. capability**. Most daily tas
 
 ---
 
-## High Impact — Major Features
+## Competitive Gap Analysis
 
-### ~~GitHub Workflow (PR, Issues, Code Review)~~ ✓ (v0.11.0)
-*Moved to Completed.*
+This section identifies the critical gaps between Baryo and the leading AI coding CLIs — **Claude Code**, **Aider**, and **OpenCode** — and prioritizes what to build to close (and exceed) them.
 
-### Multi-Source Search
+### Where Baryo Already Leads
+- **Local-first architecture** — no mandatory API key, runs on Docker/Ollama out of the box
+- **16+ provider support** — broadest cloud provider coverage (Gemini, OpenRouter, Anthropic, OpenAI, Bedrock, Groq, Mistral, DeepSeek, xAI, Cerebras, Perplexity, SambaNova, Cohere, HuggingFace, GitHub Models, Ollama Cloud)
+- **Deep research mode** — multi-round web research with structured reports
+- **Skills system** — 16 ported skills (pdf, docx, pptx, xlsx, etc.) with auto-activation
+- **SSH tunneling** — seamless remote Ollama access
+- **DevOps focus** — a differentiating pillar that competitors largely ignore
+- **Dynamic model-aware pipeline** — auto-adjusts tools/context for small vs large models
+
+### Critical Gaps to Close
+
+| Capability | Claude Code | Aider | OpenCode | Baryo |
+|---|---|---|---|---|
+| Test suite | Extensive | Extensive | Moderate | **None** |
+| Repo map / tree-sitter | Full AST | Full (with tags) | Partial | BM25 only |
+| Diff/patch strategies | search/replace | unified diff, whole file, udiff | diff-based | string replace only |
+| Extended thinking | Native | N/A | N/A | Parsed but not rendered |
+| Conversation branching | No | No | No | Checkpoints only |
+| Cost budget/limits | Per-session tracking | Per-session tracking | Basic | Tracking only, no limits |
+| Voice input | No | Yes | No | No |
+| LSP integration | No | No | Yes | No |
+| Undo granularity | Per-tool git revert | Git-based undo | Per-change | `/undo` last commit only |
+
+---
+
+## P0 — Foundation & Trust (v0.12)
+
+These are non-negotiable. Without them, power users and contributors will not trust Baryo for serious work.
+
+### Test Suite
+**Gap:** Zero test files exist in the entire codebase. Claude Code, Aider, and OpenCode all have extensive test coverage. This is the single biggest credibility gap.
+
+- Unit tests for core packages: `internal/llm` (streaming, tool loop, provider detection, pricing lookup), `internal/tools` (each tool executor), `internal/rag` (BM25 scoring, chunking), `internal/config` (YAML merge, env var precedence), `internal/index` (symbol parsing, incremental updates)
+- Integration tests for the tool loop: mock LLM endpoint → tool call → result → final response
+- Golden file tests for the Anthropic/Bedrock streaming adapters (record real SSE traces, replay in tests)
+- CI pipeline: GitHub Actions running `go test ./...` on every PR
+- Coverage target: 60%+ on `internal/llm`, `internal/tools`, `internal/config` within v0.12
+- Add `go vet` and `staticcheck` to CI
+
+### Smarter Diff/Edit Strategy
+**Gap:** Baryo only supports exact string replacement (`edit_file`). Aider supports 4 edit formats (unified diff, whole file, search/replace, udiff) and selects the best one per model. Claude Code uses search/replace with fuzzy matching.
+
+- Add **fuzzy string matching** to `edit_file` — tolerate whitespace differences, indentation shifts, and minor mismatches (Levenshtein distance threshold)
+- Add **unified diff mode** as an alternative edit format for models that produce diffs natively (DeepSeek, GPT-4, Claude)
+- Add **whole-file rewrite** mode for small files (<100 lines) where replacement is safer
+- Model-aware format selection: local small models get search/replace, cloud models can use unified diff
+- Show diff preview in TUI before applying (colored +/- lines) in `confirm` mode
+
+### Repo Map with Full AST Context
+**Gap:** Aider's repo map gives the model a complete function/class/type overview of the entire project using tree-sitter tags. Baryo has tree-sitter parsing in `internal/index` but only uses it for RAG chunking — it never sends a structured repo map to the model.
+
+- Generate a **condensed repo map** from the existing `index.Index` — list every file with its exported symbols (functions, types, interfaces, classes)
+- Inject repo map into the system prompt (or as a tool result on first turn) so the model knows the full project structure
+- Smart budget: compress repo map when context window is tight, expand for large-context models
+- Incremental updates: only re-parse changed files (already supported by `index.Update`)
+- Language coverage: Go, TypeScript, JavaScript, Python already parsed; add Rust, Java, C/C++ parsers
+
+### Extended Thinking Rendering
+**Gap:** Baryo already parses `<think>` blocks but doesn't render them. Claude Code natively shows extended thinking. This is a quick win.
+
+- Render `<think>` blocks as collapsible/dimmed sections in the TUI
+- `/thinking` toggle command (already planned) — show/hide thinking blocks
+- Stream thinking tokens in real-time (dimmed) so the user sees the model reasoning live
+- For Anthropic models: use the native `thinking` field from the Messages API instead of parsing XML
+
+---
+
+## P1 — Competitive Parity (v0.13)
+
+Features that match the best-in-class competitors and remove reasons for users to switch away.
+
+### Agentic Tool Loop Improvements
+**Gap:** Claude Code runs up to 200+ tool rounds in a single turn. Baryo caps at 5 (`maxToolRounds`). Aider supports unlimited rounds.
+
+- Raise `maxToolRounds` to 25 (configurable via `max_tool_rounds` in config)
+- Add `--max-turns` to interactive mode (currently only in headless)
+- **Parallel tool execution** — when the model requests multiple independent tool calls in one turn, execute them concurrently (currently sequential)
+- Add a **tool call cost estimator** — show estimated cost before executing expensive tool chains in `confirm` mode
+- Better tool result truncation — smart summarization instead of hard character cutoff
+
+### Cost Budget & Spend Limits
+**Gap:** Baryo tracks cost but has no guardrails. Claude Code and Aider let users set spending limits.
+
+- `cost_limit` config option (per-session dollar cap)
+- Warning at 80% of budget, hard stop at 100%
+- `/cost` already exists — extend with per-tool and per-round breakdown
+- Cumulative daily/weekly spend tracking across sessions
+
+### Conversation Branching
+**Gap:** No competitor has this well, but Baryo's checkpoint system is close. This would be a differentiator.
+
+- Extend `/checkpoint` + `/rewind` into full conversation branching
+- `/branch` within a conversation — fork the conversation at any point
+- Visual branch tree in `/sessions` view
+- Compare branches: show what each branch produced
+
+### Git Integration Depth
+**Gap:** Aider has the deepest git integration — auto-commits every change with descriptive messages, groups related changes, and supports `--auto-commit`. Claude Code auto-commits on request.
+
+- **Auto-commit mode** — optionally commit each successful edit with an AI-generated message (`auto_commit: true` in config)
+- **Semantic commit grouping** — batch related file changes into a single commit
+- Smarter `/undo` — undo individual tool actions, not just the last commit
+- `/stash` and `/stash pop` — stash current changes mid-conversation
+- Show git blame context for edited files so the model understands change history
+
+### LSP Integration
+**Gap:** OpenCode integrates with LSP for diagnostics, go-to-definition, and symbol lookup. This gives the model precise compiler-level feedback.
+
+- Connect to running LSP servers (gopls, typescript-language-server, pyright, rust-analyzer)
+- Feed LSP diagnostics (errors, warnings) into tool results after edits — more precise than running the linter
+- LSP-powered symbol lookup: resolve function signatures, type definitions, references
+- Auto-detect LSP servers by project type
+
+---
+
+## P2 — Differentiation (v0.14)
+
+Features that make Baryo the clear choice over competitors, especially for its target audience (local-first, DevOps-aware, multi-provider).
+
+### Multi-Source Search (already planned)
 Strengthen research by querying multiple sources simultaneously.
 
 - Parallel search across multiple providers (DDG + Brave + Tavily)
@@ -32,10 +150,15 @@ Strengthen research by querying multiple sources simultaneously.
 - Search result caching to avoid re-fetching within a session
 - Configurable number of pages to deep-read (currently 3, allow up to 10)
 
-### ~~Auto-Fix on Lint/Test~~ ✓ (v0.9.0)
-*Moved to Completed.*
+### Auto-Mode with Model Routing
+**Gap:** No competitor automatically routes tasks to the best model. Baryo has `auto_mode` config but it's basic tier-based routing.
 
-### Hooks System
+- **Intent classification** — analyze the user's prompt and route to the best model (fast model for simple questions, strong model for complex code changes)
+- Cost-aware routing: prefer cheaper models when the task doesn't need reasoning depth
+- Automatic fallback: if a local model fails a tool call, retry on a cloud model
+- Per-task routing: research tasks → Perplexity/Gemini, code tasks → Claude/GPT, quick edits → local model
+
+### Hooks System (already planned)
 Shell commands that run on events — pre-tool, post-tool, on-error, on-commit.
 
 - Define hooks in `~/.baryo/config.yaml` or `.baryo/config.yaml`
@@ -44,8 +167,8 @@ Shell commands that run on events — pre-tool, post-tool, on-error, on-commit.
 - Hook output shown in chat as tool results
 - Blocking hooks can cancel operations (e.g., pre-commit validation)
 
-### Subagent / Task Delegation
-Spawn specialized sub-tasks for parallel or isolated work. Inspired by Kimi CLI and Claude Code.
+### Subagent / Task Delegation (already planned)
+Spawn specialized sub-tasks for parallel or isolated work.
 
 - `/task "description"` — delegate a task to a sub-model call
 - Subagent runs in isolated context with its own message history
@@ -53,78 +176,65 @@ Spawn specialized sub-tasks for parallel or isolated work. Inspired by Kimi CLI 
 - Results merged back into main conversation
 - Use cases: research one topic while coding another, run tests in background
 
-### ~~RAG (Retrieval-Augmented Generation)~~ ✓ (v0.9.0)
-*Moved to Completed.*
-
----
-
-## Additive — Polish & Quality of Life
-
-### DevOps Toolkit
-Purpose-built tools for infrastructure, deployment, and container management.
-
-- `/deploy` — generate deployment files (Dockerfile, docker-compose, GitHub Actions, K8s, Terraform)
-- `/docker` — manage local containers (list, build, run, stop, logs, exec)
-- Docker Compose awareness and CI/CD pipeline generation by project type
-
-### ~~Project Scaffolding~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Shell Toggle (Ctrl-X)~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Model Switching Mid-Session~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Context Pinning~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Checkpoints & Rewind~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Notification on Completion~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Streaming Speed Metrics~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Multi-Modal Input~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Shell Completions~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Worktree Isolation~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Background Agents~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### ~~Sandboxed Code Execution~~ ✓ (v0.10.0)
-*Moved to Completed.*
-
-### Session Management Improvements
-Better organization and discovery of saved sessions.
-
-- Auto-generated session titles (not just hex IDs)
-- `/sessions --search <query>` to search past sessions by content
-- Session tagging/labeling
-- Auto-cleanup of old sessions (configurable retention)
-
-### Extended Thinking Display
-Show/hide model reasoning in a collapsible block.
-
-- `<think>` blocks already parsed — render them as collapsible sections
-- Toggle visibility with `/thinking` command
-- Dimmed or indented display to distinguish from actual response
-
-### Plugin System
+### Plugin System (already planned, expand scope)
 Allow users to add custom tools via config.
 
 - Tool definitions in YAML/JSON config files
 - Specify name, description, parameters, and shell command to execute
 - Loaded dynamically alongside built-in tools
 - Project-level plugins in `.baryo/plugins/` and global in `~/.baryo/plugins/`
+- **Community plugin registry** — curated list of community plugins on the website/repo
+- **Plugin hooks** — plugins can register for lifecycle events
+
+### DevOps Toolkit (already planned)
+Purpose-built tools for infrastructure, deployment, and container management.
+
+- `/deploy` — generate deployment files (Dockerfile, docker-compose, GitHub Actions, K8s, Terraform)
+- `/docker` — manage local containers (list, build, run, stop, logs, exec)
+- Docker Compose awareness and CI/CD pipeline generation by project type
+- **Infrastructure-as-Code review** — analyze Terraform/CloudFormation/Pulumi files for best practices
+- **Log analysis** — pipe container/service logs into Baryo for diagnosis
+
+---
+
+## P3 — Polish & Quality of Life (v0.15+)
+
+### Session Management Improvements (already planned)
+- Auto-generated session titles (not just hex IDs)
+- `/sessions --search <query>` to search past sessions by content
+- Session tagging/labeling
+- Auto-cleanup of old sessions (configurable retention)
+
+### Voice Input
+**Gap:** Aider supports voice input via the microphone. Unique differentiator for accessibility.
+
+- `/voice` command to start recording
+- Local transcription via Whisper (keeps the local-first promise)
+- Cloud transcription fallback for accuracy
+- Voice-to-command: natural language → slash command mapping
+
+### Multi-File Awareness
+- When the model edits file A, automatically show related files (imports, tests, interfaces) as context
+- Dependency graph awareness: editing a function should surface all callers
+- Test file association: editing `foo.go` should surface `foo_test.go`
+
+### TUI Improvements
+- Split-pane view: code on one side, conversation on the other
+- File tree sidebar (toggleable)
+- Inline code preview for `@mentions` before sending
+- Better progress indicators for long-running tool chains (progress bar, ETA)
+- Keyboard shortcuts reference overlay (`?` key)
+
+### Streaming Optimizations
+- **Speculative decoding awareness** — detect and leverage speculative decoding on supported providers
+- Streaming diff display — show edits being applied in real-time
+- Interruptible tool execution — `Ctrl-C` cancels the current tool without killing the conversation
+
+### Documentation & Onboarding
+- `baryo tutorial` — interactive walkthrough of key features
+- In-app help: `/help <topic>` with contextual examples
+- Video demos linked from README
+- Contributing guide for plugin authors
 
 ---
 
