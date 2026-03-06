@@ -123,6 +123,16 @@ var (
 	FitTooLargeStyle = lipgloss.NewStyle().
 				Foreground(adaptive("160", "167"))
 
+	// Thinking block styles (extended thinking rendering)
+	ThinkingStyle = lipgloss.NewStyle().
+			Faint(true).
+			Italic(true)
+
+	ThinkingLabelStyle = lipgloss.NewStyle().
+				Faint(true).
+				Bold(true).
+				Italic(true)
+
 	// Shell mode indicator
 	ShellModeStyle = lipgloss.NewStyle().
 			Bold(true).

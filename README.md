@@ -325,6 +325,7 @@ Baryo also includes explicit slash commands for when you want direct control. Ty
 | `/export [file]` | Export conversation to a file |
 | `/copy` | Copy last response to clipboard |
 | `/markdown` | Toggle markdown rendering |
+| `/thinking` | Toggle thinking block rendering |
 | `/doctor` | Run diagnostic checks |
 
 **Workflows:**
@@ -412,6 +413,20 @@ Assistant responses are rendered with full markdown formatting by default, inclu
 ```
 
 When enabled, code blocks display with syntax highlighting and text is formatted with headings, lists, and emphasis. Disable it with `/markdown` again to see raw plain text.
+
+### Extended thinking
+
+Some models emit "thinking" blocks (e.g. DeepSeek, QwQ with `<think>` tags, or Anthropic Claude with native extended thinking). Baryo strips these by default but can render them:
+
+```bash
+# Toggle during a session
+/thinking
+
+# Enable by default in config
+show_thinking: true
+```
+
+When enabled, thinking content appears dimmed and italic above the assistant's response. During streaming, the last few lines of thinking are shown in real-time. For Anthropic models (Claude 3.5 Sonnet, Claude Sonnet 4, Claude Opus 4), native extended thinking is used automatically when the API key is configured.
 
 ### Context management
 
@@ -639,6 +654,7 @@ system_prompt: "You are a helpful assistant. Be concise."
 | `BARYO_NOTIFICATIONS` | Enable desktop notifications (`true`/`1`/`yes`) |
 | `BARYO_SESSION_RETENTION_DAYS` | Auto-delete sessions older than N days |
 | `BARYO_SANDBOX` | Enable sandboxed code execution (`true`/`1`/`yes`) |
+| `BARYO_SHOW_THINKING` | Show model thinking blocks (`true`/`1`/`yes`) |
 
 ### Precedence
 
@@ -904,6 +920,8 @@ Available tools:
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read the contents of a file |
+| `edit_file` | Replace text in a file (exact + fuzzy whitespace matching, whole-file rewrite for small files) |
+| `apply_diff` | Apply a unified diff to a file (multi-hunk edits in one call) |
 | `glob` | Find files matching a pattern (supports `**`) |
 | `grep` | Search file contents by regex |
 | `list_directory` | List directory contents as a tree |
@@ -922,7 +940,7 @@ If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models, or mo
 
 ### Auto-fix on lint/test
 
-When enabled, Baryo automatically runs your project's linter and/or tests after every code-modifying tool call (`edit_file`, `write_file`, `delete_file`). Errors are appended to the tool result so the model sees them immediately and self-corrects.
+When enabled, Baryo automatically runs your project's linter and/or tests after every code-modifying tool call (`edit_file`, `apply_diff`, `write_file`, `delete_file`). Errors are appended to the tool result so the model sees them immediately and self-corrects.
 
 ```yaml
 # ~/.baryo/config.yaml or .baryo/config.yaml

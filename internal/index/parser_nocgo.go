@@ -19,6 +19,10 @@ func newGoParser() *langParser     { return &langParser{} }
 func newJSParser() *langParser     { return &langParser{} }
 func newTSParser() *langParser     { return &langParser{} }
 func newPythonParser() *langParser { return &langParser{} }
+func newRustParser() *langParser   { return &langParser{} }
+func newJavaParser() *langParser   { return &langParser{} }
+func newCParser() *langParser      { return &langParser{} }
+func newCPPParser() *langParser    { return &langParser{} }
 
 // ParseFile returns file metadata without symbol extraction when CGO is disabled.
 func ParseFile(path, language string, content []byte) (*FileSymbols, error) {

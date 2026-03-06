@@ -86,6 +86,7 @@ type FunctionDefinition struct {
 // StreamEvent is the unified event type emitted by the streaming pipeline.
 type StreamEvent struct {
 	Token          string           // text token from the model
+	ThinkingToken  string           // thinking token from native extended thinking
 	Error          string           // error message
 	ToolStart      *ToolStartEvent  // tool execution starting
 	ToolResult     *ToolResultEvent // tool execution completed

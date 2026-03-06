@@ -24,6 +24,12 @@ type anthropicRequest struct {
 	System    string              `json:"system,omitempty"`
 	Tools     []anthropicTool     `json:"tools,omitempty"`
 	Stream    bool                `json:"stream"`
+	Thinking  *anthropicThinking  `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type anthropicMessage struct {
@@ -91,6 +97,22 @@ type anthropicSSEMessageDelta struct {
 	Usage struct {
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+}
+
+// isThinkingCapable returns true if the model supports Anthropic's extended thinking API.
+func isThinkingCapable(model string) bool {
+	thinkingModels := []string{
+		"claude-3-5-sonnet",
+		"claude-3-7-sonnet",
+		"claude-sonnet-4",
+		"claude-opus-4",
+	}
+	for _, prefix := range thinkingModels {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Conversion helpers ---
@@ -190,6 +212,18 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 			reqBody.Tools = convertToAnthropicTools(tools)
 		}
 
+		// Enable extended thinking for capable models.
+		if isThinkingCapable(model) {
+			budgetTokens := maxTokens / 2
+			if budgetTokens < 1024 {
+				budgetTokens = 1024
+			}
+			reqBody.Thinking = &anthropicThinking{
+				Type:         "enabled",
+				BudgetTokens: budgetTokens,
+			}
+		}
+
 		body, err := json.Marshal(reqBody)
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
@@ -234,6 +268,9 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 		}
 		toolCalls := make(map[int]*toolCallAcc)
 
+		// Track thinking block indices.
+		thinkingBlocks := make(map[int]bool)
+
 		var inputTokens, outputTokens int
 		var finishReason string
 
@@ -267,11 +304,14 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 			case "content_block_start":
 				var block anthropicSSEContentBlockStart
 				if err := json.Unmarshal([]byte(data), &block); err == nil {
-					if block.ContentBlock.Type == "tool_use" {
+					switch block.ContentBlock.Type {
+					case "tool_use":
 						toolCalls[block.Index] = &toolCallAcc{
 							id:       block.ContentBlock.ID,
 							funcName: block.ContentBlock.Name,
 						}
+					case "thinking":
+						thinkingBlocks[block.Index] = true
 					}
 				}
 
@@ -284,6 +324,14 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 						case ch <- StreamEvent{Token: delta.Delta.Text}:
 						case <-ctx.Done():
 							return
+						}
+					case "thinking_delta":
+						if thinkingBlocks[delta.Index] {
+							select {
+							case ch <- StreamEvent{ThinkingToken: delta.Delta.Text}:
+							case <-ctx.Done():
+								return
+							}
 						}
 					case "input_json_delta":
 						if tc, ok := toolCalls[delta.Index]; ok {

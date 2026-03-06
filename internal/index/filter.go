@@ -22,6 +22,14 @@ var extToLang = map[string]string{
 	".ts":  "typescript",
 	".tsx": "typescript",
 	".py":  "python",
+	".rs":  "rust",
+	".java": "java",
+	".c":   "c",
+	".h":   "c",
+	".cpp": "cpp",
+	".cc":  "cpp",
+	".cxx": "cpp",
+	".hpp": "cpp",
 }
 
 // skipDirs are directories that should always be skipped during discovery.

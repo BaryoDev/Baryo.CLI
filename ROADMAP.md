@@ -34,10 +34,10 @@ This section identifies the critical gaps between Baryo and the leading AI codin
 
 | Capability | Claude Code | Aider | OpenCode | Baryo |
 |---|---|---|---|---|
-| Test suite | Extensive | Extensive | Moderate | **None** |
-| Repo map / tree-sitter | Full AST | Full (with tags) | Partial | BM25 only |
-| Diff/patch strategies | search/replace | unified diff, whole file, udiff | diff-based | string replace only |
-| Extended thinking | Native | N/A | N/A | Parsed but not rendered |
+| Test suite | Extensive | Extensive | Moderate | **Core packages covered** |
+| Repo map / tree-sitter | Full AST | Full (with tags) | Partial | 8 languages (Go, TS, JS, Python, Rust, Java, C, C++) |
+| Diff/patch strategies | search/replace | unified diff, whole file, udiff | diff-based | exact + fuzzy match, unified diff, whole-file rewrite |
+| Extended thinking | Native | N/A | N/A | Native Anthropic + `<think>` block rendering |
 | Conversation branching | No | No | No | Checkpoints only |
 | Cost budget/limits | Per-session tracking | Per-session tracking | Basic | Tracking only, no limits |
 | Voice input | No | Yes | No | No |
@@ -46,45 +46,9 @@ This section identifies the critical gaps between Baryo and the leading AI codin
 
 ---
 
-## P0 — Foundation & Trust (v0.12)
+## ~~P0 — Foundation & Trust (v0.12)~~ DONE
 
-These are non-negotiable. Without them, power users and contributors will not trust Baryo for serious work.
-
-### Test Suite
-**Gap:** Zero test files exist in the entire codebase. Claude Code, Aider, and OpenCode all have extensive test coverage. This is the single biggest credibility gap.
-
-- Unit tests for core packages: `internal/llm` (streaming, tool loop, provider detection, pricing lookup), `internal/tools` (each tool executor), `internal/rag` (BM25 scoring, chunking), `internal/config` (YAML merge, env var precedence), `internal/index` (symbol parsing, incremental updates)
-- Integration tests for the tool loop: mock LLM endpoint → tool call → result → final response
-- Golden file tests for the Anthropic/Bedrock streaming adapters (record real SSE traces, replay in tests)
-- CI pipeline: GitHub Actions running `go test ./...` on every PR
-- Coverage target: 60%+ on `internal/llm`, `internal/tools`, `internal/config` within v0.12
-- Add `go vet` and `staticcheck` to CI
-
-### Smarter Diff/Edit Strategy
-**Gap:** Baryo only supports exact string replacement (`edit_file`). Aider supports 4 edit formats (unified diff, whole file, search/replace, udiff) and selects the best one per model. Claude Code uses search/replace with fuzzy matching.
-
-- Add **fuzzy string matching** to `edit_file` — tolerate whitespace differences, indentation shifts, and minor mismatches (Levenshtein distance threshold)
-- Add **unified diff mode** as an alternative edit format for models that produce diffs natively (DeepSeek, GPT-4, Claude)
-- Add **whole-file rewrite** mode for small files (<100 lines) where replacement is safer
-- Model-aware format selection: local small models get search/replace, cloud models can use unified diff
-- Show diff preview in TUI before applying (colored +/- lines) in `confirm` mode
-
-### Repo Map with Full AST Context
-**Gap:** Aider's repo map gives the model a complete function/class/type overview of the entire project using tree-sitter tags. Baryo has tree-sitter parsing in `internal/index` but only uses it for RAG chunking — it never sends a structured repo map to the model.
-
-- Generate a **condensed repo map** from the existing `index.Index` — list every file with its exported symbols (functions, types, interfaces, classes)
-- Inject repo map into the system prompt (or as a tool result on first turn) so the model knows the full project structure
-- Smart budget: compress repo map when context window is tight, expand for large-context models
-- Incremental updates: only re-parse changed files (already supported by `index.Update`)
-- Language coverage: Go, TypeScript, JavaScript, Python already parsed; add Rust, Java, C/C++ parsers
-
-### Extended Thinking Rendering
-**Gap:** Baryo already parses `<think>` blocks but doesn't render them. Claude Code natively shows extended thinking. This is a quick win.
-
-- Render `<think>` blocks as collapsible/dimmed sections in the TUI
-- `/thinking` toggle command (already planned) — show/hide thinking blocks
-- Stream thinking tokens in real-time (dimmed) so the user sees the model reasoning live
-- For Anthropic models: use the native `thinking` field from the Messages API instead of parsing XML
+All P0 items completed. See the Completed section below for details.
 
 ---
 
@@ -240,6 +204,36 @@ Purpose-built tools for infrastructure, deployment, and container management.
 
 ## Completed
 
+### Foundation & Trust (v0.12.0)
+
+**Test Suite + CI Pipeline:**
+- GitHub Actions CI workflow (vet, test, build on ubuntu + macos)
+- Makefile with build, test, vet, lint, fmt, coverage targets
+- 100+ unit tests across 6 core packages: `internal/llm`, `internal/tools`, `internal/config`, `internal/rag`, `internal/index`, `internal/search`
+- Table-driven tests for provider detection, pricing lookup, BM25 ranking, config merging, HTML parsing, tool execution
+
+**Smarter Diff/Edit Strategy:**
+- `edit_file` fuzzy whitespace matching — tolerates tab/space and indentation differences
+- `edit_file` whole-file rewrite mode for files under 100 lines (empty `old_string`)
+- New `apply_diff` tool — unified diff parser with multi-hunk support for bulk edits in one call
+- Context line validation to prevent misapplied patches
+
+**Repo Map Language Parsers:**
+- Added Rust, Java, C, C++ tree-sitter parsers (8 languages total)
+- Rust: functions, structs, enums, traits, impl methods
+- Java: classes, interfaces, methods, constructors
+- C: functions, structs, enums
+- C++: everything from C plus classes with method extraction
+- New file extensions: `.rs`, `.java`, `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`
+
+**Extended Thinking Rendering:**
+- `show_thinking` config field + `BARYO_SHOW_THINKING` env var
+- `/thinking` toggle command in TUI
+- `<think>` block parsing returns extracted thinking content
+- Native Anthropic extended thinking API support (Claude 3.5 Sonnet, Claude Sonnet 4, Claude Opus 4)
+- `ThinkingToken` events streamed in real-time with dimmed/italic rendering
+- Thinking content shown above assistant response in history
+
 ### GitHub Workflow (v0.11.0)
 - `/pr` — create a PR from current branch with AI-generated title and description
 - `/pr review [number]` — review a PR (fetch diff + comments, stream analysis)
@@ -298,7 +292,7 @@ Purpose-built tools for infrastructure, deployment, and container management.
 - `--sandbox` flag to enable
 
 ### Auto-Fix on Lint/Test (v0.9.0)
-- Auto-run linter and/or tests after `edit_file`, `write_file`, `delete_file` tool calls
+- Auto-run linter and/or tests after `edit_file`, `apply_diff`, `write_file`, `delete_file` tool calls
 - Errors appended to tool result so model sees and self-corrects immediately
 - Auto-detect project type: Go (`golangci-lint`/`go vet`), Node (`eslint`), Rust (`cargo clippy`), Python (`flake8`)
 - Auto-detect test runner: `go test`, `jest`, `cargo test`, `pytest`
@@ -352,7 +346,8 @@ Purpose-built tools for infrastructure, deployment, and container management.
 
 ### File Write & Edit Tools
 - `write_file` tool — create or overwrite files with auto-directory creation
-- `edit_file` tool — exact string replacement in existing files
+- `edit_file` tool — string replacement with fuzzy whitespace matching and whole-file rewrite mode
+- `apply_diff` tool — unified diff application with multi-hunk support
 - `delete_file` tool — remove files with permission gating
 - Multi-file editing in a single turn
 - Permission gating via confirm/suggest/auto modes
@@ -427,7 +422,7 @@ Purpose-built tools for infrastructure, deployment, and container management.
 - Custom skill creation support
 
 ### Tool Calling (v0.2.0)
-- Built-in tools: `read_file`, `write_file`, `edit_file`, `delete_file`, `glob`, `grep`, `list_directory`, `git_status`, `git_diff`, `git_log`, `gh`, `shell`
+- Built-in tools: `read_file`, `write_file`, `edit_file`, `apply_diff`, `delete_file`, `glob`, `grep`, `list_directory`, `git_status`, `git_diff`, `git_log`, `gh`, `shell`
 - Native OpenAI tool-calling API + text-based fallback parser
 - Git workflow commands: `/diff`, `/commit`, `/review`, `/undo`
 - `/run` for shell commands, `/ask` for tool-free answers

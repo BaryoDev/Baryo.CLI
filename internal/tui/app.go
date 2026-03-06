@@ -55,6 +55,7 @@ type AppModel struct {
 	autoModeCfg      AutoModeConfig     // auto model routing
 	notifications    bool               // desktop notifications on completion
 	sandbox          bool               // sandboxed code execution
+	showThinking     bool               // render thinking blocks
 	worktreeBranch   string             // git worktree branch name
 
 	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
@@ -216,6 +217,13 @@ func WithNotifications(enabled bool) AppOption {
 func WithSandbox(enabled bool) AppOption {
 	return func(a *AppModel) {
 		a.sandbox = enabled
+	}
+}
+
+// WithShowThinking enables rendering of model thinking blocks.
+func WithShowThinking(enabled bool) AppOption {
+	return func(a *AppModel) {
+		a.showThinking = enabled
 	}
 }
 
@@ -647,6 +655,7 @@ func (m *AppModel) transitionToChat(model llm.Model) tea.Cmd {
 	m.chat.autoModeCfg = m.autoModeCfg
 	m.chat.notifications = m.notifications
 	m.chat.sandbox = m.sandbox
+	m.chat.showThinking = m.showThinking
 	m.chat.worktreeBranch = m.worktreeBranch
 	if m.repoIndex != nil {
 		m.chat.repoIndex = m.repoIndex

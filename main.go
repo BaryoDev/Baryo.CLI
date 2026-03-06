@@ -271,6 +271,10 @@ func main() {
 			opts = append(opts, tui.WithSandbox(true))
 		}
 
+		if cfg.ShowThinkingEnabled() {
+			opts = append(opts, tui.WithShowThinking(true))
+		}
+
 		if wt != nil {
 			opts = append(opts, tui.WithWorktree(wt.Branch))
 		}

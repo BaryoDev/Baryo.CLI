@@ -155,6 +155,10 @@ type ChatModel struct {
 	// Shell mode (Ctrl-X toggle)
 	shellMode bool
 
+	// Extended thinking rendering
+	showThinking    bool   // whether to render thinking blocks
+	thinkingContent string // accumulated thinking content for current stream
+
 	// Sandboxed code execution
 	sandbox bool
 
@@ -205,6 +209,7 @@ const (
 	roleTool      entryRole = "tool"
 	roleError     entryRole = "error"
 	roleInfo      entryRole = "info"
+	roleThinking  entryRole = "thinking"
 )
 
 // chatEntry is a rendered message in the history.
@@ -230,6 +235,7 @@ func (m *ChatModel) resetStreamState() {
 	m.isStream = false
 	m.toolStatus = ""
 	m.streamTokenCount = 0
+	m.thinkingContent = ""
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 		m.cancelFunc = nil
@@ -1048,7 +1054,21 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			// Streaming complete — save to history and auto-save session
 			if m.streaming != "" {
-				cleaned, _ := stripThinkBlock(m.streaming)
+				cleaned, thinkText, _ := stripThinkBlock(m.streaming)
+				// Insert thinking entry before assistant entry if enabled.
+				if m.showThinking && thinkText != "" {
+					m.history = append(m.history, chatEntry{
+						role:    roleThinking,
+						content: thinkText,
+					})
+				}
+				// Also include native thinking content if available.
+				if m.showThinking && m.thinkingContent != "" && thinkText == "" {
+					m.history = append(m.history, chatEntry{
+						role:    roleThinking,
+						content: m.thinkingContent,
+					})
+				}
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
 						role:    roleAssistant,
@@ -1304,7 +1324,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if evt.Error != "" {
 			// If we had partial content, keep it in history
 			if m.streaming != "" {
-				cleaned, _ := stripThinkBlock(m.streaming)
+				cleaned, _, _ := stripThinkBlock(m.streaming)
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
 						role:    roleAssistant,
@@ -1335,7 +1355,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if evt.ToolStart != nil {
 			// Flush any accumulated text before tool use.
 			if m.streaming != "" {
-				cleaned, _ := stripThinkBlock(m.streaming)
+				cleaned, _, _ := stripThinkBlock(m.streaming)
 				if cleaned != "" {
 					m.history = append(m.history, chatEntry{
 						role:    roleAssistant,
@@ -1366,10 +1386,22 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, waitForEvent(m.eventCh)
 		}
 
+		if evt.ThinkingToken != "" {
+			m.thinkingContent += evt.ThinkingToken
+			m.thinking = true
+			m.updateViewport()
+			return m, waitForEvent(m.eventCh)
+		}
+
 		if evt.Token != "" {
 			m.streaming += evt.Token
 			m.streamTokenCount++
-			_, m.thinking = stripThinkBlock(m.streaming)
+			if m.thinkingContent != "" {
+				// Transitioned from thinking to content.
+				m.thinking = false
+			} else {
+				_, _, m.thinking = stripThinkBlock(m.streaming)
+			}
 			m.updateViewport()
 		}
 		return m, waitForEvent(m.eventCh)
@@ -2003,6 +2035,19 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		msg := "Markdown rendering enabled."
 		if !m.markdown {
 			msg = "Markdown rendering disabled."
+		}
+		m.history = append(m.history, chatEntry{
+			role:    roleAssistant,
+			content: msg,
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/thinking":
+		m.showThinking = !m.showThinking
+		msg := "Thinking rendering enabled."
+		if !m.showThinking {
+			msg = "Thinking rendering disabled."
 		}
 		m.history = append(m.history, chatEntry{
 			role:    roleAssistant,
@@ -4036,6 +4081,7 @@ func (m ChatModel) handleHelp() (ChatModel, tea.Cmd) {
   /export [file]     Export conversation to file
   /copy              Copy last response to clipboard
   /markdown          Toggle markdown rendering
+  /thinking          Toggle thinking block rendering
   /mcp               List connected MCP servers and tools
   /setup             Download/update starter skills
   /doctor            Run diagnostic checks
@@ -5276,14 +5322,16 @@ func stripHallucinatedToolCalls(text string) string {
 }
 
 // stripThinkBlock removes <think>...</think> content from streamed text.
-// Returns the cleaned text and whether we're currently inside a think block.
-func stripThinkBlock(s string) (cleaned string, isThinking bool) {
+// Returns cleaned text (without think blocks), extracted think content,
+// and whether we're currently inside an incomplete think block.
+func stripThinkBlock(s string) (cleaned string, thinkContent string, isThinking bool) {
 	// Fast path: no think tag at all.
 	if !strings.Contains(s, "<think>") {
-		return s, false
+		return s, "", false
 	}
 
 	result := s
+	var thinkParts []string
 	for {
 		start := strings.Index(result, "<think>")
 		if start == -1 {
@@ -5292,13 +5340,24 @@ func stripThinkBlock(s string) (cleaned string, isThinking bool) {
 		end := strings.Index(result[start:], "</think>")
 		if end == -1 {
 			// Still inside a think block — strip from <think> onward.
-			return strings.TrimSpace(result[:start]), true
+			thinkParts = append(thinkParts, result[start+len("<think>"):])
+			return strings.TrimSpace(result[:start]), strings.Join(thinkParts, "\n"), true
 		}
-		// Remove the complete think block.
+		// Extract and remove the complete think block.
+		thinkParts = append(thinkParts, result[start+len("<think>"):start+end])
 		endPos := start + end + len("</think>")
 		result = result[:start] + result[endPos:]
 	}
-	return strings.TrimSpace(result), false
+	return strings.TrimSpace(result), strings.Join(thinkParts, "\n"), false
+}
+
+// truncateThinking returns the last N lines of thinking content for streaming display.
+func truncateThinking(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return "...\n" + strings.Join(lines[len(lines)-maxLines:], "\n")
 }
 
 // formatTokenCount formats a token count for display (e.g. 3160 → "3.2k").
@@ -5415,6 +5474,10 @@ func (m *ChatModel) updateViewport() {
 				}
 				b.WriteString(prefixWrap(rendered, border, m.width))
 			}
+		case roleThinking:
+			thinkLabel := ThinkingLabelStyle.Render("thinking")
+			thinkText := ThinkingStyle.Render(entry.content)
+			b.WriteString(prefixWrap(thinkLabel+"\n"+thinkText, border, m.width))
 		case roleInfo:
 			b.WriteString(prefixWrap(DimStyle.Render(entry.content), border, m.width))
 		case roleAssistant:
@@ -5440,9 +5503,19 @@ func (m *ChatModel) updateViewport() {
 		b.WriteString(prefixWrap(ToolLabelStyle.Render(frame+" "+m.toolStatus), border, m.width) + "\n")
 	}
 
+	// Show thinking content during streaming (if enabled).
+	if m.isStream && m.showThinking {
+		// Show native thinking tokens if available.
+		if m.thinkingContent != "" && m.thinking {
+			thinkLabel := ThinkingLabelStyle.Render("thinking...")
+			thinkText := ThinkingStyle.Render(truncateThinking(m.thinkingContent, 5))
+			b.WriteString(prefixWrap(thinkLabel+"\n"+thinkText, border, m.width) + "\n")
+		}
+	}
+
 	// Show streaming text (with think blocks stripped)
 	if m.isStream && m.streaming != "" {
-		displayText, _ := stripThinkBlock(m.streaming)
+		displayText, _, _ := stripThinkBlock(m.streaming)
 		if displayText != "" {
 			if m.markdown {
 				rendered := RenderMarkdown(displayText, m.width-2)

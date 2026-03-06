@@ -13,9 +13,13 @@ import (
 	"time"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/c"
+	"github.com/smacker/go-tree-sitter/cpp"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
@@ -57,6 +61,38 @@ func newPythonParser() *langParser {
 	}
 }
 
+// newRustParser creates a parser for Rust source files.
+func newRustParser() *langParser {
+	return &langParser{
+		lang:    rust.GetLanguage(),
+		extract: extractRust,
+	}
+}
+
+// newJavaParser creates a parser for Java source files.
+func newJavaParser() *langParser {
+	return &langParser{
+		lang:    java.GetLanguage(),
+		extract: extractJava,
+	}
+}
+
+// newCParser creates a parser for C source files.
+func newCParser() *langParser {
+	return &langParser{
+		lang:    c.GetLanguage(),
+		extract: extractC,
+	}
+}
+
+// newCPPParser creates a parser for C++ source files.
+func newCPPParser() *langParser {
+	return &langParser{
+		lang:    cpp.GetLanguage(),
+		extract: extractCPP,
+	}
+}
+
 // ParseFile parses a source file and extracts symbols.
 func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 	parsers := map[string]*langParser{
@@ -64,6 +100,10 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 		"javascript": newJSParser(),
 		"typescript": newTSParser(),
 		"python":     newPythonParser(),
+		"rust":       newRustParser(),
+		"java":       newJavaParser(),
+		"c":          newCParser(),
+		"cpp":        newCPPParser(),
 	}
 
 	lp, ok := parsers[language]
@@ -517,4 +557,460 @@ func extractPythonNode(n *sitter.Node, src []byte, parentClass string) []Symbol 
 		}
 	}
 	return symbols
+}
+
+// extractRust extracts symbols from a Rust AST.
+func extractRust(root *sitter.Node, src []byte) []Symbol {
+	var symbols []Symbol
+	for i := 0; i < int(root.ChildCount()); i++ {
+		child := root.Child(i)
+		switch child.Type() {
+		case "function_item":
+			name := childByField(child, "name")
+			params := childByField(child, "parameters")
+			returnType := childByField(child, "return_type")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			sig := "fn " + nameStr
+			if params != nil {
+				sig += nodeText(params, src)
+			}
+			if returnType != nil {
+				sig += " -> " + nodeText(returnType, src)
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindFunction,
+				Name:      nameStr,
+				Signature: sig,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "struct_item":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindType,
+				Name:      nameStr,
+				Signature: "struct " + nameStr,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "enum_item":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindType,
+				Name:      nameStr,
+				Signature: "enum " + nameStr,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "trait_item":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindInterface,
+				Name:      nameStr,
+				Signature: "trait " + nameStr,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "impl_item":
+			// Extract methods from impl blocks.
+			typeName := childByField(child, "type")
+			typeStr := ""
+			if typeName != nil {
+				typeStr = nodeText(typeName, src)
+			}
+			body := childByField(child, "body")
+			if body != nil {
+				for j := 0; j < int(body.ChildCount()); j++ {
+					member := body.Child(j)
+					if member.Type() == "function_item" {
+						name := childByField(member, "name")
+						params := childByField(member, "parameters")
+						returnType := childByField(member, "return_type")
+						nameStr := ""
+						if name != nil {
+							nameStr = nodeText(name, src)
+						}
+						sig := "fn " + nameStr
+						if params != nil {
+							sig += nodeText(params, src)
+						}
+						if returnType != nil {
+							sig += " -> " + nodeText(returnType, src)
+						}
+						symbols = append(symbols, Symbol{
+							Kind:      KindMethod,
+							Name:      nameStr,
+							Signature: sig,
+							Parent:    typeStr,
+							Line:      int(member.StartPoint().Row) + 1,
+						})
+					}
+				}
+			}
+		}
+	}
+	return symbols
+}
+
+// extractJava extracts symbols from a Java AST.
+func extractJava(root *sitter.Node, src []byte) []Symbol {
+	var symbols []Symbol
+	for i := 0; i < int(root.ChildCount()); i++ {
+		child := root.Child(i)
+		symbols = append(symbols, extractJavaNode(child, src, "")...)
+	}
+	return symbols
+}
+
+func extractJavaNode(n *sitter.Node, src []byte, parentClass string) []Symbol {
+	var symbols []Symbol
+	switch n.Type() {
+	case "class_declaration":
+		name := childByField(n, "name")
+		nameStr := ""
+		if name != nil {
+			nameStr = nodeText(name, src)
+		}
+		symbols = append(symbols, Symbol{
+			Kind:      KindClass,
+			Name:      nameStr,
+			Signature: "class " + nameStr,
+			Line:      int(n.StartPoint().Row) + 1,
+		})
+		// Extract methods from class body.
+		body := childByField(n, "body")
+		if body != nil {
+			for j := 0; j < int(body.ChildCount()); j++ {
+				member := body.Child(j)
+				symbols = append(symbols, extractJavaNode(member, src, nameStr)...)
+			}
+		}
+
+	case "interface_declaration":
+		name := childByField(n, "name")
+		nameStr := ""
+		if name != nil {
+			nameStr = nodeText(name, src)
+		}
+		symbols = append(symbols, Symbol{
+			Kind:      KindInterface,
+			Name:      nameStr,
+			Signature: "interface " + nameStr,
+			Line:      int(n.StartPoint().Row) + 1,
+		})
+		// Extract methods from interface body.
+		body := childByField(n, "body")
+		if body != nil {
+			for j := 0; j < int(body.ChildCount()); j++ {
+				member := body.Child(j)
+				symbols = append(symbols, extractJavaNode(member, src, nameStr)...)
+			}
+		}
+
+	case "method_declaration", "constructor_declaration":
+		name := childByField(n, "name")
+		params := childByField(n, "parameters")
+		nameStr := ""
+		if name != nil {
+			nameStr = nodeText(name, src)
+		}
+		sig := nameStr
+		if params != nil {
+			sig += nodeText(params, src)
+		}
+		// Prepend return type for methods.
+		typeNode := childByField(n, "type")
+		if typeNode != nil {
+			sig = nodeText(typeNode, src) + " " + sig
+		}
+		symbols = append(symbols, Symbol{
+			Kind:      KindMethod,
+			Name:      nameStr,
+			Signature: sig,
+			Parent:    parentClass,
+			Line:      int(n.StartPoint().Row) + 1,
+		})
+	}
+	return symbols
+}
+
+// extractC extracts symbols from a C AST.
+func extractC(root *sitter.Node, src []byte) []Symbol {
+	var symbols []Symbol
+	for i := 0; i < int(root.ChildCount()); i++ {
+		child := root.Child(i)
+		switch child.Type() {
+		case "function_definition":
+			declarator := childByField(child, "declarator")
+			nameStr := extractDeclaratorName(declarator, src)
+			sig := strings.TrimSpace(nodeText(child, src))
+			// Truncate at opening brace to get just the signature.
+			if idx := strings.Index(sig, "{"); idx > 0 {
+				sig = strings.TrimSpace(sig[:idx])
+			}
+			if len(sig) > 120 {
+				sig = sig[:117] + "..."
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindFunction,
+				Name:      nameStr,
+				Signature: sig,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "struct_specifier":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			if nameStr != "" {
+				symbols = append(symbols, Symbol{
+					Kind:      KindType,
+					Name:      nameStr,
+					Signature: "struct " + nameStr,
+					Line:      int(child.StartPoint().Row) + 1,
+				})
+			}
+
+		case "enum_specifier":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			if nameStr != "" {
+				symbols = append(symbols, Symbol{
+					Kind:      KindType,
+					Name:      nameStr,
+					Signature: "enum " + nameStr,
+					Line:      int(child.StartPoint().Row) + 1,
+				})
+			}
+
+		case "declaration":
+			// Top-level declarations may contain struct/enum specifiers.
+			for j := 0; j < int(child.ChildCount()); j++ {
+				spec := child.Child(j)
+				if spec.Type() == "struct_specifier" || spec.Type() == "enum_specifier" {
+					name := childByField(spec, "name")
+					nameStr := ""
+					if name != nil {
+						nameStr = nodeText(name, src)
+					}
+					if nameStr != "" {
+						kind := KindType
+						prefix := "struct "
+						if spec.Type() == "enum_specifier" {
+							prefix = "enum "
+						}
+						symbols = append(symbols, Symbol{
+							Kind:      kind,
+							Name:      nameStr,
+							Signature: prefix + nameStr,
+							Line:      int(spec.StartPoint().Row) + 1,
+						})
+					}
+				}
+			}
+		}
+	}
+	return symbols
+}
+
+// extractCPP extracts symbols from a C++ AST (extends C with class support).
+func extractCPP(root *sitter.Node, src []byte) []Symbol {
+	var symbols []Symbol
+	for i := 0; i < int(root.ChildCount()); i++ {
+		child := root.Child(i)
+		switch child.Type() {
+		case "function_definition":
+			declarator := childByField(child, "declarator")
+			nameStr := extractDeclaratorName(declarator, src)
+			sig := strings.TrimSpace(nodeText(child, src))
+			if idx := strings.Index(sig, "{"); idx > 0 {
+				sig = strings.TrimSpace(sig[:idx])
+			}
+			if len(sig) > 120 {
+				sig = sig[:117] + "..."
+			}
+			symbols = append(symbols, Symbol{
+				Kind:      KindFunction,
+				Name:      nameStr,
+				Signature: sig,
+				Line:      int(child.StartPoint().Row) + 1,
+			})
+
+		case "class_specifier":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			if nameStr != "" {
+				symbols = append(symbols, Symbol{
+					Kind:      KindClass,
+					Name:      nameStr,
+					Signature: "class " + nameStr,
+					Line:      int(child.StartPoint().Row) + 1,
+				})
+				// Extract methods from class body.
+				body := childByField(child, "body")
+				if body != nil {
+					for j := 0; j < int(body.ChildCount()); j++ {
+						member := body.Child(j)
+						if member.Type() == "function_definition" {
+							decl := childByField(member, "declarator")
+							mName := extractDeclaratorName(decl, src)
+							mSig := strings.TrimSpace(nodeText(member, src))
+							if idx := strings.Index(mSig, "{"); idx > 0 {
+								mSig = strings.TrimSpace(mSig[:idx])
+							}
+							if len(mSig) > 120 {
+								mSig = mSig[:117] + "..."
+							}
+							symbols = append(symbols, Symbol{
+								Kind:      KindMethod,
+								Name:      mName,
+								Signature: mSig,
+								Parent:    nameStr,
+								Line:      int(member.StartPoint().Row) + 1,
+							})
+						} else if member.Type() == "declaration" {
+							// Method declaration (not definition).
+							decl := childByField(member, "declarator")
+							mName := extractDeclaratorName(decl, src)
+							if mName != "" {
+								mSig := strings.TrimSuffix(strings.TrimSpace(nodeText(member, src)), ";")
+								symbols = append(symbols, Symbol{
+									Kind:      KindMethod,
+									Name:      mName,
+									Signature: mSig,
+									Parent:    nameStr,
+									Line:      int(member.StartPoint().Row) + 1,
+								})
+							}
+						}
+					}
+				}
+			}
+
+		case "struct_specifier":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			if nameStr != "" {
+				symbols = append(symbols, Symbol{
+					Kind:      KindType,
+					Name:      nameStr,
+					Signature: "struct " + nameStr,
+					Line:      int(child.StartPoint().Row) + 1,
+				})
+			}
+
+		case "enum_specifier":
+			name := childByField(child, "name")
+			nameStr := ""
+			if name != nil {
+				nameStr = nodeText(name, src)
+			}
+			if nameStr != "" {
+				symbols = append(symbols, Symbol{
+					Kind:      KindType,
+					Name:      nameStr,
+					Signature: "enum " + nameStr,
+					Line:      int(child.StartPoint().Row) + 1,
+				})
+			}
+
+		case "declaration":
+			for j := 0; j < int(child.ChildCount()); j++ {
+				spec := child.Child(j)
+				switch spec.Type() {
+				case "struct_specifier", "enum_specifier":
+					name := childByField(spec, "name")
+					nameStr := ""
+					if name != nil {
+						nameStr = nodeText(name, src)
+					}
+					if nameStr != "" {
+						kind := KindType
+						prefix := "struct "
+						if spec.Type() == "enum_specifier" {
+							prefix = "enum "
+						}
+						symbols = append(symbols, Symbol{
+							Kind:      kind,
+							Name:      nameStr,
+							Signature: prefix + nameStr,
+							Line:      int(spec.StartPoint().Row) + 1,
+						})
+					}
+				case "class_specifier":
+					name := childByField(spec, "name")
+					nameStr := ""
+					if name != nil {
+						nameStr = nodeText(name, src)
+					}
+					if nameStr != "" {
+						symbols = append(symbols, Symbol{
+							Kind:      KindClass,
+							Name:      nameStr,
+							Signature: "class " + nameStr,
+							Line:      int(spec.StartPoint().Row) + 1,
+						})
+					}
+				}
+			}
+		}
+	}
+	return symbols
+}
+
+// extractDeclaratorName extracts the function name from a C/C++ declarator node.
+func extractDeclaratorName(n *sitter.Node, src []byte) string {
+	if n == nil {
+		return ""
+	}
+	switch n.Type() {
+	case "identifier", "field_identifier":
+		return nodeText(n, src)
+	case "qualified_identifier":
+		// For C++ qualified names like Foo::bar, use the last part.
+		name := childByField(n, "name")
+		if name != nil {
+			return nodeText(name, src)
+		}
+		return nodeText(n, src)
+	}
+	// Walk children to find the identifier (handles function_declarator, pointer_declarator, etc.)
+	declarator := childByField(n, "declarator")
+	if declarator != nil {
+		return extractDeclaratorName(declarator, src)
+	}
+	// Fallback: walk all children.
+	for i := 0; i < int(n.ChildCount()); i++ {
+		child := n.Child(i)
+		if child.Type() == "identifier" || child.Type() == "field_identifier" {
+			return nodeText(child, src)
+		}
+	}
+	return ""
 }

@@ -54,6 +54,7 @@ type Config struct {
 	Notifications    *bool              `yaml:"notifications"`    // desktop notifications on completion (default false)
 	SessionRetentionDays int            `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
 	Sandbox          *bool              `yaml:"sandbox"`          // run code in Docker sandbox (default false)
+	ShowThinking     *bool              `yaml:"show_thinking"`    // render model thinking blocks (default false)
 }
 
 // HooksConfig holds shell commands that run on lifecycle events.
@@ -130,6 +131,15 @@ func (c *Config) SandboxEnabled() bool {
 		return false
 	}
 	return *c.Sandbox
+}
+
+// ShowThinkingEnabled returns whether thinking block rendering is enabled.
+// Defaults to false when not explicitly set.
+func (c *Config) ShowThinkingEnabled() bool {
+	if c.ShowThinking == nil {
+		return false
+	}
+	return *c.ShowThinking
 }
 
 // ollamaRunning returns true if Ollama is accepting connections on localhost:11434.
@@ -361,6 +371,9 @@ func loadFile(path string, cfg *Config) {
 	if file.Sandbox != nil {
 		cfg.Sandbox = file.Sandbox
 	}
+	if file.ShowThinking != nil {
+		cfg.ShowThinking = file.ShowThinking
+	}
 }
 
 // applyEnv overrides config values from environment variables.
@@ -454,6 +467,10 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_SANDBOX"); v != "" {
 		b := v == "true" || v == "1" || v == "yes"
 		cfg.Sandbox = &b
+	}
+	if v := os.Getenv("BARYO_SHOW_THINKING"); v != "" {
+		b := v == "true" || v == "1" || v == "yes"
+		cfg.ShowThinking = &b
 	}
 	// Legacy env vars — also write into ProviderKeys so env always wins over YAML.
 	legacyEnvVars := map[string]string{
