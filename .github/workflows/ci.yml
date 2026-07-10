@@ -28,6 +28,14 @@ jobs:
       - name: Run tests (no CGO)
         run: CGO_ENABLED=0 go test -count=1 ./...
 
+      - name: Run tests (CGO)
+        # The tree-sitter parsers in internal/index are cgo-only; without
+        # this pass their tests never run in CI.
+        run: CGO_ENABLED=1 go test -count=1 ./...
+
+      - name: Run tests (race detector)
+        run: go test -race -count=1 ./...
+
       - name: Build (no CGO)
         run: CGO_ENABLED=0 go build -ldflags "-s -w" -o baryo .
 
@@ -48,3 +56,9 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      - name: Run staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
