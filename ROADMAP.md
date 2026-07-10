@@ -52,6 +52,32 @@ All P0 items completed. See the Completed section below for details.
 
 ---
 
+## Stability Status (v0.12.1)
+
+v0.12.1 was a dedicated stabilization pass — no new features, only hardening. Full details in [CHANGELOG.md](CHANGELOG.md).
+
+### What is solid now
+
+- **Crash safety** — the known panic paths in `apply_diff` are fixed with regression tests; no `panic()` calls remain in production code.
+- **Data safety** — all file mutations (edit/write/apply_diff, session saves, memory saves) are atomic; an interrupted write can no longer corrupt a file or lose conversation history.
+- **Memory safety** — subprocess output and search/fetch responses are size-capped before buffering.
+- **Tool loop correctness** — duplicate-call detection compares full arguments, so multi-file tasks are no longer sabotaged; confirm-mode no longer produces phantom "empty response" errors.
+- **Failure visibility** — truncated model streams and dead MCP servers surface real errors immediately instead of silent truncation or repeated 30s timeouts.
+- **Sandboxing** — destructive file tools resolve symlinks before the project-root containment check.
+- **Supply chain** — `govulncheck` clean (dependencies patched, `toolchain go1.25.12` pinned); `staticcheck` clean; CI runs vet, gofmt, staticcheck, govulncheck, tests with and without CGO, and the race detector on Linux and macOS.
+
+### Known gaps still open
+
+| Gap | Impact | Notes |
+|---|---|---|
+| No tests for `internal/tui` (~10k lines) | Regressions in the UI state machine are only caught manually | Largest remaining test gap; the confirm-flow bug fixed in v0.12.1 is exactly the class of bug tests here would catch |
+| Unbounded session growth | Long conversations slow saves and bloat disk | Sessions are fully rewritten every turn; cleanup is age-based only (`session_retention_days`) |
+| No MCP auto-reconnect | A crashed MCP server stays down for the session | Failures are now reported immediately, but recovery requires restarting baryo |
+| Process-group kill is unix-only | On Windows, shell grandchildren can outlive the tool timeout | `procutil.SetProcessGroup` is a no-op on Windows |
+| `worktree`/`session` packages untested | Lower risk (small, simple code) | Candidates for quick test coverage |
+
+---
+
 ## P1 — Competitive Parity (v0.13)
 
 Features that match the best-in-class competitors and remove reasons for users to switch away.

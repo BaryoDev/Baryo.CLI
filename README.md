@@ -4,6 +4,10 @@ An AI chat CLI for local and cloud models. Chat with models running on your mach
 
 Baryo provides both an interactive terminal UI and a scriptable print mode for pipelines and automation.
 
+## Project Status
+
+Current release: **v0.12.1** — a stabilization release focused on crash fixes, atomic file writes, tool-loop correctness, and dependency security updates. See [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what is solid, what is still open, and what comes next.
+
 ## Prerequisites
 
 For local models (pick one):
