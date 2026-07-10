@@ -16,34 +16,34 @@ import (
 
 // extToLang maps file extensions to tree-sitter language names.
 var extToLang = map[string]string{
-	".go":  "go",
-	".js":  "javascript",
-	".jsx": "javascript",
-	".ts":  "typescript",
-	".tsx": "typescript",
-	".py":  "python",
-	".rs":  "rust",
+	".go":   "go",
+	".js":   "javascript",
+	".jsx":  "javascript",
+	".ts":   "typescript",
+	".tsx":  "typescript",
+	".py":   "python",
+	".rs":   "rust",
 	".java": "java",
-	".c":   "c",
-	".h":   "c",
-	".cpp": "cpp",
-	".cc":  "cpp",
-	".cxx": "cpp",
-	".hpp": "cpp",
+	".c":    "c",
+	".h":    "c",
+	".cpp":  "cpp",
+	".cc":   "cpp",
+	".cxx":  "cpp",
+	".hpp":  "cpp",
 }
 
 // skipDirs are directories that should always be skipped during discovery.
 var skipDirs = map[string]bool{
-	".git":          true,
-	"node_modules":  true,
-	"vendor":        true,
-	"__pycache__":   true,
-	".venv":         true,
-	"dist":          true,
-	"build":         true,
-	"target":        true,
-	"bin":           true,
-	".next":         true,
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+	"__pycache__":  true,
+	".venv":        true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	"bin":          true,
+	".next":        true,
 }
 
 // maxFileSize is the maximum file size to parse (1MB).
@@ -120,7 +120,7 @@ func isBinary(path string) bool {
 	defer f.Close()
 
 	buf := make([]byte, 512)
-	n, err := f.Read(buf)
+	n, _ := f.Read(buf)
 	if n == 0 {
 		return false
 	}

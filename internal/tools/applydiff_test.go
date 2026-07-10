@@ -117,6 +117,35 @@ func TestParseMalformedDiff(t *testing.T) {
 	}
 }
 
+func TestApplyHunkInsertionBeyondEOF(t *testing.T) {
+	lines := []string{"line1", "line2"}
+
+	// Pure-insertion hunk targeting a line far past the end of the file.
+	diff := `@@ -50,0 +50,2 @@
++new line A
++new line B`
+
+	hunks, err := parseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = applyHunks(lines, hunks)
+	if err == nil {
+		t.Fatal("expected error for hunk beyond end of file")
+	}
+	if !strings.Contains(err.Error(), "beyond end of file") {
+		t.Errorf("error = %q, want beyond end of file", err.Error())
+	}
+}
+
+func TestParseBareHunkHeader(t *testing.T) {
+	_, err := parseUnifiedDiff("@@")
+	if err == nil {
+		t.Error("expected error for bare @@ header")
+	}
+}
+
 func TestParseRangeNoCount(t *testing.T) {
 	start, count, err := parseRange("5")
 	if err != nil {

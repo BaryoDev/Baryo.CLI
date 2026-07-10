@@ -31,7 +31,7 @@ func braveSearch(apiKey, query string) ([]SearchResult, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("Brave API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("brave API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var data struct {
@@ -44,7 +44,7 @@ func braveSearch(apiKey, query string) ([]SearchResult, error) {
 		} `json:"web"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, fetchMaxBody)).Decode(&data); err != nil {
 		return nil, fmt.Errorf("parsing Brave response: %w", err)
 	}
 

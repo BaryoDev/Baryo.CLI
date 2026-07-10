@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
@@ -59,15 +57,9 @@ func executeDeleteFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("cannot determine working directory: %v", err), IsError: true}
 	}
 
-	absPath := args.Path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(cwd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
-
-	// Ensure the path is within the working directory.
-	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
-		return Result{Content: "path is outside the project directory", IsError: true}
+	absPath, err := resolveWithinProject(cwd, args.Path)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
 	}
 
 	// Check .baryoignore + .gitignore.

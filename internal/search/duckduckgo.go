@@ -6,6 +6,7 @@ package search
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,7 +34,7 @@ func duckduckgoSearch(query string) ([]SearchResult, error) {
 		return nil, fmt.Errorf("DuckDuckGo returned status %d", resp.StatusCode)
 	}
 
-	doc, err := html.Parse(resp.Body)
+	doc, err := html.Parse(io.LimitReader(resp.Body, fetchMaxBody))
 	if err != nil {
 		return nil, fmt.Errorf("parsing HTML: %w", err)
 	}

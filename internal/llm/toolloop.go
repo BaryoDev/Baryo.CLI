@@ -47,32 +47,43 @@ func isToolUnsupportedError(errText string) bool {
 		strings.Contains(lower, "does not support tools")
 }
 
-// toolCallKey returns a normalized key for deduplication: "prefix:value_lower".
-// It extracts the primary parameter from JSON arguments. Tools with the same
-// subject share a namespace so escalation chains and redundant calls are detected:
-//   - web_search, deep_research, fetch_page → "search:" (prevents fetching same URL twice)
+// toolCallKey returns a normalized key for deduplication.
+// Search-family tools share a namespace keyed on their subject so escalation
+// chains and redundant lookups are detected:
+//   - web_search, deep_research, fetch_page → "search:query_or_url"
 //   - remember → "remember:fact"
-//   - other tools → "name:query_or_topic"
+//
+// All other tools (read_file, grep, shell, ...) dedup only on exactly
+// identical arguments, so legitimate repeat calls with different paths,
+// patterns, or commands are never blocked.
 func toolCallKey(name, argsJSON string) string {
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return name + ":" + argsJSON
 	}
-	// Extract the primary parameter value.
-	q := ""
-	for _, key := range []string{"query", "topic", "url", "fact"} {
-		if v, ok := args[key].(string); ok && v != "" {
-			q = v
-			break
+	switch name {
+	case "web_search", "deep_research", "fetch_page", "remember":
+		q := ""
+		for _, key := range []string{"query", "topic", "url", "fact"} {
+			if v, ok := args[key].(string); ok && v != "" {
+				q = v
+				break
+			}
 		}
+		q = strings.ToLower(strings.TrimSpace(q))
+		prefix := "search"
+		if name == "remember" {
+			prefix = "remember"
+		}
+		return prefix + ":" + q
 	}
-	q = strings.ToLower(strings.TrimSpace(q))
-	// Normalize search-related tools into a shared namespace.
-	prefix := name
-	if name == "web_search" || name == "deep_research" || name == "fetch_page" {
-		prefix = "search"
+	// Canonical form: Go marshals maps with sorted keys, so equivalent
+	// argument JSON always produces the same key.
+	canon, err := json.Marshal(args)
+	if err != nil {
+		return name + ":" + argsJSON
 	}
-	return prefix + ":" + q
+	return name + ":" + string(canon)
 }
 
 // StreamChatWithTools streams a conversation that may include tool calls.
@@ -93,7 +104,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 		copy(msgs, messages)
 
 		var lastUsage *UsageStats
-		var prevContent string              // tracks previous round content for repetition detection
+		var prevContent string                 // tracks previous round content for repetition detection
 		seenToolCalls := make(map[string]bool) // dedup: tracks tool+query keys across rounds
 
 		for round := 0; round < maxRounds; round++ {
@@ -242,7 +253,7 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 				if seenToolCalls[key] {
 					// Duplicate tool call — skip execution, return nudge.
 					logger.Debug("duplicate tool call skipped", "name", tc.Function.Name, "key", key)
-					content = fmt.Sprintf("Already retrieved results for this query. Use the information you already have to answer the user's question directly.")
+					content = "Already retrieved results for this query. Use the information you already have to answer the user's question directly."
 					isError = true
 				} else {
 					seenToolCalls[key] = true

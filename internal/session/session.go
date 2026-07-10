@@ -15,20 +15,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arnelirobles/baryo-cli/internal/fsutil"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // Session represents a saved conversation.
 type Session struct {
-	ID        string                 `json:"id"`
-	ModelName string                 `json:"model_name"`
-	ModelTag  string                 `json:"model_tag"`
-	Messages  []llm.ChatMessage   `json:"messages"`
-	CWD       string                 `json:"cwd"`
-	Title     string                 `json:"title,omitempty"`
-	Tags      []string               `json:"tags,omitempty"`
-	CreatedAt time.Time              `json:"created_at"`
-	UpdatedAt time.Time              `json:"updated_at"`
+	ID        string            `json:"id"`
+	ModelName string            `json:"model_name"`
+	ModelTag  string            `json:"model_tag"`
+	Messages  []llm.ChatMessage `json:"messages"`
+	CWD       string            `json:"cwd"`
+	Title     string            `json:"title,omitempty"`
+	Tags      []string          `json:"tags,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // sessionsDir returns ~/.baryo/sessions/, creating it if needed.
@@ -77,7 +78,7 @@ func (s *Session) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, s.ID+".json"), data, 0o600)
+	return fsutil.WriteFileAtomic(filepath.Join(dir, s.ID+".json"), data, 0o600)
 }
 
 // GenerateTitle extracts a title from the first user message.

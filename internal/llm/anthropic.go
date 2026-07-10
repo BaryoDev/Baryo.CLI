@@ -18,13 +18,13 @@ import (
 // --- Anthropic request types ---
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	Messages  []anthropicMessage  `json:"messages"`
-	System    string              `json:"system,omitempty"`
-	Tools     []anthropicTool     `json:"tools,omitempty"`
-	Stream    bool                `json:"stream"`
-	Thinking  *anthropicThinking  `json:"thinking,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	System    string             `json:"system,omitempty"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
@@ -33,16 +33,16 @@ type anthropicThinking struct {
 }
 
 type anthropicMessage struct {
-	Role    string                 `json:"role"`
-	Content interface{}            `json:"content"` // string or []anthropicContentBlock
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"` // string or []anthropicContentBlock
 }
 
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`                 // "text", "tool_use", "tool_result"
-	Text      string          `json:"text,omitempty"`       // for type=text
-	ID        string          `json:"id,omitempty"`         // for type=tool_use
-	Name      string          `json:"name,omitempty"`       // for type=tool_use
-	Input     json.RawMessage `json:"input,omitempty"`      // for type=tool_use
+	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result"
+	Text      string          `json:"text,omitempty"`        // for type=text
+	ID        string          `json:"id,omitempty"`          // for type=tool_use
+	Name      string          `json:"name,omitempty"`        // for type=tool_use
+	Input     json.RawMessage `json:"input,omitempty"`       // for type=tool_use
 	ToolUseID string          `json:"tool_use_id,omitempty"` // for type=tool_result
 	Content   string          `json:"content,omitempty"`     // for type=tool_result (reused)
 }
@@ -362,6 +362,14 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 					return
 				}
 			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- StreamEvent{Error: fmt.Sprintf("stream read error: %v", err)}:
+			case <-ctx.Done():
+			}
+			return
 		}
 
 		// Build completed tool calls.

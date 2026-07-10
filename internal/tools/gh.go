@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/procutil"
 )
 
 const maxGhOutput = 100 * 1024 // 100 KB
@@ -89,18 +91,22 @@ func executeGh(_ context.Context, argsJSON string) Result {
 	cmd := exec.CommandContext(ctx, ghPath, args.Args...)
 	cmd.Dir = cwd
 
-	out, err := cmd.CombinedOutput()
+	var buf procutil.CappedBuffer
+	buf.Max = maxGhOutput
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err = cmd.Run()
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
+		msg := strings.TrimSpace(buf.String())
 		if msg == "" {
 			msg = err.Error()
 		}
 		return Result{Content: msg, IsError: true}
 	}
 
-	content := string(out)
-	if len(content) > maxGhOutput {
-		content = content[:maxGhOutput] + "\n... (truncated)"
+	content := buf.String()
+	if buf.Truncated() {
+		content += "\n... (truncated)"
 	}
 
 	if strings.TrimSpace(content) == "" {

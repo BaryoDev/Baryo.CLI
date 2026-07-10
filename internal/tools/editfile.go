@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/arnelirobles/baryo-cli/internal/fsutil"
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
@@ -76,15 +77,9 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("cannot determine working directory: %v", err), IsError: true}
 	}
 
-	absPath := args.Path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(cwd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
-
-	// Ensure the path is within the working directory.
-	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
-		return Result{Content: "path is outside the project directory", IsError: true}
+	absPath, err := resolveWithinProject(cwd, args.Path)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
 	}
 
 	// Check .baryoignore + .gitignore.
@@ -101,7 +96,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 				if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 					return Result{Content: fmt.Sprintf("cannot create directory: %v", err), IsError: true}
 				}
-				if err := os.WriteFile(absPath, []byte(args.NewString), 0o644); err != nil {
+				if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), 0o644); err != nil {
 					return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 				}
 				return Result{Content: fmt.Sprintf("Created %s (%d chars)", args.Path, len(args.NewString))}
@@ -113,7 +108,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 		if lineCount > maxWholeFileRewriteLines {
 			return Result{Content: fmt.Sprintf("file has %d lines (max %d for whole-file rewrite) — use old_string to target a specific section", lineCount, maxWholeFileRewriteLines), IsError: true}
 		}
-		if err := os.WriteFile(absPath, []byte(args.NewString), 0o644); err != nil {
+		if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), 0o644); err != nil {
 			return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 		}
 		return Result{Content: fmt.Sprintf("Rewrote %s (%d lines)", args.Path, lineCount)}
@@ -140,7 +135,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 	if count == 1 {
 		// Exact match found.
 		newContent := strings.Replace(content, args.OldString, args.NewString, 1)
-		if err := os.WriteFile(absPath, []byte(newContent), 0o644); err != nil {
+		if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
 			return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 		}
 		return Result{Content: fmt.Sprintf("Edited %s: replaced %d chars with %d chars", args.Path, len(args.OldString), len(args.NewString))}
@@ -156,7 +151,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 	}
 
 	newContent := strings.Replace(content, match, args.NewString, 1)
-	if err := os.WriteFile(absPath, []byte(newContent), 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
 		return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 	}
 	return Result{Content: fmt.Sprintf("Edited %s (fuzzy matched): replaced %d chars with %d chars", args.Path, len(match), len(args.NewString))}

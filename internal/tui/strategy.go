@@ -328,37 +328,6 @@ func extractSearchQueries(text string) []string {
 	return queries
 }
 
-// isStrategyQuestion detects questions that would benefit from structured
-// strategy analysis (decision-making, comparisons, trade-offs).
-func isStrategyQuestion(text string) bool {
-	if len(text) <= 20 {
-		return false
-	}
-	lower := strings.ToLower(text)
-	phrases := []string{
-		// Decision
-		"should i", "which is better", "what should i", "best option",
-		"what's the best", "whats the best", "which one should",
-		"help me decide", "help me choose",
-		// Trade-off
-		"pros and cons", "compare", "versus", "vs ", "trade-off", "tradeoff",
-		// Strategy
-		"strategize", "strategy for", "best approach", "best way to",
-		// Architecture / coding decisions
-		"should i use", "which framework", "which library", "which database",
-		"which language", "monolith or microservice", "rest or graphql",
-		"rest vs graphql", "sql or nosql", "sql vs nosql",
-		"how should i architect", "how should i structure", "how should i design",
-		"what architecture", "what tech stack", "what stack should",
-	}
-	for _, p := range phrases {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
-}
-
 // isStrategyDoneSignal detects when the user wants to trigger the analysis.
 func isStrategyDoneSignal(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))

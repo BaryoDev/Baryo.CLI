@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/procutil"
 )
 
 const maxGitOutput = 100 * 1024 // 100 KB
@@ -96,19 +98,23 @@ func runGit(ctx context.Context, args ...string) Result {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = cwd
 
-	out, err := cmd.CombinedOutput()
+	var buf procutil.CappedBuffer
+	buf.Max = maxGitOutput
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err = cmd.Run()
 	if err != nil {
 		// Return git errors (e.g. "not a git repo") as tool errors.
-		msg := strings.TrimSpace(string(out))
+		msg := strings.TrimSpace(buf.String())
 		if msg == "" {
 			msg = err.Error()
 		}
 		return Result{Content: msg, IsError: true}
 	}
 
-	content := string(out)
-	if len(content) > maxGitOutput {
-		content = content[:maxGitOutput] + "\n... (truncated)"
+	content := buf.String()
+	if buf.Truncated() {
+		content += "\n... (truncated)"
 	}
 
 	if strings.TrimSpace(content) == "" {

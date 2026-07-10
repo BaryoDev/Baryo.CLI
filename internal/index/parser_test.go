@@ -106,12 +106,12 @@ interface Computable {
 		"Computable": KindInterface,
 	}
 
+	// Note: the constructor is also emitted as a method named "Calculator",
+	// so check that each expected (name, kind) pair exists rather than
+	// requiring every symbol with a given name to have one kind.
 	found := make(map[string]bool)
 	for _, s := range fs.Symbols {
-		if k, ok := want[s.Name]; ok {
-			if s.Kind != k {
-				t.Errorf("%s: got kind %d, want %d", s.Name, s.Kind, k)
-			}
+		if k, ok := want[s.Name]; ok && s.Kind == k {
 			found[s.Name] = true
 		}
 	}
@@ -158,9 +158,9 @@ void print_point(struct Point* p) {
 	}
 
 	want := map[string]SymbolKind{
-		"Point": KindType,
-		"Color": KindType,
-		"add":   KindFunction,
+		"Point":       KindType,
+		"Color":       KindType,
+		"add":         KindFunction,
 		"print_point": KindFunction,
 	}
 

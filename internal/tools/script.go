@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arnelirobles/baryo-cli/internal/procutil"
 	"github.com/arnelirobles/baryo-cli/internal/sandbox"
 )
 
@@ -293,6 +294,9 @@ func runCommand(ctx context.Context, cmdArgs []string, workDir string) Result {
 
 	cmd := exec.CommandContext(execCtx, cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = workDir
+	// Kill the whole process group on timeout/cancel so grandchildren
+	// (e.g. backgrounded shell commands) don't outlive the tool call.
+	procutil.SetProcessGroup(cmd)
 	// Strip any inherited virtual environment from the user's shell so one
 	// skill's venv doesn't interfere with another skill's execution.
 	// Each skill uses its own venv (via absolute path) or the system python.
@@ -300,11 +304,15 @@ func runCommand(ctx context.Context, cmdArgs []string, workDir string) Result {
 	// Include working directory in PYTHONPATH so imports resolve for code
 	// run from temp files (whose directory is /tmp, not the working dir).
 	cmd.Env = append(env, "PYTHONPATH="+workDir)
-	out, err := cmd.CombinedOutput()
+	var buf procutil.CappedBuffer
+	buf.Max = maxScriptOutput
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
 
-	output := string(out)
-	if len(output) > maxScriptOutput {
-		output = output[:maxScriptOutput] + "\n... (output truncated)"
+	output := buf.String()
+	if buf.Truncated() {
+		output += "\n... (output truncated)"
 	}
 
 	if err != nil {

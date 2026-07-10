@@ -170,6 +170,9 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 		var finishReason string
 
 		scanner := bufio.NewScanner(resp.Body)
+		// Providers can send large tool call arguments in a single SSE line;
+		// the default 64KB limit would silently truncate the stream.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -231,6 +234,14 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 					}
 				}
 			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- StreamEvent{Error: fmt.Sprintf("stream read error: %v", err)}:
+			case <-ctx.Done():
+			}
+			return
 		}
 
 		// Build completed tool calls.

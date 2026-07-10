@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/procutil"
 )
 
 const (
-	execTimeout    = 30 * time.Second
-	maxOutput      = 200 * 1024 // 200 KB
+	execTimeout = 30 * time.Second
+	maxOutput   = 200 * 1024 // 200 KB
 )
 
 // Sandbox manages sandboxed code execution via Docker containers.
@@ -49,7 +51,7 @@ func imageForLang(lang string) (string, string) {
 // Execute runs code in a Docker container with the working directory mounted read-only.
 func (s *Sandbox) Execute(ctx context.Context, lang, code, workDir string) (string, error) {
 	if !s.Available {
-		return "", fmt.Errorf("Docker is not available for sandboxed execution")
+		return "", fmt.Errorf("docker is not available for sandboxed execution")
 	}
 
 	image, interpreter := imageForLang(lang)
@@ -81,11 +83,15 @@ func (s *Sandbox) Execute(ctx context.Context, lang, code, workDir string) (stri
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	out, err := cmd.CombinedOutput()
+	var buf procutil.CappedBuffer
+	buf.Max = maxOutput
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := cmd.Run()
 
-	output := string(out)
-	if len(output) > maxOutput {
-		output = output[:maxOutput] + "\n... (output truncated)"
+	output := buf.String()
+	if buf.Truncated() {
+		output += "\n... (output truncated)"
 	}
 
 	if err != nil {

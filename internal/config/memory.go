@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/fsutil"
 )
 
 // Memory is a single stored fact.
@@ -70,7 +72,7 @@ func saveMemoryFile(path string, memories []Memory) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFileAtomic(path, data, 0o600)
 }
 
 // LoadMemories reads both global and project memory files and returns

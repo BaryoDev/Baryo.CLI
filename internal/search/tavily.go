@@ -39,7 +39,7 @@ func tavilySearch(apiKey, query string) ([]SearchResult, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("Tavily API returned status %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("tavily API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var data struct {
@@ -50,7 +50,7 @@ func tavilySearch(apiKey, query string) ([]SearchResult, error) {
 		} `json:"results"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, fetchMaxBody)).Decode(&data); err != nil {
 		return nil, fmt.Errorf("parsing Tavily response: %w", err)
 	}
 

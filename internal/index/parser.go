@@ -7,6 +7,7 @@
 package index
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -115,8 +116,8 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 	defer parser.Close()
 	parser.SetLanguage(lp.lang)
 
-	tree := parser.Parse(nil, content)
-	if tree == nil {
+	tree, err := parser.ParseCtx(context.Background(), nil, content)
+	if err != nil || tree == nil {
 		return nil, fmt.Errorf("failed to parse %s", path)
 	}
 	defer tree.Close()

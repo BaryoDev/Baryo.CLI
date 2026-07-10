@@ -78,6 +78,7 @@ func StreamPull(ctx context.Context, name string) <-chan string {
 				case ch <- line:
 				case <-ctx.Done():
 					r.Close()
+					cmd.Wait() // reap the killed child so it doesn't linger as a zombie
 					return
 				}
 			}

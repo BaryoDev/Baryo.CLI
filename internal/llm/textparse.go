@@ -71,7 +71,6 @@ func parseTextToolCalls(text string, validNames map[string]bool) []TextToolCall 
 			if err2 := json.Unmarshal([]byte(sanitized), &tc); err2 != nil {
 				continue
 			}
-			jsonStr = sanitized
 		}
 		if !validNames[tc.Name] {
 			continue

@@ -10,10 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/arnelirobles/baryo-cli/internal/fsutil"
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
@@ -80,14 +80,9 @@ func executeApplyDiff(ctx context.Context, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("cannot determine working directory: %v", err), IsError: true}
 	}
 
-	absPath := args.Path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(cwd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
-
-	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
-		return Result{Content: "path is outside the project directory", IsError: true}
+	absPath, err := resolveWithinProject(cwd, args.Path)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
 	}
 
 	if ignore.IsIgnored(ctx, absPath) {
@@ -121,7 +116,7 @@ func executeApplyDiff(ctx context.Context, argsJSON string) Result {
 	}
 
 	newContent := strings.Join(result, "\n")
-	if err := os.WriteFile(absPath, []byte(newContent), 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
 		return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 	}
 
@@ -180,8 +175,10 @@ func parseUnifiedDiff(diff string) ([]diffHunk, error) {
 func parseHunkHeader(line string) (diffHunk, error) {
 	// Strip @@ markers and any trailing section heading.
 	line = strings.TrimPrefix(line, "@@")
-	if idx := strings.Index(line[1:], "@@"); idx >= 0 {
-		line = line[:idx+1]
+	if len(line) > 0 {
+		if idx := strings.Index(line[1:], "@@"); idx >= 0 {
+			line = line[:idx+1]
+		}
 	}
 	line = strings.TrimSpace(line)
 
@@ -234,6 +231,9 @@ func applyHunk(lines []string, h diffHunk) ([]string, error) {
 	pos := h.oldStart - 1
 	if pos < 0 {
 		pos = 0
+	}
+	if pos > len(lines) {
+		return nil, fmt.Errorf("hunk start line %d beyond end of file (%d lines)", h.oldStart, len(lines))
 	}
 
 	// Verify context lines match and build the replacement.

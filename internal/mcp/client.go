@@ -36,6 +36,7 @@ type Client struct {
 	pending sync.Map // map[int]chan JSONRPCResponse
 	mu      sync.Mutex
 	closed  atomic.Bool
+	dead    atomic.Bool // set when readLoop exits: server crashed or unreadable
 }
 
 // NewClient starts an MCP server process and performs the initialization handshake.
@@ -186,12 +187,33 @@ func (c *Client) readLoop() {
 			ch.(chan JSONRPCResponse) <- resp
 		}
 	}
+
+	// The server is gone (EOF) or unreadable (e.g. a message exceeded the
+	// scanner buffer). Mark the client dead and fail pending requests so
+	// callers get an immediate error instead of a 30s timeout on every call.
+	errMsg := "connection lost"
+	if err := scanner.Err(); err != nil {
+		errMsg = err.Error()
+	}
+	logger.Debug("mcp read loop ended", "name", c.name, "err", errMsg)
+	c.dead.Store(true)
+	c.pending.Range(func(key, value interface{}) bool {
+		if ch, ok := c.pending.LoadAndDelete(key); ok {
+			ch.(chan JSONRPCResponse) <- JSONRPCResponse{
+				Error: &JSONRPCError{Code: -32000, Message: fmt.Sprintf("MCP server %s: %s", c.name, errMsg)},
+			}
+		}
+		return true
+	})
 }
 
 // call sends a JSON-RPC request and waits for the response.
 func (c *Client) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("client closed")
+	}
+	if c.dead.Load() {
+		return nil, fmt.Errorf("MCP server %s is not responding (connection lost)", c.name)
 	}
 	id := int(c.nextID.Add(1))
 	req := JSONRPCRequest{
@@ -204,6 +226,15 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (j
 	respCh := make(chan JSONRPCResponse, 1)
 	c.pending.Store(id, respCh)
 	defer c.pending.Delete(id)
+
+	// Re-check after storing: if readLoop exited and drained pending between
+	// the check above and the Store, this entry would never be answered.
+	if c.dead.Load() {
+		if _, ok := c.pending.LoadAndDelete(id); ok {
+			return nil, fmt.Errorf("MCP server %s is not responding (connection lost)", c.name)
+		}
+		// readLoop already delivered an error to respCh; fall through.
+	}
 
 	data, err := json.Marshal(req)
 	if err != nil {

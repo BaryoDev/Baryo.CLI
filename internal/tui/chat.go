@@ -38,36 +38,36 @@ import (
 
 // ChatModel is the chat conversation screen.
 type ChatModel struct {
-	endpoint         llm.Endpoint   // where to send inference requests
-	localSocketPath  string            // kept for /models and /doctor (always local)
-	systemPrompt     string            // active system prompt
-	memoriesPrompt   string            // formatted <memories> block (injected prominently)
-	params           llm.ChatParams // model parameters
-	providerKeys     map[string]string // API keys for cloud providers (for model switching via /models)
-	modelName    string            // display name (e.g. "ai/mistral")
-	modelTag     string            // full tag for API calls (e.g. "llm.io/ai/mistral:latest")
-	messages     []llm.ChatMessage
-	history      []chatEntry // rendered conversation history
-	streaming    string      // current streaming text accumulator
-	turnContent  string      // accumulates all assistant text for one turn (across tool rounds)
-	isStream     bool        // whether we are currently streaming
-	markdown     bool        // whether to render markdown in responses
-	inputHistory []string    // previous user inputs
-	historyIdx   int         // current position in input history (-1 = not browsing)
-	session      *session.Session
+	endpoint        llm.Endpoint      // where to send inference requests
+	localSocketPath string            // kept for /models and /doctor (always local)
+	systemPrompt    string            // active system prompt
+	memoriesPrompt  string            // formatted <memories> block (injected prominently)
+	params          llm.ChatParams    // model parameters
+	providerKeys    map[string]string // API keys for cloud providers (for model switching via /models)
+	modelName       string            // display name (e.g. "ai/mistral")
+	modelTag        string            // full tag for API calls (e.g. "llm.io/ai/mistral:latest")
+	messages        []llm.ChatMessage
+	history         []chatEntry // rendered conversation history
+	streaming       string      // current streaming text accumulator
+	turnContent     string      // accumulates all assistant text for one turn (across tool rounds)
+	isStream        bool        // whether we are currently streaming
+	markdown        bool        // whether to render markdown in responses
+	inputHistory    []string    // previous user inputs
+	historyIdx      int         // current position in input history (-1 = not browsing)
+	session         *session.Session
 
-	textarea    textarea.Model
-	viewport    viewport.Model
-	ready       bool
-	width       int
-	height      int
-	spinFrame   int // current spinner animation frame
+	textarea  textarea.Model
+	viewport  viewport.Model
+	ready     bool
+	width     int
+	height    int
+	spinFrame int // current spinner animation frame
 
-	eventCh      <-chan llm.StreamEvent
-	cancelFunc   context.CancelFunc
-	toolStatus   string    // shown in status bar during tool execution
-	initPending  bool      // when true, write streaming result to BARYO.md on completion
-	commitPending bool     // when true, auto-commit with streaming result as message
+	eventCh          <-chan llm.StreamEvent
+	cancelFunc       context.CancelFunc
+	toolStatus       string    // shown in status bar during tool execution
+	initPending      bool      // when true, write streaming result to BARYO.md on completion
+	commitPending    bool      // when true, auto-commit with streaming result as message
 	thinking         bool      // true while model is inside a <think> block
 	streamStart      time.Time // when streaming began (for elapsed time display)
 	streamTokenCount int       // number of tokens received during current stream
@@ -84,17 +84,17 @@ type ChatModel struct {
 	searchFallbackUsed bool // prevents infinite search fallback loops (once per turn)
 
 	// Deep research
-	researchPending    bool      // true during pipeline + final report streaming
+	researchPending    bool          // true during pipeline + final report streaming
 	researchProgressCh <-chan string // receives status updates from pipeline goroutine
-	researchCompactAt  int       // index in m.messages for post-report compaction
+	researchCompactAt  int           // index in m.messages for post-report compaction
 
 	// Model hints
 	modelHints    llm.ModelHints // detected model family parameters
-	supportsTools bool              // false after a model reports tool use unsupported
+	supportsTools bool           // false after a model reports tool use unsupported
 
 	// Skills (lazy loading with auto-activation)
-	skillIndex  []config.Skill    // lightweight index (name + description only)
-	activeSkills map[string]bool  // tracks which skills have been activated
+	skillIndex   []config.Skill  // lightweight index (name + description only)
+	activeSkills map[string]bool // tracks which skills have been activated
 
 	// Context window management
 	contextTokens  int  // estimated token count after last turn
@@ -108,11 +108,11 @@ type ChatModel struct {
 	sessionCost     float64 // cumulative cost this session
 
 	// Permission system
-	permissionMode string           // "auto", "confirm", "suggest"
+	permissionMode string              // "auto", "confirm", "suggest"
 	confirmCh      chan confirmRequest // executor writes, TUI reads
-	confirmPending bool             // true while waiting for y/n
-	confirmPrompt  string           // rendered prompt text for the user
-	pendingConfirm chan<- bool       // response channel for the pending confirm
+	confirmPending bool                // true while waiting for y/n
+	confirmPrompt  string              // rendered prompt text for the user
+	pendingConfirm chan<- bool         // response channel for the pending confirm
 
 	// Agent mode
 	agentMode AgentMode // current operating mode (chat, ask, code, architect, review, research)
@@ -127,7 +127,7 @@ type ChatModel struct {
 	// Skill setup (first-run / /setup)
 	setupPromptPending bool                          // true when showing y/n prompt
 	setupRunning       bool                          // true during download
-	setupProgressCh    <-chan setup.DownloadProgress  // receives progress from download goroutine
+	setupProgressCh    <-chan setup.DownloadProgress // receives progress from download goroutine
 
 	// Export
 	exportPath string // default directory for /export output (empty = current dir)
@@ -137,8 +137,8 @@ type ChatModel struct {
 	repoMap   string       // pre-rendered repo map for system prompt
 
 	// RAG context retrieval
-	ragPipeline *rag.RAG  // shared RAG index reference
-	ragPrompt   string    // pre-rendered <context> block for system prompt
+	ragPipeline *rag.RAG // shared RAG index reference
+	ragPrompt   string   // pre-rendered <context> block for system prompt
 
 	// Auto-fix: run linter/tests after code edits
 	autoFixCfg AutoFixConfig
@@ -179,13 +179,13 @@ type ChatModel struct {
 	planningPrompt string // set when intent is Planning; injected into system prompt
 
 	// Strategy planning
-	strategyPhase      strategyPhase  // idle, gathering, done
-	strategyCompactAt  int            // index for post-analysis compaction
-	strategyContext    string         // accumulated strategy summary for refinement
-	strategyPending       bool           // true during strategy analysis streaming (for post-stream compaction)
-	strategySearchCh      <-chan string  // progress updates from knowledge gap searches
-	strategyPromptPending bool           // true while showing y/n strategy suggestion
-	strategyPromptText    string         // saved user text if they accept/decline
+	strategyPhase         strategyPhase // idle, gathering, done
+	strategyCompactAt     int           // index for post-analysis compaction
+	strategyContext       string        // accumulated strategy summary for refinement
+	strategyPending       bool          // true during strategy analysis streaming (for post-stream compaction)
+	strategySearchCh      <-chan string // progress updates from knowledge gap searches
+	strategyPromptPending bool          // true while showing y/n strategy suggestion
+	strategyPromptText    string        // saved user text if they accept/decline
 }
 
 // MCPManager is the interface for MCP server management.
@@ -267,12 +267,18 @@ func looksLikeVisionModel(name string) bool {
 func sendNotification(title string) {
 	// Terminal bell
 	fmt.Print("\a")
+	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		exec.Command("osascript", "-e", fmt.Sprintf(`display notification "%s" with title "baryo"`, title)).Start()
+		cmd = exec.Command("osascript", "-e", fmt.Sprintf(`display notification "%s" with title "baryo"`, title))
 	case "linux":
-		exec.Command("notify-send", "baryo", title).Start()
+		cmd = exec.Command("notify-send", "baryo", title)
+	default:
+		return
 	}
+	// Run (not Start) in a goroutine so the child is reaped instead of
+	// accumulating as a zombie on every completed turn.
+	go func() { _ = cmd.Run() }()
 }
 
 // NewChat creates a new chat screen for the given model.
@@ -282,34 +288,34 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatPar
 	ep := endpointForModel(socketPath, model, providerKeys)
 	hints := llm.DetectModelHints(model.Tag)
 	return ChatModel{
-		endpoint:         ep,
-		localSocketPath:  socketPath,
-		systemPrompt:     systemPrompt,
-		memoriesPrompt:   memoriesPrompt,
-		params:           params,
-		providerKeys:     providerKeys,
-		modelName:        model.Name,
-		modelTag:         model.Tag,
-		textarea:         ta,
-		markdown:         true,
-		historyIdx:       -1,
-		session:          sess,
-		contextLimit:     contextWindowFor(hints),
-		searchProvider:   searchProvider,
-		searchAPIKey:     searchAPIKey,
-		skillIndex:       config.SkillIndex(),
-		activeSkills:     make(map[string]bool),
-		modelHints:       hints,
+		endpoint:        ep,
+		localSocketPath: socketPath,
+		systemPrompt:    systemPrompt,
+		memoriesPrompt:  memoriesPrompt,
+		params:          params,
+		providerKeys:    providerKeys,
+		modelName:       model.Name,
+		modelTag:        model.Tag,
+		textarea:        ta,
+		markdown:        true,
+		historyIdx:      -1,
+		session:         sess,
+		contextLimit:    contextWindowFor(hints),
+		searchProvider:  searchProvider,
+		searchAPIKey:    searchAPIKey,
+		skillIndex:      config.SkillIndex(),
+		activeSkills:    make(map[string]bool),
+		modelHints:      hints,
 		supportsTools:   true,
-		permissionMode:   permissionMode,
-		confirmCh:        make(chan confirmRequest, 1),
-		promptPrice:      model.PromptPrice,
-		completionPrice:  model.CompletionPrice,
-		mcpManager:       mcpMgr,
-		agentMode:        ModeChat,
-		rewrite:          rewrite,
-		mcpInReadOnly:    mcpInReadOnly,
-		pinnedFiles:      make(map[string]string),
+		permissionMode:  permissionMode,
+		confirmCh:       make(chan confirmRequest, 1),
+		promptPrice:     model.PromptPrice,
+		completionPrice: model.CompletionPrice,
+		mcpManager:      mcpMgr,
+		agentMode:       ModeChat,
+		rewrite:         rewrite,
+		mcpInReadOnly:   mcpInReadOnly,
+		pinnedFiles:     make(map[string]string),
 	}
 }
 
@@ -349,36 +355,36 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 	ep := endpointForModel(socketPath, model, providerKeys)
 	hints := llm.DetectModelHints(sess.ModelTag)
 	cm := ChatModel{
-		endpoint:         ep,
-		localSocketPath:  socketPath,
-		systemPrompt:     systemPrompt,
-		memoriesPrompt:   memoriesPrompt,
-		params:           params,
-		providerKeys:     providerKeys,
-		modelName:        sess.ModelName,
-		modelTag:         sess.ModelTag,
-		messages:         msgs,
-		history:          history,
-		textarea:         ta,
-		markdown:         true,
-		historyIdx:       -1,
-		session:          sess,
-		contextLimit:     contextWindowFor(hints),
-		searchProvider:   searchProvider,
-		searchAPIKey:     searchAPIKey,
-		skillIndex:       config.SkillIndex(),
-		activeSkills:     make(map[string]bool),
-		modelHints:       hints,
+		endpoint:        ep,
+		localSocketPath: socketPath,
+		systemPrompt:    systemPrompt,
+		memoriesPrompt:  memoriesPrompt,
+		params:          params,
+		providerKeys:    providerKeys,
+		modelName:       sess.ModelName,
+		modelTag:        sess.ModelTag,
+		messages:        msgs,
+		history:         history,
+		textarea:        ta,
+		markdown:        true,
+		historyIdx:      -1,
+		session:         sess,
+		contextLimit:    contextWindowFor(hints),
+		searchProvider:  searchProvider,
+		searchAPIKey:    searchAPIKey,
+		skillIndex:      config.SkillIndex(),
+		activeSkills:    make(map[string]bool),
+		modelHints:      hints,
 		supportsTools:   true,
-		permissionMode:   permissionMode,
-		confirmCh:        make(chan confirmRequest, 1),
-		promptPrice:      model.PromptPrice,
-		completionPrice:  model.CompletionPrice,
-		mcpManager:       mcpMgr,
-		agentMode:        ModeChat,
-		rewrite:          rewrite,
-		mcpInReadOnly:    mcpInReadOnly,
-		pinnedFiles:      make(map[string]string),
+		permissionMode:  permissionMode,
+		confirmCh:       make(chan confirmRequest, 1),
+		promptPrice:     model.PromptPrice,
+		completionPrice: model.CompletionPrice,
+		mcpManager:      mcpMgr,
+		agentMode:       ModeChat,
+		rewrite:         rewrite,
+		mcpInReadOnly:   mcpInReadOnly,
+		pinnedFiles:     make(map[string]string),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	return cm
@@ -396,7 +402,6 @@ func endpointForModel(socketPath string, model llm.Model, keys map[string]string
 	}
 	return llm.LocalEndpoint(socketPath)
 }
-
 
 // spinnerFrames are the animation frames for the inline spinner.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -638,7 +643,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					content: "Approved",
 				})
 				m.updateViewport()
-				return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick(), waitForConfirm(m.confirmCh))
+				// Note: no waitForEvent here — the listener queued when the
+				// ToolStart event was processed is still outstanding; adding
+				// another would double-deliver the stream's Done event.
+				return m, tea.Batch(doSpinTick(), waitForConfirm(m.confirmCh))
 			case "n", "N":
 				m.confirmPending = false
 				m.confirmPrompt = ""
@@ -649,7 +657,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					content: "Denied",
 				})
 				m.updateViewport()
-				return m, tea.Batch(waitForEvent(m.eventCh), doSpinTick(), waitForConfirm(m.confirmCh))
+				return m, tea.Batch(doSpinTick(), waitForConfirm(m.confirmCh))
 			default:
 				return m, nil
 			}
@@ -1963,7 +1971,6 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 			return ShowSessionsMsg{Sessions: summaries}
 		}
 
-
 	case "/models":
 		socketPath := m.localSocketPath
 		keys := m.providerKeys
@@ -2478,7 +2485,7 @@ func (m *ChatModel) buildPinnedContext() string {
 	}
 	var sb strings.Builder
 	sb.WriteString("<pinned-files>\n")
-	for path, _ := range m.pinnedFiles {
+	for path := range m.pinnedFiles {
 		// Re-read file to catch edits
 		data, err := os.ReadFile(path)
 		content := ""
@@ -2673,11 +2680,6 @@ var searchPromptTemplate string
 //
 //go:embed prompts/rewrite.md
 var rewritePromptTemplate string
-
-// researchAnalysisTemplate is the prompt used for intermediate round analysis.
-//
-//go:embed prompts/research_analysis.md
-var researchAnalysisTemplate string
 
 // researchReportTemplate is the prompt used to compile the final research report.
 //
@@ -5111,7 +5113,7 @@ func (m ChatModel) handleTask(desc string) (ChatModel, tea.Cmd) {
 		ID:            id,
 		Description:   desc,
 		Endpoint:      m.endpoint,
-		ModelTag:       m.modelTag,
+		ModelTag:      m.modelTag,
 		SystemPrompt:  m.systemPrompt,
 		TokenBudget:   tokenBudget,
 		MCPManager:    m.mcpManager,
@@ -5589,7 +5591,7 @@ func (m ChatModel) View() string {
 		}
 		status = prompt + strings.Repeat(" ", gap) + keys
 	} else if m.toolStatus != "" {
-		status = ToolLabelStyle.Render(frame+" "+m.toolStatus)
+		status = ToolLabelStyle.Render(frame + " " + m.toolStatus)
 	} else if m.isStream && m.thinking {
 		elapsed := time.Since(m.streamStart).Truncate(time.Second)
 		verb, style := thinkingStatus(elapsed, true)
@@ -5631,7 +5633,7 @@ func (m ChatModel) View() string {
 		rightInfo := tokenStyled
 		if m.promptPrice > 0 {
 			costStr := fmt.Sprintf("$%.4f", m.sessionCost)
-			rightInfo += TokenDimStyle.Render(" · "+costStr)
+			rightInfo += TokenDimStyle.Render(" · " + costStr)
 		}
 
 		// Right-align the right info.
@@ -5768,4 +5770,3 @@ func summarizeToolResult(content string, isError bool) string {
 	preview := strings.Join(lines[:maxPreviewLines], "\n")
 	return fmt.Sprintf("(%d lines total)\n%s\n... (%d more lines)", len(lines), preview, len(lines)-maxPreviewLines)
 }
-

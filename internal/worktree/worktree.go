@@ -5,11 +5,16 @@
 package worktree
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// gitTimeout bounds each git invocation so a blocked git (e.g. waiting on an
+// index lock) cannot hang the app.
+const gitTimeout = 30 * time.Second
 
 // Worktree represents an isolated git worktree.
 type Worktree struct {
@@ -17,6 +22,11 @@ type Worktree struct {
 	Path       string
 	Branch     string
 	BaseCommit string
+}
+
+func gitCommand(args ...string) (*exec.Cmd, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	return exec.CommandContext(ctx, "git", args...), cancel
 }
 
 // Create creates a new git worktree with a unique branch name.
@@ -27,14 +37,18 @@ func Create(name string) (*Worktree, error) {
 	}
 
 	// Get current commit hash
-	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	cmd, cancel := gitCommand("rev-parse", "--short", "HEAD")
+	out, err := cmd.Output()
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository: %w", err)
 	}
 	baseCommit := strings.TrimSpace(string(out))
 
 	// Get repo root
-	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	cmd, cancel = gitCommand("rev-parse", "--show-toplevel")
+	rootOut, err := cmd.Output()
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("cannot find git root: %w", err)
 	}
@@ -44,7 +58,8 @@ func Create(name string) (*Worktree, error) {
 	path := root + "/.baryo/worktrees/" + name
 
 	// Create worktree with new branch
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, path)
+	cmd, cancel = gitCommand("worktree", "add", "-b", branch, path)
+	defer cancel()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git worktree add failed: %s", strings.TrimSpace(string(out)))
 	}
@@ -60,21 +75,31 @@ func Create(name string) (*Worktree, error) {
 // Remove removes the worktree and deletes the branch.
 func (w *Worktree) Remove() error {
 	// Remove the worktree
-	if out, err := exec.Command("git", "worktree", "remove", w.Path, "--force").CombinedOutput(); err != nil {
+	cmd, cancel := gitCommand("worktree", "remove", w.Path, "--force")
+	out, err := cmd.CombinedOutput()
+	cancel()
+	if err != nil {
 		return fmt.Errorf("git worktree remove failed: %s", strings.TrimSpace(string(out)))
 	}
 	// Delete the branch
-	exec.Command("git", "branch", "-D", w.Branch).Run()
+	cmd, cancel = gitCommand("branch", "-D", w.Branch)
+	defer cancel()
+	cmd.Run()
 	return nil
 }
 
 // HasChanges returns true if the worktree has uncommitted changes.
+// A failed git invocation also reports true — conservative, so callers never
+// discard a worktree based on a broken check.
 func (w *Worktree) HasChanges() bool {
-	cmd := exec.Command("git", "-C", w.Path, "diff", "--quiet")
-	if err := cmd.Run(); err != nil {
+	cmd, cancel := gitCommand("-C", w.Path, "diff", "--quiet")
+	err := cmd.Run()
+	cancel()
+	if err != nil {
 		return true
 	}
 	// Also check staged changes
-	cmd = exec.Command("git", "-C", w.Path, "diff", "--cached", "--quiet")
+	cmd, cancel = gitCommand("-C", w.Path, "diff", "--cached", "--quiet")
+	defer cancel()
 	return cmd.Run() != nil
 }
