@@ -105,7 +105,7 @@ var metaToolReviewCode = llm.ToolDefinition{
 		Name:        "review_code",
 		Description: "Get the current git diff for code review. Use when user asks to review changes, check work, or see what's modified.",
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 	},
@@ -186,7 +186,7 @@ var metaToolPRStatus = llm.ToolDefinition{
 		Name:        "pr_status",
 		Description: "Show PR review status for the current repository. Use when user asks about PR status or pending reviews.",
 		Parameters: map[string]interface{}{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
 	},

@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // modelTab groups models under a named tab.
@@ -21,7 +21,7 @@ type modelTab struct {
 
 // ModelSelectModel is the tabbed model picker screen.
 type ModelSelectModel struct {
-	tabs     []modelTab
+	tabs      []modelTab
 	activeTab int // which tab is selected
 	cursor    int // cursor within the active tab's model list
 	offset    int // scroll offset within the active tab

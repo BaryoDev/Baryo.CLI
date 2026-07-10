@@ -28,33 +28,33 @@ var DefaultSystemPrompt string
 
 // Config holds merged configuration from all sources.
 type Config struct {
-	Model          string            `yaml:"model"`
-	SocketPath     string            `yaml:"socket_path"`
-	SystemPrompt   string            `yaml:"system_prompt"`
-	Params         llm.ChatParams `yaml:"params"`
-	SSHTunnel      *tunnel.Config    `yaml:"ssh_tunnel"`
-	SearchProvider   string            `yaml:"search_provider"`
-	SearchAPIKey     string            `yaml:"search_api_key"`
-	PermissionMode   string            `yaml:"permission_mode"` // "auto", "confirm", "suggest"
-	GeminiAPIKey     string            `yaml:"gemini_api_key"`
-	OpenRouterAPIKey string            `yaml:"openrouter_api_key"`
-	OpenAIAPIKey     string            `yaml:"openai_api_key"`
-	AnthropicAPIKey  string            `yaml:"anthropic_api_key"`
-	ProviderKeys     map[string]string `yaml:"provider_keys"`
-	MCPServers       []mcp.ServerConfig `yaml:"mcp_servers"`
-	Rewrite          *bool              `yaml:"rewrite"`          // prompt rewrite pass (default true)
-	MCPInReadOnly    *bool              `yaml:"mcp_in_read_only"` // allow MCP tools in read-only modes (default true)
-	ExportPath       string             `yaml:"export_path"`      // default directory for /export output
-	AutoLint         *bool              `yaml:"auto_lint"`        // run linter after code edits (default false)
-	AutoTest         *bool              `yaml:"auto_test"`        // run tests after code edits (default false)
-	LintCommand      string             `yaml:"lint_command"`     // custom lint command override
-	TestCommand      string             `yaml:"test_command"`     // custom test command override
-	Hooks            HooksConfig        `yaml:"hooks"`            // lifecycle hook commands
-	AutoMode         []AutoModeEntry    `yaml:"auto_mode"`        // ordered models for auto-routing
-	Notifications    *bool              `yaml:"notifications"`    // desktop notifications on completion (default false)
-	SessionRetentionDays int            `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
-	Sandbox          *bool              `yaml:"sandbox"`          // run code in Docker sandbox (default false)
-	ShowThinking     *bool              `yaml:"show_thinking"`    // render model thinking blocks (default false)
+	Model                string             `yaml:"model"`
+	SocketPath           string             `yaml:"socket_path"`
+	SystemPrompt         string             `yaml:"system_prompt"`
+	Params               llm.ChatParams     `yaml:"params"`
+	SSHTunnel            *tunnel.Config     `yaml:"ssh_tunnel"`
+	SearchProvider       string             `yaml:"search_provider"`
+	SearchAPIKey         string             `yaml:"search_api_key"`
+	PermissionMode       string             `yaml:"permission_mode"` // "auto", "confirm", "suggest"
+	GeminiAPIKey         string             `yaml:"gemini_api_key"`
+	OpenRouterAPIKey     string             `yaml:"openrouter_api_key"`
+	OpenAIAPIKey         string             `yaml:"openai_api_key"`
+	AnthropicAPIKey      string             `yaml:"anthropic_api_key"`
+	ProviderKeys         map[string]string  `yaml:"provider_keys"`
+	MCPServers           []mcp.ServerConfig `yaml:"mcp_servers"`
+	Rewrite              *bool              `yaml:"rewrite"`                // prompt rewrite pass (default true)
+	MCPInReadOnly        *bool              `yaml:"mcp_in_read_only"`       // allow MCP tools in read-only modes (default true)
+	ExportPath           string             `yaml:"export_path"`            // default directory for /export output
+	AutoLint             *bool              `yaml:"auto_lint"`              // run linter after code edits (default false)
+	AutoTest             *bool              `yaml:"auto_test"`              // run tests after code edits (default false)
+	LintCommand          string             `yaml:"lint_command"`           // custom lint command override
+	TestCommand          string             `yaml:"test_command"`           // custom test command override
+	Hooks                HooksConfig        `yaml:"hooks"`                  // lifecycle hook commands
+	AutoMode             []AutoModeEntry    `yaml:"auto_mode"`              // ordered models for auto-routing
+	Notifications        *bool              `yaml:"notifications"`          // desktop notifications on completion (default false)
+	SessionRetentionDays int                `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
+	Sandbox              *bool              `yaml:"sandbox"`                // run code in Docker sandbox (default false)
+	ShowThinking         *bool              `yaml:"show_thinking"`          // render model thinking blocks (default false)
 }
 
 // HooksConfig holds shell commands that run on lifecycle events.
@@ -500,17 +500,17 @@ func applyEnv(cfg *Config) {
 
 	// New provider env vars (written directly into ProviderKeys map).
 	providerEnvVars := map[string]string{
-		"groq":       "BARYO_GROQ_API_KEY",
-		"mistral":    "BARYO_MISTRAL_API_KEY",
-		"together":   "BARYO_TOGETHER_API_KEY",
-		"fireworks":  "BARYO_FIREWORKS_API_KEY",
-		"deepseek":   "BARYO_DEEPSEEK_API_KEY",
-		"xai":        "BARYO_XAI_API_KEY",
-		"cerebras":   "BARYO_CEREBRAS_API_KEY",
-		"perplexity": "BARYO_PERPLEXITY_API_KEY",
-		"sambanova":  "BARYO_SAMBANOVA_API_KEY",
-		"cohere":     "BARYO_COHERE_API_KEY",
-		"bedrock":      "BARYO_BEDROCK_REGION",
+		"groq":        "BARYO_GROQ_API_KEY",
+		"mistral":     "BARYO_MISTRAL_API_KEY",
+		"together":    "BARYO_TOGETHER_API_KEY",
+		"fireworks":   "BARYO_FIREWORKS_API_KEY",
+		"deepseek":    "BARYO_DEEPSEEK_API_KEY",
+		"xai":         "BARYO_XAI_API_KEY",
+		"cerebras":    "BARYO_CEREBRAS_API_KEY",
+		"perplexity":  "BARYO_PERPLEXITY_API_KEY",
+		"sambanova":   "BARYO_SAMBANOVA_API_KEY",
+		"cohere":      "BARYO_COHERE_API_KEY",
+		"bedrock":     "BARYO_BEDROCK_REGION",
 		"huggingface": "BARYO_HUGGINGFACE_API_KEY",
 		"github":      "BARYO_GITHUB_TOKEN",
 		"ollama":      "BARYO_OLLAMA_API_KEY",

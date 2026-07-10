@@ -26,7 +26,7 @@ type Index struct {
 // New creates a new Index for the given project root.
 func New(root string) *Index {
 	return &Index{
-		root: root,
+		root:  root,
 		files: make(map[string]*FileSymbols),
 		parsers: map[string]*langParser{
 			"go":         newGoParser(),

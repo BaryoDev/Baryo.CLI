@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/arnelirobles/baryo-cli/internal/session"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // SessionSelectModel is the session picker screen.

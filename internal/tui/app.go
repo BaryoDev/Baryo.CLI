@@ -10,9 +10,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
@@ -20,6 +17,9 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/rag"
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/setup"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type screen int
@@ -35,31 +35,31 @@ const (
 
 // AppModel is the top-level bubbletea model that drives screen transitions.
 type AppModel struct {
-	screen       screen
-	spinner      spinner.Model
+	screen         screen
+	spinner        spinner.Model
 	socketPath     string
 	systemPrompt   string
 	memoriesPrompt string
 	params         llm.ChatParams
 
-	searchProvider   string
-	searchAPIKey     string
-	permissionMode   string // "auto", "confirm", "suggest"
-	providerKeys     map[string]string
+	searchProvider string
+	searchAPIKey   string
+	permissionMode string // "auto", "confirm", "suggest"
+	providerKeys   map[string]string
 
-	rewrite          bool               // prompt rewrite pass enabled
-	mcpInReadOnly    bool               // allow MCP tools in read-only modes
-	exportPath       string             // default directory for /export output
-	autoFixCfg       AutoFixConfig      // auto lint/test after code edits
-	hooksConfig      config.HooksConfig // lifecycle hooks
-	autoModeCfg      AutoModeConfig     // auto model routing
-	notifications    bool               // desktop notifications on completion
-	sandbox          bool               // sandboxed code execution
-	showThinking     bool               // render thinking blocks
-	worktreeBranch   string             // git worktree branch name
+	rewrite        bool               // prompt rewrite pass enabled
+	mcpInReadOnly  bool               // allow MCP tools in read-only modes
+	exportPath     string             // default directory for /export output
+	autoFixCfg     AutoFixConfig      // auto lint/test after code edits
+	hooksConfig    config.HooksConfig // lifecycle hooks
+	autoModeCfg    AutoModeConfig     // auto model routing
+	notifications  bool               // desktop notifications on completion
+	sandbox        bool               // sandboxed code execution
+	showThinking   bool               // render thinking blocks
+	worktreeBranch string             // git worktree branch name
 
-	mcpManager       MCPManager         // MCP server manager (nil if no servers configured)
-	mcpConfigs       []mcp.ServerConfig // deferred MCP server configs for async startup
+	mcpManager MCPManager         // MCP server manager (nil if no servers configured)
+	mcpConfigs []mcp.ServerConfig // deferred MCP server configs for async startup
 
 	preselectedModel *llm.Model
 	resumeSession    *session.Session
@@ -70,9 +70,9 @@ type AppModel struct {
 	modelBrowser  ModelBrowserModel
 	chat          ChatModel
 
-	repoIndex          *index.Index // background repo map index
-	ragPipeline        *rag.RAG    // background RAG index
-	pendingSourceIdx   *index.Index // stashed until RAG is also ready
+	repoIndex        *index.Index // background repo map index
+	ragPipeline      *rag.RAG     // background RAG index
+	pendingSourceIdx *index.Index // stashed until RAG is also ready
 
 	pendingModel       *llm.Model // model waiting to be loaded
 	loadStart          time.Time  // when model loading began
@@ -248,8 +248,8 @@ func NewApp(opts ...AppOption) AppModel {
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(adaptive("55", "183"))),
 	)
 	m := AppModel{
-		screen:  screenLoading,
-		spinner: s,
+		screen:        screenLoading,
+		spinner:       s,
 		rewrite:       true,
 		mcpInReadOnly: true,
 	}
@@ -694,4 +694,3 @@ func (m *AppModel) startModelLoading(model llm.Model) (tea.Model, tea.Cmd) {
 	cmd := m.transitionToChat(model)
 	return *m, cmd
 }
-

@@ -15,14 +15,14 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/bmatcuk/doublestar/v4"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const (
-	maxMentionFileSize = 100 * 1024    // 100 KB
+	maxMentionFileSize = 100 * 1024       // 100 KB
 	maxImageFileSize   = 20 * 1024 * 1024 // 20 MB
 	maxImagesPerMsg    = 4
 	maxCompletions     = 50

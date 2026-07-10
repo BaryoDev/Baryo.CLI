@@ -5,8 +5,8 @@
 package tui
 
 import (
-	"github.com/charmbracelet/lipgloss"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // adaptive returns an AdaptiveColor that picks the right shade for

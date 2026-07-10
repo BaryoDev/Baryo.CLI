@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
 // modelItem represents a single entry in a browser tab.
@@ -39,10 +39,10 @@ type browserTab struct {
 type ModelBrowserModel struct {
 	downloaded []llm.Model
 	available  []llm.SearchModel
-	tabs      []browserTab
-	activeTab int
-	cursor    int
-	offset    int // scroll offset within the active tab
+	tabs       []browserTab
+	activeTab  int
+	cursor     int
+	offset     int // scroll offset within the active tab
 
 	pulling    bool
 	pullName   string
@@ -51,9 +51,9 @@ type ModelBrowserModel struct {
 	pullCancel context.CancelFunc
 	spinner    spinner.Model
 
-	hw         llm.Hardware // detected system hardware
-	hubLoading bool                        // true while hub tags are being fetched
-	hubTagData map[string][]llm.ModelTag   // model name → tags
+	hw         llm.Hardware              // detected system hardware
+	hubLoading bool                      // true while hub tags are being fetched
+	hubTagData map[string][]llm.ModelTag // model name → tags
 	err        error
 	width      int
 	height     int

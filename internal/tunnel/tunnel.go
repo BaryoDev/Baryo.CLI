@@ -64,12 +64,12 @@ func Start(cfg *Config) (*Tunnel, error) {
 	forward := fmt.Sprintf("%d:localhost:%d", cfg.LocalPort, cfg.RemotePort)
 
 	args := []string{
-		"-N",                                   // no remote command
-		"-L", forward,                          // local port forward
-		"-p", fmt.Sprintf("%d", cfg.SSHPort),   // SSH port
+		"-N",          // no remote command
+		"-L", forward, // local port forward
+		"-p", fmt.Sprintf("%d", cfg.SSHPort), // SSH port
 		"-o", "StrictHostKeyChecking=accept-new", // auto-accept new host keys
-		"-o", "ExitOnForwardFailure=yes",       // fail fast if port forward fails
-		"-o", "ServerAliveInterval=30",         // keep connection alive
+		"-o", "ExitOnForwardFailure=yes", // fail fast if port forward fails
+		"-o", "ServerAliveInterval=30", // keep connection alive
 		target,
 	}
 

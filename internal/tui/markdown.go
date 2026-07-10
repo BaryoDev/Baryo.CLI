@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 )
 
-func boolPtr(b bool) *bool    { return &b }
-func uintPtr(u uint) *uint    { return &u }
+func boolPtr(b bool) *bool       { return &b }
+func uintPtr(u uint) *uint       { return &u }
 func stringPtr(s string) *string { return &s }
 
 // baryoStyle is a custom glamour style based on "dark" but with brighter

@@ -103,10 +103,10 @@ type CommitResultMsg struct {
 // confirmRequest is sent from the executor goroutine to the TUI when a
 // destructive tool needs user approval.
 type confirmRequest struct {
-	Name    string    // tool name
-	Args    string    // raw JSON args
-	Prompt  string    // human-friendly prompt text
-	RespCh  chan bool // executor blocks on this; TUI sends true/false
+	Name   string    // tool name
+	Args   string    // raw JSON args
+	Prompt string    // human-friendly prompt text
+	RespCh chan bool // executor blocks on this; TUI sends true/false
 }
 
 // ToolConfirmMsg is the Bubble Tea message that carries a confirm request
@@ -207,4 +207,3 @@ type ShellExecMsg struct {
 	Output  string
 	Err     error
 }
-

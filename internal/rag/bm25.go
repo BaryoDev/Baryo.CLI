@@ -24,10 +24,10 @@ type BM25Index struct {
 	mu     sync.RWMutex
 	chunks []Chunk
 	// term → chunk index → term frequency
-	tf      []map[string]int
+	tf []map[string]int
 	// term → document frequency (number of chunks containing the term)
-	df      map[string]int
-	avgLen  float64
+	df     map[string]int
+	avgLen float64
 }
 
 const (

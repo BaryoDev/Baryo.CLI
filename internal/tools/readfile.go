@@ -150,4 +150,3 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 
 	return Result{Content: content}
 }
-

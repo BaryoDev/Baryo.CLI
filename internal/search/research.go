@@ -58,7 +58,7 @@ type ResearchSource struct {
 // ResearchResult is the output of a multi-round research pipeline.
 type ResearchResult struct {
 	Topic              string
-	AccumulatedContext  string // all round findings concatenated
+	AccumulatedContext string // all round findings concatenated
 	Sources            []ResearchSource
 	Rounds             int
 }
@@ -76,7 +76,7 @@ type ResearchConfig struct {
 	Depth         ResearchDepth
 	ModelCall     ModelCallFunc
 	Progress      chan<- string // status updates for the TUI
-	ContextBudget int          // max chars for accumulated findings (0 = default 16000)
+	ContextBudget int           // max chars for accumulated findings (0 = default 16000)
 }
 
 // RunResearch executes the multi-round research pipeline. It searches,
@@ -198,10 +198,10 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) (ResearchResult, error
 	}
 
 	return ResearchResult{
-		Topic:             cfg.Topic,
+		Topic:              cfg.Topic,
 		AccumulatedContext: allFindings.String(),
-		Sources:           sources,
-		Rounds:            completedRounds,
+		Sources:            sources,
+		Rounds:             completedRounds,
 	}, nil
 }
 

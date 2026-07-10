@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	maxSessions     = 20
-	minExchangeLen  = 20 // skip very short Q&A pairs
+	maxSessions    = 20
+	minExchangeLen = 20 // skip very short Q&A pairs
 )
 
 // sessionFile is a minimal representation for loading session JSON.

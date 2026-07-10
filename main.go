@@ -449,4 +449,3 @@ func buildAutoModeConfig(entries []config.AutoModeEntry) tui.AutoModeConfig {
 	}
 	return cfg
 }
-

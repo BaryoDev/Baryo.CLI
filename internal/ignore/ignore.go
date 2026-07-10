@@ -27,10 +27,10 @@ var builtinPatterns = []string{
 
 // cached .baryoignore state
 var (
-	cacheMu      sync.Mutex
-	cachedRules  []rule
-	cachedMtime  time.Time
-	cachedPath   string
+	cacheMu     sync.Mutex
+	cachedRules []rule
+	cachedMtime time.Time
+	cachedPath  string
 )
 
 // rule is a parsed .baryoignore line.

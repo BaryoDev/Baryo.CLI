@@ -33,7 +33,7 @@ type Symbol struct {
 
 // FileSymbols holds all extracted symbols for a single file.
 type FileSymbols struct {
-	Path    string   // relative path from project root
+	Path    string // relative path from project root
 	Symbols []Symbol
 	ModTime time.Time
 	Size    int64

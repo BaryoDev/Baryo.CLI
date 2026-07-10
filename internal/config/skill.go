@@ -137,8 +137,8 @@ func extractTriggerWords(description, body string) []string {
 	}
 	extRe := regexp.MustCompile(`\.([a-z]{2,5})\b`)
 	for _, m := range extRe.FindAllString(posDesc, -1) {
-		add(m)                // .pdf
-		add(m[1:])            // pdf
+		add(m)               // .pdf
+		add(m[1:])           // pdf
 		add(m[1:] + " file") // pdf file
 	}
 

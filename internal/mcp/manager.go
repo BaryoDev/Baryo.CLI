@@ -17,8 +17,8 @@ import (
 
 // Manager manages multiple MCP server connections.
 type Manager struct {
-	clients map[string]*Client            // server name → client
-	toolMap map[string]string             // qualified tool name → server name
+	clients map[string]*Client // server name → client
+	toolMap map[string]string  // qualified tool name → server name
 	ctx     context.Context
 	cancel  context.CancelFunc
 }

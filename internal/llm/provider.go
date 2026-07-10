@@ -17,19 +17,19 @@ import (
 
 // Providers maps provider names to their base URLs.
 var Providers = map[string]string{
-	"gemini":     "https://generativelanguage.googleapis.com/v1beta/openai",
-	"openrouter": "https://openrouter.ai/api/v1",
-	"openai":     "https://api.openai.com/v1",
-	"anthropic":  "https://api.anthropic.com/v1",
-	"groq":       "https://api.groq.com/openai/v1",
-	"mistral":    "https://api.mistral.ai/v1",
-	"together":   "https://api.together.xyz/v1",
-	"fireworks":  "https://api.fireworks.ai/inference/v1",
-	"deepseek":   "https://api.deepseek.com",
-	"xai":        "https://api.x.ai/v1",
-	"cerebras":   "https://api.cerebras.ai/v1",
-	"perplexity": "https://api.perplexity.ai",
-	"sambanova":  "https://api.sambanova.ai/v1",
+	"gemini":      "https://generativelanguage.googleapis.com/v1beta/openai",
+	"openrouter":  "https://openrouter.ai/api/v1",
+	"openai":      "https://api.openai.com/v1",
+	"anthropic":   "https://api.anthropic.com/v1",
+	"groq":        "https://api.groq.com/openai/v1",
+	"mistral":     "https://api.mistral.ai/v1",
+	"together":    "https://api.together.xyz/v1",
+	"fireworks":   "https://api.fireworks.ai/inference/v1",
+	"deepseek":    "https://api.deepseek.com",
+	"xai":         "https://api.x.ai/v1",
+	"cerebras":    "https://api.cerebras.ai/v1",
+	"perplexity":  "https://api.perplexity.ai",
+	"sambanova":   "https://api.sambanova.ai/v1",
 	"cohere":      "https://api.cohere.ai/compatibility/v1",
 	"huggingface": "https://router.huggingface.co/v1",
 	"github":      "https://models.github.ai/inference",
@@ -337,15 +337,15 @@ func parseProviderPricing(provider string, entry providerModelEntry, modelID str
 
 // openaiPricing maps OpenAI model prefixes to their per-token pricing.
 var openaiPricing = map[string]ModelPricing{
-	"gpt-4o":      {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
-	"gpt-4o-mini": {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
-	"gpt-4.1":     {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
-	"gpt-4.1-mini":{PromptPrice: 0.40 / 1_000_000, CompletionPrice: 1.60 / 1_000_000},
-	"gpt-4.1-nano":{PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.40 / 1_000_000},
-	"o3":          {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
-	"o3-mini":     {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
-	"o1":          {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 60.0 / 1_000_000},
-	"o1-mini":     {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
+	"gpt-4o":       {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+	"gpt-4o-mini":  {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+	"gpt-4.1":      {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
+	"gpt-4.1-mini": {PromptPrice: 0.40 / 1_000_000, CompletionPrice: 1.60 / 1_000_000},
+	"gpt-4.1-nano": {PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.40 / 1_000_000},
+	"o3":           {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 8.00 / 1_000_000},
+	"o3-mini":      {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
+	"o1":           {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 60.0 / 1_000_000},
+	"o1-mini":      {PromptPrice: 1.10 / 1_000_000, CompletionPrice: 4.40 / 1_000_000},
 }
 
 // LookupOpenAIPricing returns pricing for an OpenAI model ID by matching prefixes.
@@ -391,10 +391,10 @@ func LookupBedrockPricing(modelID string) ModelPricing {
 
 // anthropicPricing maps Anthropic model prefixes to their per-token pricing.
 var anthropicPricing = map[string]ModelPricing{
-	"claude-opus-4":      {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 75.0 / 1_000_000},
-	"claude-sonnet-4":    {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
-	"claude-3-5-haiku":   {PromptPrice: 0.80 / 1_000_000, CompletionPrice: 4.0 / 1_000_000},
-	"claude-3-5-sonnet":  {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+	"claude-opus-4":     {PromptPrice: 15.0 / 1_000_000, CompletionPrice: 75.0 / 1_000_000},
+	"claude-sonnet-4":   {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
+	"claude-3-5-haiku":  {PromptPrice: 0.80 / 1_000_000, CompletionPrice: 4.0 / 1_000_000},
+	"claude-3-5-sonnet": {PromptPrice: 3.0 / 1_000_000, CompletionPrice: 15.0 / 1_000_000},
 }
 
 // LookupAnthropicPricing returns pricing for an Anthropic model ID by matching prefixes.
@@ -413,17 +413,17 @@ func LookupAnthropicPricing(modelID string) ModelPricing {
 // providerPricingTables maps provider names to their model pricing tables.
 var providerPricingTables = map[string]map[string]ModelPricing{
 	"groq": {
-		"llama-3.3-70b":  {PromptPrice: 0.59 / 1_000_000, CompletionPrice: 0.79 / 1_000_000},
-		"llama-3.1-8b":   {PromptPrice: 0.05 / 1_000_000, CompletionPrice: 0.08 / 1_000_000},
-		"gemma2-9b":      {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.20 / 1_000_000},
-		"mistral-saba":   {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+		"llama-3.3-70b": {PromptPrice: 0.59 / 1_000_000, CompletionPrice: 0.79 / 1_000_000},
+		"llama-3.1-8b":  {PromptPrice: 0.05 / 1_000_000, CompletionPrice: 0.08 / 1_000_000},
+		"gemma2-9b":     {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.20 / 1_000_000},
+		"mistral-saba":  {PromptPrice: 0.20 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
 	},
 	"mistral": {
-		"mistral-large":  {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
-		"mistral-small":  {PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.30 / 1_000_000},
-		"codestral":      {PromptPrice: 0.30 / 1_000_000, CompletionPrice: 0.90 / 1_000_000},
-		"mistral-nemo":   {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
-		"pixtral-large":  {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
+		"mistral-large": {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
+		"mistral-small": {PromptPrice: 0.10 / 1_000_000, CompletionPrice: 0.30 / 1_000_000},
+		"codestral":     {PromptPrice: 0.30 / 1_000_000, CompletionPrice: 0.90 / 1_000_000},
+		"mistral-nemo":  {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
+		"pixtral-large": {PromptPrice: 2.00 / 1_000_000, CompletionPrice: 6.00 / 1_000_000},
 	},
 	"deepseek": {
 		"deepseek-chat":     {PromptPrice: 0.27 / 1_000_000, CompletionPrice: 1.10 / 1_000_000},
@@ -440,10 +440,10 @@ var providerPricingTables = map[string]map[string]ModelPricing{
 		"sonar-reasoning": {PromptPrice: 1.00 / 1_000_000, CompletionPrice: 5.00 / 1_000_000},
 	},
 	"cohere": {
-		"command-a":    {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
+		"command-a":      {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
 		"command-r-plus": {PromptPrice: 2.50 / 1_000_000, CompletionPrice: 10.0 / 1_000_000},
-		"command-r7b":  {PromptPrice: 0.0375 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
-		"command-r":    {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
+		"command-r7b":    {PromptPrice: 0.0375 / 1_000_000, CompletionPrice: 0.15 / 1_000_000},
+		"command-r":      {PromptPrice: 0.15 / 1_000_000, CompletionPrice: 0.60 / 1_000_000},
 	},
 }
 
@@ -533,14 +533,14 @@ func listOllamaCloudModels() []Model {
 
 // gitHubCatalogEntry represents a model from the GitHub Models catalog API.
 type gitHubCatalogEntry struct {
-	ID                       string   `json:"id"`
-	Name                     string   `json:"name"`
-	Publisher                string   `json:"publisher"`
-	Summary                  string   `json:"summary"`
-	Capabilities             []string `json:"capabilities"`
-	SupportedInputModalities []string `json:"supported_input_modalities"`
+	ID                        string   `json:"id"`
+	Name                      string   `json:"name"`
+	Publisher                 string   `json:"publisher"`
+	Summary                   string   `json:"summary"`
+	Capabilities              []string `json:"capabilities"`
+	SupportedInputModalities  []string `json:"supported_input_modalities"`
 	SupportedOutputModalities []string `json:"supported_output_modalities"`
-	Limits                   struct {
+	Limits                    struct {
 		MaxInputTokens  int `json:"max_input_tokens"`
 		MaxOutputTokens int `json:"max_output_tokens"`
 	} `json:"limits"`
