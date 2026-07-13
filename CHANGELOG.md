@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.13.0 — Lossless compaction (2026-07-13)
+
+Context compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation.
+
+### Added
+
+- **Pre-compaction messages are archived to disk.** When compaction replaces older messages with a summary, the replaced messages are appended to `~/.baryo/sessions/<id>.archive.jsonl` (one JSON message per line). Previously the saved session stored only the compacted list, so summarized-away content was permanently lost.
+- **`/sessions search` now covers archived messages.** Content that was compacted out of the live conversation is searchable again; before, search silently only worked on conversations short enough to never compact.
+- `session.LoadArchive(id)` reads a session's full archived history (groundwork for a future `/recall` command).
+- Session retention cleanup (`session_retention_days`) removes a session's archive together with its session file.
+
+### Fixed
+
+- **A failed compaction stream no longer corrupts the next turn.** If the compaction request errored (model busy, endpoint drop), the pending-compaction flag was never cleared, so the model's next normal reply was spliced into history as if it were the summary — silently destroying older messages with a stale keep index. The error path also popped a legitimate user message off the conversation. Compaction failures now report "context unchanged" and leave the conversation intact.
+- Stream-state reset clears compaction bookkeeping on every path (error, cancel), not just success.
+
+### Tests
+
+- First tests for the `session` package: archive round-trip, search-over-archive, and archive cleanup.
+
 ## v0.12.1 — Stabilization release (2026-07-10)
 
 No new features. This release hardens v0.12.0 for daily use: crash fixes, data-loss protection, correctness fixes in the tool loop, dependency security updates, and a stricter CI gate.

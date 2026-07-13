@@ -5,6 +5,8 @@
 package session
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -79,6 +81,92 @@ func (s *Session) Save() error {
 		return err
 	}
 	return fsutil.WriteFileAtomic(filepath.Join(dir, s.ID+".json"), data, 0o600)
+}
+
+// archivePath returns the session's archive file path within dir.
+func archivePath(dir, id string) string {
+	return filepath.Join(dir, id+".archive.jsonl")
+}
+
+// Archive appends messages to the session's append-only archive file
+// (<id>.archive.jsonl, one JSON message per line). Compaction calls this
+// before discarding older messages so the full history survives on disk.
+func (s *Session) Archive(messages []llm.ChatMessage) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	dir, err := sessionsDir()
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	for _, msg := range messages {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		buf.Write(data)
+		buf.WriteByte('\n')
+	}
+	f, err := os.OpenFile(archivePath(dir, s.ID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// LoadArchive reads all archived (compacted-away) messages for a session.
+// Returns nil with no error if the session has no archive.
+func LoadArchive(id string) ([]llm.ChatMessage, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(archivePath(dir, id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	var messages []llm.ChatMessage
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var msg llm.ChatMessage
+		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+			continue // skip corrupt lines rather than losing the rest
+		}
+		messages = append(messages, msg)
+	}
+	return messages, sc.Err()
+}
+
+// archiveMatches reports whether any archived message content contains q
+// (already lowercased). Missing or unreadable archives simply don't match.
+func archiveMatches(dir, id, q string) bool {
+	f, err := os.Open(archivePath(dir, id))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var msg llm.ChatMessage
+		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+			continue
+		}
+		if msg.Content != nil && strings.Contains(strings.ToLower(*msg.Content), q) {
+			return true
+		}
+	}
+	return false
 }
 
 // GenerateTitle extracts a title from the first user message.
@@ -216,23 +304,24 @@ func Search(query string) ([]Summary, error) {
 		if err := json.Unmarshal(data, &s); err != nil {
 			continue
 		}
-		// Check title first
-		if s.Title != "" && strings.Contains(strings.ToLower(s.Title), q) {
+		// Check title, then live messages, then archived (compacted-away) messages.
+		matched := s.Title != "" && strings.Contains(strings.ToLower(s.Title), q)
+		if !matched {
+			for _, msg := range s.Messages {
+				if msg.Content != nil && strings.Contains(strings.ToLower(*msg.Content), q) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			matched = archiveMatches(dir, s.ID, q)
+		}
+		if matched {
 			results = append(results, Summary{
 				ID: s.ID, ModelName: s.ModelName, Messages: len(s.Messages),
 				UpdatedAt: s.UpdatedAt, CWD: s.CWD, Title: s.Title, Tags: s.Tags,
 			})
-			continue
-		}
-		// Check message contents
-		for _, msg := range s.Messages {
-			if msg.Content != nil && strings.Contains(strings.ToLower(*msg.Content), q) {
-				results = append(results, Summary{
-					ID: s.ID, ModelName: s.ModelName, Messages: len(s.Messages),
-					UpdatedAt: s.UpdatedAt, CWD: s.CWD, Title: s.Title, Tags: s.Tags,
-				})
-				break
-			}
 		}
 	}
 	sort.Slice(results, func(i, j int) bool {
@@ -273,6 +362,7 @@ func CleanOld(days int) (int, error) {
 		if s.UpdatedAt.Before(cutoff) {
 			if err := os.Remove(path); err == nil {
 				deleted++
+				os.Remove(archivePath(dir, s.ID)) // best-effort; may not exist
 			}
 		}
 	}

@@ -236,6 +236,8 @@ func (m *ChatModel) resetStreamState() {
 	m.toolStatus = ""
 	m.streamTokenCount = 0
 	m.thinkingContent = ""
+	m.compactPending = false
+	m.compactKeep = 0
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 		m.cancelFunc = nil
@@ -1038,16 +1040,23 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if summary == "" {
 					summary = m.turnContent
 				}
-				m.compactPending = false
+				keep := m.compactKeep
 				m.resetStreamState()
 
 				if summary != "" {
+					// Archive the messages being replaced so compaction is
+					// recoverable and /sessions search still covers them.
+					if m.session != nil {
+						if err := m.session.Archive(m.messages[:keep]); err != nil {
+							logger.Debug("compaction archive failed", "error", err)
+						}
+					}
 					m.messages = append(
 						[]llm.ChatMessage{
 							llm.NewChatMessage("user", "[Conversation summary]\n\n"+summary),
 							llm.NewChatMessage("assistant", "Understood, I have the context from our earlier conversation."),
 						},
-						m.messages[m.compactKeep:]...,
+						m.messages[keep:]...,
 					)
 				}
 				m.contextTokens = estimateTokens(m.buildMessages())
@@ -1330,6 +1339,19 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		}
 
 		if evt.Error != "" {
+			// Compaction stream failed — conversation untouched, just report it.
+			// Must not fall through to the generic handler: it would pop a real
+			// user message, and a lingering compactPending would make the next
+			// completed turn splice history as if it were a summary.
+			if m.compactPending {
+				m.resetStreamState()
+				m.history = append(m.history, chatEntry{
+					role:    roleError,
+					content: "Compaction failed — context unchanged: " + evt.Error,
+				})
+				m.updateViewport()
+				return m, fireHookCmd(m.hooksConfig, HookOnError, HookContext{Error: evt.Error})
+			}
 			// If we had partial content, keep it in history
 			if m.streaming != "" {
 				cleaned, _, _ := stripThinkBlock(m.streaming)
