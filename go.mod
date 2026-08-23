@@ -2,7 +2,7 @@ module github.com/arnelirobles/baryo-cli
 
 go 1.25.0
 
-toolchain go1.25.12
+toolchain go1.26.6
 
 require (
 	github.com/atotto/clipboard v0.1.4
@@ -63,5 +63,5 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 )
