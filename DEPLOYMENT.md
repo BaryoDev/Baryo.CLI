@@ -162,11 +162,11 @@ Ordered by how hard each one bites in this deployment.
 
 | Gap | Impact on an appliance | Reference |
 |---|---|---|
-| Repo map dead in released binaries | The model runs without repo structure exactly where context is scarcest | this document |
-| `git check-ignore` forked once per file | `ignore.IsIgnored` spawns a process per path; a `grep` over a few thousand files spends minutes spawning processes before the model sees anything, and constrained CPUs and SD cards make it far worse | `internal/ignore/ignore.go:184` |
-| No stream timeout | An unattended job hangs forever on a stalled endpoint; currently survivable only via `RuntimeMaxSec` | issue #7 |
-| Session file rewritten in full every turn | Write amplification on SD and eMMC storage in an always-on deployment | `internal/session/session.go` |
-| Project config and skills are trusted implicitly | An appliance running `--yolo` against repositories it did not author executes whatever `.baryo/config.yaml` and `skills/` in that repo specify | security review |
+| Repo map dead in released binaries | The model runs without repo structure exactly where context is scarcest | [#9](https://github.com/BaryoDev/Baryo.CLI/issues/9) |
+| `git check-ignore` forked once per file | `ignore.IsIgnored` spawns a process per path; a `grep` over a few thousand files spends minutes spawning processes before the model sees anything, and constrained CPUs and SD cards make it far worse | [#10](https://github.com/BaryoDev/Baryo.CLI/issues/10) |
+| No stream timeout | An unattended job hangs forever on a stalled endpoint; currently survivable only via `RuntimeMaxSec` | [#7](https://github.com/BaryoDev/Baryo.CLI/issues/7) |
+| Session file rewritten in full every turn | Write amplification on SD and eMMC storage in an always-on deployment | [#11](https://github.com/BaryoDev/Baryo.CLI/issues/11) |
+| Project config and skills are trusted implicitly | An appliance running `--yolo` against repositories it did not author executes whatever `.baryo/config.yaml` and `skills/` in that repo specify | [#12](https://github.com/BaryoDev/Baryo.CLI/issues/12) |
 | Interactive round cap of 5 | Does not block headless jobs (`--max-turns`), but makes the TUI unsuitable for verifying appliance jobs by hand | `internal/llm/toolloop.go:19` |
 
 ## Definition of done
