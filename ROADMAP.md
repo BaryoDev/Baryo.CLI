@@ -2,6 +2,8 @@
 
 Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. Every feature should strengthen at least one of these.
 
+Last reconciled against the source tree at v0.13.0. Competitor claims in this document were verified against primary sources (vendor documentation and source repositories) on 2026-09-09; re-verify before relying on them, as this is the section that goes stale fastest.
+
 ## Philosophy: Local-First with Cloud Escape Hatch
 
 Baryo is a **local-first** tool — models run on your machine via Docker, your data never leaves your laptop, and there are no per-token fees. This is the default and recommended experience.
@@ -17,218 +19,271 @@ The tradeoff is intentional: **privacy and cost vs. capability**. Most daily tas
 
 ---
 
+## Primary Deployment Target
+
+Competing with Claude Code and Cursor on general-purpose interactive coding is not a winnable frame — they have more engineers on the tool loop alone than this project has contributors, and the parity gaps below are widening rather than closing.
+
+The defensible position is narrower: **the coding agent for people who cannot or will not send their code to a cloud.** An always-on agent, on hardware the user owns, running against code that never leaves it, at zero marginal cost per task.
+
+[DEPLOYMENT.md](DEPLOYMENT.md) specs this out — topologies, hardware guidance, the headless/systemd path, and the gaps that block it today. When prioritizing, prefer work that serves that target over work that closes a parity gap for its own sake.
+
+Concretely, this reframing means:
+
+- **Deprioritized:** voice input, LSP integration, split-pane TUI. These matter for interactive desktop use, which is not where Baryo wins.
+- **Prioritized:** unattended reliability (timeouts, resource bounds), the trust model, small-model context efficiency, and anything that reduces per-task cost on constrained hardware.
+
+---
+
 ## Competitive Gap Analysis
 
-This section identifies the critical gaps between Baryo and the leading AI coding CLIs — **Claude Code**, **Aider**, and **OpenCode** — and prioritizes what to build to close (and exceed) them.
+Gaps between Baryo and the leading AI coding CLIs — **Claude Code**, **Aider**, and **OpenCode**.
 
-### Where Baryo Already Leads
-- **Local-first architecture** — no mandatory API key, runs on Docker/Ollama out of the box
-- **16+ provider support** — broadest cloud provider coverage (Gemini, OpenRouter, Anthropic, OpenAI, Bedrock, Groq, Mistral, DeepSeek, xAI, Cerebras, Perplexity, SambaNova, Cohere, HuggingFace, GitHub Models, Ollama Cloud)
-- **Deep research mode** — multi-round web research with structured reports
-- **Skills system** — 16 ported skills (pdf, docx, pptx, xlsx, etc.) with auto-activation
-- **SSH tunneling** — seamless remote Ollama access
-- **DevOps focus** — a differentiating pillar that competitors largely ignore
-- **Dynamic model-aware pipeline** — auto-adjusts tools/context for small vs large models
+### Where Baryo genuinely leads
 
-### Critical Gaps to Close
+These survived verification against the competitors as of 2026-09.
+
+- **Local-first architecture** — no mandatory API key, runs against Docker Model Runner or Ollama out of the box. Local endpoints send no `Authorization` header at all, so there is no accidental-egress path.
+- **Single static binary** — no Node or Python runtime to install. Aider requires a Python environment; this matters disproportionately on ARM and in locked-down environments.
+- **17 cloud providers + Bedrock** in one config (`internal/llm/provider.go:19-37`), switchable mid-session.
+- **Dynamic model-aware pipeline** — context-window detection driving tool filtering, schema trimming, and prompt compaction. This is the hard part of making a small local model usable as an agent, and it is the piece of this codebase with the most genuine novelty.
+- **SSH tunneling** to a remote model host, for splitting the harness from the GPU.
+
+### Claims retired from this section
+
+Previously listed as leads, but they no longer distinguish Baryo:
+
+- ~~Deep research mode~~ — Claude Code ships `/deep-research`.
+- ~~Skills system~~ — Claude Code has skills and a plugin marketplace; the mechanism is no longer unusual.
+- ~~DevOps focus~~ — a stated pillar with no DevOps-specific tooling in the codebase. `/deploy` and `/docker` do not exist; only `/new` emits Dockerfiles. Re-earn this claim by shipping the P2 DevOps toolkit, or drop the pillar.
+
+### Capability comparison
+
+Verified 2026-09-09 against vendor documentation and source.
 
 | Capability | Claude Code | Aider | OpenCode | Baryo |
 |---|---|---|---|---|
-| Test suite | Extensive | Extensive | Moderate | **Core packages covered** |
-| Repo map / tree-sitter | Full AST | Full (with tags) | Partial | 8 languages (Go, TS, JS, Python, Rust, Java, C, C++) |
-| Diff/patch strategies | search/replace | unified diff, whole file, udiff | diff-based | exact + fuzzy match, unified diff, whole-file rewrite |
-| Extended thinking | Native | N/A | N/A | Native Anthropic + `<think>` block rendering |
-| Conversation branching | No | No | No | Checkpoints only |
-| Cost budget/limits | Per-session tracking | Per-session tracking | Basic | Tracking only, no limits |
-| Voice input | No | Yes | No | No |
-| LSP integration | No | No | Yes | No |
-| Undo granularity | Per-tool git revert | Git-based undo | Per-change | `/undo` last commit only |
+| Conversation branching | `/branch`, `/fork`, `/rewind` (code + conversation) | No | `run --fork`, fork-from-message | **Behind** — checkpoints are in-memory only, lost on exit |
+| LSP integration | 11 languages, diagnostics auto-injected after every edit | No | Partial | **Behind** — no LSP; `autofix.go` runs a linter instead |
+| Voice input | `/voice` dictation | Yes | No | No (deprioritized, see above) |
+| Cost limits | `--max-budget-usd` hard stop (print mode only) | Tracking only, no cap | Basic | **Behind** — tracking only |
+| Tool rounds per turn | Effectively unbounded | Unbounded | Unbounded | **Behind** — hard cap of 5 interactive (`internal/llm/toolloop.go:19`); print mode configurable via `--max-turns` |
+| Parallel tool execution | Yes | N/A | Yes | **Behind** — sequential (`toolloop.go:236-282`) |
+| Repo map / tree-sitter | Full AST + LSP symbols | Full, with ranked tags | Partial | 8 languages — **but dead in every released binary**, see [#9](https://github.com/BaryoDev/Baryo.CLI/issues/9) |
+| Diff/patch strategies | search/replace | unified diff, whole file, udiff | diff-based | exact + fuzzy, unified diff, whole-file rewrite |
+| Extended thinking | Native | N/A | N/A | Native Anthropic + `<think>` rendering |
+| Local-first, no API key | No | Partial | No | **Leads** |
+| Single binary, no runtime | No (Node) | No (Python) | No (Node) | **Leads** |
+| Undo granularity | Per-tool revert + `/rewind` | Git-based undo | Per-change | `/undo` last commit only |
+
+Two rows previously claimed as Baryo leads were wrong: conversation branching is now table stakes (two of three competitors have it), and the claim that Aider offers spending limits does not hold — Aider has no cost cap of any kind. A Baryo `cost_limit` that works in **interactive** mode would be genuinely ahead, since Claude Code's `--max-budget-usd` is print-mode only.
 
 ---
 
-## ~~P0 — Foundation & Trust (v0.12)~~ DONE
+## P0 — Correctness & Trust (v0.14)
 
-All P0 items completed. See the Completed section below for details.
+Defects found in the v0.13.0 review. These block the deployment target and, in two cases, make the tool unsafe to point at code the user did not write. Nothing in P1 or below should start until these are closed.
 
----
+### Shipped artifact is broken
 
-## Stability Status (v0.12.1)
+- **[#9](https://github.com/BaryoDev/Baryo.CLI/issues/9) — released binaries index zero files.** `CGO_ENABLED=0` in `.goreleaser.yaml` compiles in the no-CGO `ParseFile`, which returns an error for every file; `Index.parseOne` propagates it and both `Build` and `Update` skip the file. Measured: CGO on indexes 175/175 files with a 5780-byte repo map, CGO off indexes 0. Affects every distribution channel on every platform.
+- **[#6](https://github.com/BaryoDev/Baryo.CLI/issues/6) — the documented `go install` command cannot work.** `go.mod` declares `github.com/arnelirobles/baryo-cli`; README documents `github.com/baryodev/baryo-cli`; the repository is at `BaryoDev/Baryo.CLI`. No path resolves.
 
-v0.12.1 was a dedicated stabilization pass — no new features, only hardening. Full details in [CHANGELOG.md](CHANGELOG.md).
+### Trust and containment
 
-### What is solid now
+- **[#12](https://github.com/BaryoDev/Baryo.CLI/issues/12) — project config and skills are trusted implicitly.** A cloned repository's `.baryo/config.yaml` can spawn MCP servers, register `sh -c` hooks, set `permission_mode: auto`, and redirect `socket_path` — all before the user types anything. A repo-supplied skill triggers `pip install` with no confirmation. Needs a directory-trust gate.
+- **Read tools are not contained.** `read_file`, `grep`, `glob`, and `list_directory` prefix-check the *unresolved* path; only the write tools call `resolveWithinProject`. A symlink in a cloned repo reads arbitrary files, and `fetch_page` is ungated, so injection → read → exfiltrate needs no approval in `confirm` mode. `internal/tools/paths_test.go` already tests this property for writes.
+- **`gh api` GET-only allowlist is bypassable.** `internal/tools/gh.go:166,190` matches `-X`/`--method`/`-f`/`--field` by exact token, so `--method=DELETE` and `--input body.json` pass. The tool is not marked `Destructive`.
+- **MCP tools skip the permission gate** in every executor, including plan mode, which the UI presents as read-only.
 
-- **Crash safety** — the known panic paths in `apply_diff` are fixed with regression tests; no `panic()` calls remain in production code.
-- **Data safety** — all file mutations (edit/write/apply_diff, session saves, memory saves) are atomic; an interrupted write can no longer corrupt a file or lose conversation history.
-- **Memory safety** — subprocess output and search/fetch responses are size-capped before buffering.
-- **Tool loop correctness** — duplicate-call detection compares full arguments, so multi-file tasks are no longer sabotaged; confirm-mode no longer produces phantom "empty response" errors.
-- **Failure visibility** — truncated model streams and dead MCP servers surface real errors immediately instead of silent truncation or repeated 30s timeouts.
-- **Sandboxing** — destructive file tools resolve symlinks before the project-root containment check.
-- **Supply chain** — `govulncheck` clean (dependencies patched, `toolchain go1.25.12` pinned); `staticcheck` clean; CI runs vet, gofmt, staticcheck, govulncheck, tests with and without CGO, and the race detector on Linux and macOS.
+### Correctness
 
-### Known gaps still open
+- **Anthropic tool calls with no text preamble fail the turn.** `toolloop.go:280` appends an assistant message carrying only text and no tool calls, so `anthropic.go:152-153` emits `{"role":"assistant","content":""}`, which the API rejects. With extended thinking on, thinking goes to `ThinkingToken` and the text buffer is empty — so this should fire routinely. Both converters already support `tool_use`/`tool_result` blocks; the loop never populates them.
+- **Duplicate-call suppression blocks legitimate re-runs.** `toolloop.go:253-260` records the key *before* execution and covers every tool, so `go test` → fix → `go test` returns "Already retrieved results for this query". The fix→verify loop cannot close. Restrict to idempotent search-family tools and only record successful calls.
+- **`edit_file` fuzzy matching can corrupt an unrelated line.** `editfile.go:153` does `strings.Replace(content, match, ...)`, a substring search that need not land on the window `fuzzyFind` located. Reported as success. Splice by line index instead.
+- **No cancellation path.** `app.go:352` returns `tea.Quit` on ctrl+c before dispatching to any screen, making the cancel handler at `chat.go:628-633` dead code. A hung `deep_research` or a long shell tool can only be escaped by quitting, which also orphans tool children.
+- **`/models` mid-session discards the conversation.** `transitionToChat` (`app.go:649`) calls `NewChat(...)`, contradicting the documented behavior that history is preserved.
+- **Stale flow flags delete the user's next message.** `resetStreamState` clears `compactPending` but not `searchPending`/`researchPending`/`strategyPending`; after a stream error the index arithmetic in `Done` splices out a real user message. Same bug class as the confirm-flow bug fixed in v0.12.1.
+- **[#7](https://github.com/BaryoDev/Baryo.CLI/issues/7) — no stream timeout**; headless hangs forever on a stalled provider.
+- **One oversized MCP message kills the server for the session.** A JSON-RPC line over 1 MiB makes the scanner return `ErrTooLong`; `readLoop` exits and sets `dead` permanently, with no reconnect.
+- **Cost accounting is wrong.** Only the last round's usage is reported (`toolloop.go:178,295`), and the OpenAI-compatible request never sets `stream_options.include_usage`, so OpenAI-family providers report `$0.00` forever.
 
-| Gap | Impact | Notes |
-|---|---|---|
-| No tests for `internal/tui` (~10k lines) | Regressions in the UI state machine are only caught manually | Largest remaining test gap; the confirm-flow bug fixed in v0.12.1 is exactly the class of bug tests here would catch |
-| Unbounded session growth | Long conversations slow saves and bloat disk | Sessions are fully rewritten every turn; cleanup is age-based only (`session_retention_days`) |
-| No MCP auto-reconnect | A crashed MCP server stays down for the session | Failures are now reported immediately, but recovery requires restarting baryo |
-| Process-group kill is unix-only | On Windows, shell grandchildren can outlive the tool timeout | `procutil.SetProcessGroup` is a no-op on Windows |
-| `worktree`/`session` packages untested | Lower risk (small, simple code) | Candidates for quick test coverage |
+### Performance
 
----
+- **[#10](https://github.com/BaryoDev/Baryo.CLI/issues/10) — `git check-ignore` forked once per file.** ~2.1 ms per spawn; a `grep` over 10k files spends ~20 s in process creation alone, per call. Batch it.
+- **[#11](https://github.com/BaryoDev/Baryo.CLI/issues/11) — session file rewritten in full every turn.** Write amplification on flash storage in an always-on deployment.
 
-## P1 — Competitive Parity (v0.13)
+### Test coverage
 
-Features that match the best-in-class competitors and remove reasons for users to switch away.
-
-### Agentic Tool Loop Improvements
-**Gap:** Claude Code runs up to 200+ tool rounds in a single turn. Baryo caps at 5 (`maxToolRounds`). Aider supports unlimited rounds.
-
-- Raise `maxToolRounds` to 25 (configurable via `max_tool_rounds` in config)
-- Add `--max-turns` to interactive mode (currently only in headless)
-- **Parallel tool execution** — when the model requests multiple independent tool calls in one turn, execute them concurrently (currently sequential)
-- Add a **tool call cost estimator** — show estimated cost before executing expensive tool chains in `confirm` mode
-- Better tool result truncation — smart summarization instead of hard character cutoff
-
-### Cost Budget & Spend Limits
-**Gap:** Baryo tracks cost but has no guardrails. Claude Code and Aider let users set spending limits.
-
-- `cost_limit` config option (per-session dollar cap)
-- Warning at 80% of budget, hard stop at 100%
-- `/cost` already exists — extend with per-tool and per-round breakdown
-- Cumulative daily/weekly spend tracking across sessions
-
-### Conversation Branching
-**Gap:** No competitor has this well, but Baryo's checkpoint system is close. This would be a differentiator.
-
-- Extend `/checkpoint` + `/rewind` into full conversation branching
-- `/branch` within a conversation — fork the conversation at any point
-- Visual branch tree in `/sessions` view
-- Compare branches: show what each branch produced
-
-### Git Integration Depth
-**Gap:** Aider has the deepest git integration — auto-commits every change with descriptive messages, groups related changes, and supports `--auto-commit`. Claude Code auto-commits on request.
-
-- **Auto-commit mode** — optionally commit each successful edit with an AI-generated message (`auto_commit: true` in config)
-- **Semantic commit grouping** — batch related file changes into a single commit
-- Smarter `/undo` — undo individual tool actions, not just the last commit
-- `/stash` and `/stash pop` — stash current changes mid-conversation
-- Show git blame context for edited files so the model understands change history
-
-### LSP Integration
-**Gap:** OpenCode integrates with LSP for diagnostics, go-to-definition, and symbol lookup. This gives the model precise compiler-level feedback.
-
-- Connect to running LSP servers (gopls, typescript-language-server, pyright, rust-analyzer)
-- Feed LSP diagnostics (errors, warnings) into tool results after edits — more precise than running the linter
-- LSP-powered symbol lookup: resolve function signatures, type definitions, references
-- Auto-detect LSP servers by project type
+`internal/tui` is 10,754 lines with zero tests, and is where the last two bugfix releases landed. Bubble Tea models are pure `Update(msg)` functions and are testable without a terminal. Highest-value first: confirm approve/deny listener arming, stream-error flag clearing, concurrent-stream clobbering, `Done` turn assembly, compaction splice arithmetic.
 
 ---
 
-## P2 — Differentiation (v0.14)
+## P1 — Agentic Capability (v0.15)
 
-Features that make Baryo the clear choice over competitors, especially for its target audience (local-first, DevOps-aware, multi-provider).
+Previously labeled v0.13. None of it shipped in v0.13.0 — that release was the compaction/archive work — so it is renumbered rather than marked late.
 
-### Multi-Source Search (already planned)
-Strengthen research by querying multiple sources simultaneously.
+The theme is closing the gap between "assistant that edits files" and "agent that finishes tasks". The round cap is the single highest-leverage item in the document.
 
-- Parallel search across multiple providers (DDG + Brave + Tavily)
-- Deduplicate and rank results across providers
-- `/fetch <url>` improvements: better content extraction, PDF support, structured data
-- Domain-specific search: `--site:github.com`, `--site:stackoverflow.com`
-- Search result caching to avoid re-fetching within a session
-- Configurable number of pages to deep-read (currently 3, allow up to 10)
+### Tool loop
 
-### Auto-Mode with Model Routing
-**Gap:** No competitor automatically routes tasks to the best model. Baryo has `auto_mode` config but it's basic tier-based routing.
+- **Raise the interactive round cap.** `maxToolRounds = 5` is the ceiling on everything: it gates the TUI, headless, and subagents alike. Five rounds reads a file and edits it; it does not chase a failing test to root cause. Make it configurable (`max_tool_rounds`, default 25) and add `--max-turns` to interactive mode.
+- **Parallel tool execution** — the loop already collects results into a slice, so fanning out independent calls is contained.
+- **Smarter tool-result truncation** — summarize rather than hard-cut. Matters most for small context windows.
+- **Cap MCP tool results** before they enter the conversation; they are currently appended uncapped.
 
-- **Intent classification** — analyze the user's prompt and route to the best model (fast model for simple questions, strong model for complex code changes)
-- Cost-aware routing: prefer cheaper models when the task doesn't need reasoning depth
-- Automatic fallback: if a local model fails a tool call, retry on a cloud model
-- Per-task routing: research tasks → Perplexity/Gemini, code tasks → Claude/GPT, quick edits → local model
+### Cost budget and spend limits
 
-### Hooks System (already planned)
-Shell commands that run on events — pre-tool, post-tool, on-error, on-commit.
+- `cost_limit` config option with a hard stop, working in **interactive** mode as well as headless — this is where Baryo can be ahead rather than at parity.
+- Warning at 80% of budget, stop at 100%.
+- Accumulate usage across rounds and set `stream_options.include_usage` (see P0 — the current numbers are wrong, so build the guardrail on a correct meter).
+- Extend `/cost` with a per-tool and per-round breakdown; persist spend per session for daily/weekly totals.
 
-- Define hooks in `~/.baryo/config.yaml` or `.baryo/config.yaml`
-- Events: `pre-tool`, `post-tool`, `on-error`, `on-commit`, `on-stream-end`, `on-search`
-- Use cases: auto-lint after code changes, format files, run tests, notify
-- Hook output shown in chat as tool results
-- Blocking hooks can cancel operations (e.g., pre-commit validation)
+### Conversation branching
 
-### Subagent / Task Delegation (already planned)
-Spawn specialized sub-tasks for parallel or isolated work.
+Table stakes, not a differentiator — both Claude Code and OpenCode ship it.
 
-- `/task "description"` — delegate a task to a sub-model call
-- Subagent runs in isolated context with its own message history
-- Parallel task execution for independent work
-- Results merged back into main conversation
-- Use cases: research one topic while coding another, run tests in background
+- Persist checkpoints; they are in-memory today and die with the process.
+- `/fork` to branch the conversation at any point. **Do not name it `/branch`** — that already means git branch (`chat.go:2394`).
+- Reuse the existing `session.Session` ID/Messages/Archive layer for fork-at-message.
 
-### Plugin System (already planned, expand scope)
-Allow users to add custom tools via config.
+### Git integration depth
 
-- Tool definitions in YAML/JSON config files
-- Specify name, description, parameters, and shell command to execute
-- Loaded dynamically alongside built-in tools
-- Project-level plugins in `.baryo/plugins/` and global in `~/.baryo/plugins/`
-- **Community plugin registry** — curated list of community plugins on the website/repo
-- **Plugin hooks** — plugins can register for lifecycle events
-
-### DevOps Toolkit (already planned)
-Purpose-built tools for infrastructure, deployment, and container management.
-
-- `/deploy` — generate deployment files (Dockerfile, docker-compose, GitHub Actions, K8s, Terraform)
-- `/docker` — manage local containers (list, build, run, stop, logs, exec)
-- Docker Compose awareness and CI/CD pipeline generation by project type
-- **Infrastructure-as-Code review** — analyze Terraform/CloudFormation/Pulumi files for best practices
-- **Log analysis** — pipe container/service logs into Baryo for diagnosis
+- **Auto-commit mode** — optionally commit each successful edit with a generated message (`auto_commit: true`). Aider's deepest advantage.
+- Semantic commit grouping — batch related file changes into one commit.
+- Smarter `/undo` — undo individual tool actions, not just the last commit.
+- Show git blame context for edited files.
 
 ---
 
-## P3 — Polish & Quality of Life (v0.15+)
+## P2 — Differentiation (v0.16)
 
-### Session Management Improvements (already planned)
-- Auto-generated session titles (not just hex IDs)
-- `/sessions --search <query>` to search past sessions by content
-- Session tagging/labeling
-- Auto-cleanup of old sessions (configurable retention)
+### Compiler diagnostics after edits
 
-### Voice Input
-**Gap:** Aider supports voice input via the microphone. Unique differentiator for accessibility.
+Cheaper than a full LSP client and closes most of the practical gap. `autofix.go` already runs a linter after `edit_file`/`write_file`/`delete_file` — extend that path to `apply_diff` (currently missing from its tool map) and feed structured diagnostics from `gopls check` / `tsc --noEmit` / `cargo check` into tool results.
 
-- `/voice` command to start recording
-- Local transcription via Whisper (keeps the local-first promise)
-- Cloud transcription fallback for accuracy
-- Voice-to-command: natural language → slash command mapping
+A full LSP client is **deprioritized** under the deployment target: language servers are memory-hungry, which is the wrong tradeoff on constrained hardware.
 
-### Multi-File Awareness
-- When the model edits file A, automatically show related files (imports, tests, interfaces) as context
-- Dependency graph awareness: editing a function should surface all callers
-- Test file association: editing `foo.go` should surface `foo_test.go`
+### Multi-source search
 
-### TUI Improvements
-- Split-pane view: code on one side, conversation on the other
-- File tree sidebar (toggleable)
-- Inline code preview for `@mentions` before sending
-- Better progress indicators for long-running tool chains (progress bar, ETA)
-- Keyboard shortcuts reference overlay (`?` key)
+- Parallel search across providers (DDG + Brave + Tavily), deduplicated and ranked.
+- `/fetch <url>` improvements: better extraction, PDF support.
+- Domain-scoped search; result caching within a session.
+- Raise the deep-read page cap (currently 3, `internal/search/search.go:15`) to a configurable 10.
 
-### Streaming Optimizations
-- **Speculative decoding awareness** — detect and leverage speculative decoding on supported providers
-- Streaming diff display — show edits being applied in real-time
-- Interruptible tool execution — `Ctrl-C` cancels the current tool without killing the conversation
+### Model routing
 
-### Documentation & Onboarding
-- `baryo tutorial` — interactive walkthrough of key features
-- In-app help: `/help <topic>` with contextual examples
-- Video demos linked from README
-- Contributing guide for plugin authors
+Intent classification already exists (`internal/tui/intent.go` → `automode.go`). What remains:
+
+- Cost-aware routing — prefer cheaper models when the task does not need reasoning depth.
+- Automatic fallback: if a local model fails a tool call, retry on a cloud model.
+- Per-task routing: research → Perplexity/Gemini, code → Claude/GPT, quick edits → local.
+
+### Plugin system
+
+- Tool definitions in YAML/JSON config: name, description, parameters, shell command.
+- Project-level `.baryo/plugins/` and global `~/.baryo/plugins/`.
+- Plugins can register for the existing hook lifecycle events.
+- **Gated on the trust model** ([#12](https://github.com/BaryoDev/Baryo.CLI/issues/12)) — a plugin system that loads executable definitions from the working directory cannot ship before directory trust does.
+
+### DevOps toolkit
+
+The third pillar currently has no implementation. Either build this or drop the pillar from the header.
+
+- `/deploy` — generate Dockerfile, compose, GitHub Actions, K8s, Terraform.
+- `/docker` — manage local containers (list, build, run, stop, logs, exec).
+- Infrastructure-as-code review for Terraform/CloudFormation/Pulumi.
+- Log analysis — pipe container and service logs in for diagnosis. Pairs directly with the appliance target.
+
+---
+
+## P3 — Polish & Quality of Life (v0.17+)
+
+### Appliance ergonomics
+
+Serves the deployment target directly; promoted above the older polish items.
+
+- Ship a documented systemd unit and a `baryo-appliance` example config.
+- Structured run summaries for unattended jobs (exit codes that mean something, machine-readable failure reasons).
+- Resource self-limiting: bound index and RAG memory on small hosts.
+
+### Session management
+
+- Session tagging — the `Tags` field exists on `session.Session` but nothing writes it; needs a `/tag` command.
+- `/recall` over archived messages, building on `session.LoadArchive`.
+
+### Multi-file awareness
+
+- Surface related files (imports, tests, interfaces) when the model edits a file.
+- Dependency-graph awareness: editing a function surfaces its callers.
+- Test file association: editing `foo.go` surfaces `foo_test.go`.
+
+### TUI improvements
+
+- Keyboard shortcuts overlay (`?`).
+- Better progress indicators for long tool chains.
+- Inline code preview for `@mentions` before sending.
+- File tree sidebar (toggleable).
+
+Split-pane view is **deprioritized** — high effort in the least-tested package in the codebase.
+
+### Streaming
+
+- Streaming diff display — show edits being applied in real time.
+- Interruptible tool execution — Ctrl-C cancels the current tool without killing the conversation. **Depends on the P0 cancellation fix**, which must land first.
+
+### Documentation
+
+- **Document the hooks system.** It shipped and has zero README mentions, so a complete feature is invisible to users.
+- `baryo tutorial` — interactive walkthrough.
+- `/help <topic>` with contextual examples.
+- Contributing guide for plugin authors.
+
+### Voice input
+
+Deprioritized. Both Claude Code and Aider ship it, so it is no longer a differentiator, and it is irrelevant to unattended deployment.
 
 ---
 
 ## Completed
+
+Items are moved here when verified present in the source tree, not when a PR merges.
+
+### Lossless Compaction (v0.13.0)
+- Pre-compaction messages archived to `~/.baryo/sessions/<id>.archive.jsonl` instead of being discarded
+- `/sessions search` covers archived content
+- `session.LoadArchive(id)` for full history retrieval
+- Retention cleanup removes archives alongside session files
+- A failed compaction stream no longer corrupts the next turn
+- First tests for the `session` package
+
+### Hooks System
+Shipped, and previously still listed as planned. **Undocumented in the README** — see P3.
+- Six lifecycle events: `pre_tool`, `post_tool`, `on_error`, `on_commit`, `on_stream_end`, `on_search` (`internal/config/config.go:60-73`)
+- Executed via `sh -c` with a 30s timeout (`internal/tui/hooks.go`)
+- Blocking: a non-zero `pre_tool` exit cancels the tool call
+- Hook output surfaced in chat as tool results
+- Configured in `~/.baryo/config.yaml` or `.baryo/config.yaml`
+
+### Subagent / Task Delegation
+Shipped, and previously still listed as planned.
+- `/task <description>` delegates to an isolated sub-model call with its own message history
+- `/bg` for background execution, `/tasks` to list
+- Read-only tool executor for subagents; up to 3 concurrent (`internal/tui/subagent.go`)
+- Results merged back into the main conversation
+- Remaining gap: no write-capable subagents, no model-invoked `delegate_task` tool
+
+### Session Management
+Shipped, and previously still listed as planned in P3.
+- Auto-generated session titles from the first user message (`session.GenerateTitle`)
+- `/sessions search <query>`, covering archived messages (`session.Search`)
+- Age-based auto-cleanup via `session_retention_days` (`session.CleanOld`)
+- Not done: session tagging — the `Tags` field exists but nothing writes it
+
+### Auto-Mode Intent Classification
+Shipped; the roadmap previously described auto-mode as "basic tier-based routing".
+- `ClassifyIntent` distinguishes Chat / Knowledge / Planning / Code (`internal/tui/intent.go`)
+- Feeds `classifyTier` for model selection (`internal/tui/automode.go`)
+- Remaining gap: cost-aware routing, local→cloud fallback, per-task provider routing
 
 ### Foundation & Trust (v0.12.0)
 
@@ -281,7 +336,7 @@ Purpose-built tools for infrastructure, deployment, and container management.
 
 ### Model Switching Mid-Session (v0.10.0)
 - `/models` command to switch mid-session
-- Conversation history preserved across model switches
+- Conversation history preserved across model switches — **regressed**, see P0: `transitionToChat` (`internal/tui/app.go:649`) rebuilds the chat model, discarding history
 
 ### Context Pinning (v0.10.0)
 - `/pin @file`, `/unpin @file`, `/pins` commands
