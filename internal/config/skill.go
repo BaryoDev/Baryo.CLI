@@ -51,10 +51,14 @@ func SkillIndex() []Skill {
 	if home != "" {
 		dirs = append(dirs, filepath.Join(home, ".baryo", "skills"))
 	}
-	dirs = append(dirs,
-		filepath.Join(".baryo", "skills"),
-		"skills",
-	)
+	// Project skills are instructions the model follows and can carry scripts,
+	// so they are indexed only for a trusted project.
+	if ProjectTrusted() {
+		dirs = append(dirs,
+			filepath.Join(".baryo", "skills"),
+			"skills",
+		)
+	}
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)

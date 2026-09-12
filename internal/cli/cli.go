@@ -53,6 +53,7 @@ type Config struct {
 	Completion   string // completion subcommand shell type (zsh/bash/fish/powershell)
 	Worktree     bool   // --worktree flag
 	Sandbox      bool   // --sandbox flag (CLI override)
+	TrustProject bool   // --trust-project flag: apply this project's .baryo config
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -86,6 +87,7 @@ func Parse() Config {
 	fs.StringVar(&cfg.Strategy, "strategy", "", "path to strategy JSON file (use with -p)")
 	fs.BoolVar(&cfg.Worktree, "worktree", false, "run in an isolated git worktree")
 	fs.BoolVar(&cfg.Sandbox, "sandbox", false, "run code in Docker sandbox")
+	fs.BoolVar(&cfg.TrustProject, "trust-project", false, "apply this project's .baryo config and skills (asks interactively when omitted)")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 

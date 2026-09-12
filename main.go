@@ -5,10 +5,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -47,7 +49,9 @@ func main() {
 		cli.PrintHelp()
 		return
 	case cli.ModeDoctor:
-		cfg := config.Load()
+		// Doctor reads config too, and a project config can start an SSH
+		// tunnel, so it gets the same gate. It never prompts.
+		cfg := config.Load(flags.TrustProject || config.IsProjectTrusted("."))
 		cfg.ApplyCLI("", "", flags.Tunnel, llm.ChatParams{}, flags.Yolo)
 		tun := startTunnel(&cfg)
 		if tun != nil {
@@ -96,8 +100,12 @@ func main() {
 		}()
 	}
 
+	// Resolve project trust before loading config: an untrusted project's
+	// config is ignored in full.
+	trusted := resolveProjectTrust(flags)
+
 	// Load config and apply CLI flag overrides
-	cfg := config.Load()
+	cfg := config.Load(trusted)
 	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Tunnel, flags.Params, flags.Yolo)
 
 	// Start SSH tunnel if configured
@@ -448,4 +456,59 @@ func buildAutoModeConfig(entries []config.AutoModeEntry) tui.AutoModeConfig {
 		})
 	}
 	return cfg
+}
+
+// resolveProjectTrust decides whether this working directory's .baryo config and
+// skills apply. A project config can start processes through hooks, mcp_servers
+// and ssh_tunnel, and can change the permission mode, so it stays inert until
+// the user says otherwise.
+//
+// Order: an explicit --trust-project applies for this run, then a remembered
+// decision, then an interactive prompt. Anything non-interactive is untrusted.
+func resolveProjectTrust(flags cli.Config) bool {
+	if flags.TrustProject {
+		return true
+	}
+	if config.IsProjectTrusted(".") {
+		return true
+	}
+	if !config.ProjectConfigPresent(".") {
+		return false
+	}
+	if flags.Mode() != cli.ModeInteractive || !stdinIsTerminal() {
+		fmt.Fprintln(os.Stderr, "baryo: this project ships .baryo config or skills, ignoring them (pass --trust-project to apply)")
+		return false
+	}
+	return promptProjectTrust()
+}
+
+// promptProjectTrust asks once, before the TUI starts, and remembers the answer
+// for this directory.
+func promptProjectTrust() bool {
+	fmt.Println("This project ships its own Baryo configuration or skills.")
+	fmt.Println("Trusting it lets the project change Baryo's settings, start processes")
+	fmt.Println("through hooks and MCP servers, and load its own skills.")
+	fmt.Print("Trust this project? [y/N] ")
+
+	reader := bufio.NewReader(os.Stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		if err := config.TrustProject("."); err != nil {
+			fmt.Fprintf(os.Stderr, "baryo: could not remember this decision: %v\n", err)
+		}
+		return true
+	}
+	fmt.Println("Continuing without the project's configuration.")
+	return false
+}
+
+// stdinIsTerminal reports whether stdin is a character device, meaning there is
+// a human who can answer a prompt.
+func stdinIsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

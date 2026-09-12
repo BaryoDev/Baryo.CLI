@@ -203,10 +203,21 @@ func probeLinuxSocket(home string) string {
 	return candidates[0]
 }
 
+// validPermissionModes are the only accepted values. Executors treat anything
+// that is not "suggest" or "confirm" as permission to run, so an unrecognised
+// value must not reach them.
+var validPermissionModes = map[string]bool{"auto": true, "confirm": true, "suggest": true}
+
 // Load reads configuration with the following precedence (highest wins):
 //
 //	env vars > .baryo/config.yaml (project) > ~/.baryo/config.yaml (user) > defaults
-func Load() Config {
+//
+// The project file is read only when trusted. An untrusted project's config is
+// ignored in full rather than filtered key by key, so there is no per-key table
+// to get wrong as keys are added.
+func Load(trusted bool) Config {
+	SetProjectTrusted(trusted)
+
 	cfg := Config{
 		SocketPath:     defaultSocketPath(),
 		SystemPrompt:   DefaultSystemPrompt,
@@ -218,11 +229,20 @@ func Load() Config {
 		loadFile(filepath.Join(home, ".baryo", "config.yaml"), &cfg)
 	}
 
-	// Project-level config: .baryo/config.yaml (overrides user)
-	loadFile(filepath.Join(".baryo", "config.yaml"), &cfg)
+	// Project-level config: .baryo/config.yaml (overrides user), trusted only.
+	if trusted {
+		loadFile(filepath.Join(".baryo", "config.yaml"), &cfg)
+	} else if _, err := os.Stat(filepath.Join(".baryo", "config.yaml")); err == nil {
+		fmt.Fprintln(os.Stderr, "baryo: ignoring .baryo/config.yaml from an untrusted project (run with --trust-project to apply it)")
+	}
 
 	// Environment variable overrides
 	applyEnv(&cfg)
+
+	if !validPermissionModes[cfg.PermissionMode] {
+		fmt.Fprintf(os.Stderr, "baryo: unrecognised permission_mode %q, using confirm\n", cfg.PermissionMode)
+		cfg.PermissionMode = "confirm"
+	}
 
 	// Build unified provider keys map from all sources.
 	cfg.BuildProviderKeys()
