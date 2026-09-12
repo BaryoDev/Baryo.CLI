@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-//go:build cgo
-
 package index
 
 import (
@@ -259,6 +257,163 @@ func TestLangForFileNewExtensions(t *testing.T) {
 		got := LangForFile(tc.path)
 		if got != tc.want {
 			t.Errorf("LangForFile(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestExtractGo(t *testing.T) {
+	src := []byte(`
+package main
+
+type Greeter interface {
+	Greet() string
+}
+
+type User struct {
+	Name string
+}
+
+func (u *User) Greet() string {
+	return "Hello " + u.Name
+}
+
+func NewUser(name string) *User {
+	return &User{Name: name}
+}
+`)
+	fs, err := ParseFile("main.go", "go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]SymbolKind{
+		"Greeter": KindInterface,
+		"User":    KindType,
+		"Greet":   KindMethod,
+		"NewUser": KindFunction,
+	}
+
+	found := make(map[string]bool)
+	for _, s := range fs.Symbols {
+		if k, ok := want[s.Name]; ok && s.Kind == k {
+			found[s.Name] = true
+		}
+	}
+	for name := range want {
+		if !found[name] {
+			t.Errorf("missing symbol: %s", name)
+		}
+	}
+}
+
+func TestExtractJS(t *testing.T) {
+	src := []byte(`
+function add(a, b) {
+	return a + b;
+}
+
+class Person {
+	greet() {
+		return "hello";
+	}
+}
+
+const multiply = (x, y) => x * y;
+`)
+	fs, err := ParseFile("test.js", "javascript", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]SymbolKind{
+		"add":      KindFunction,
+		"Person":   KindClass,
+		"greet":    KindMethod,
+		"multiply": KindFunction,
+	}
+
+	found := make(map[string]bool)
+	for _, s := range fs.Symbols {
+		if k, ok := want[s.Name]; ok && s.Kind == k {
+			found[s.Name] = true
+		}
+	}
+	for name := range want {
+		if !found[name] {
+			t.Errorf("missing symbol: %s", name)
+		}
+	}
+}
+
+func TestExtractTS(t *testing.T) {
+	src := []byte(`
+interface Animal {
+	speak(): void;
+}
+
+type ID = string | number;
+
+class Dog {
+	speak() {}
+}
+
+function bark() {}
+`)
+	fs, err := ParseFile("test.ts", "typescript", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]SymbolKind{
+		"Animal": KindInterface,
+		"ID":     KindType,
+		"Dog":    KindClass,
+		"speak":  KindMethod,
+		"bark":   KindFunction,
+	}
+
+	found := make(map[string]bool)
+	for _, s := range fs.Symbols {
+		if k, ok := want[s.Name]; ok && s.Kind == k {
+			found[s.Name] = true
+		}
+	}
+	for name := range want {
+		if !found[name] {
+			t.Errorf("missing symbol: %s", name)
+		}
+	}
+}
+
+func TestExtractPython(t *testing.T) {
+	src := []byte(`
+def add(a, b):
+    return a + b
+
+class Animal:
+    def speak(self):
+        pass
+`)
+	fs, err := ParseFile("test.py", "python", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]SymbolKind{
+		"add":    KindFunction,
+		"Animal": KindClass,
+		"speak":  KindMethod,
+	}
+
+	found := make(map[string]bool)
+	for _, s := range fs.Symbols {
+		if k, ok := want[s.Name]; ok && s.Kind == k {
+			found[s.Name] = true
+		}
+	}
+	for name := range want {
+		if !found[name] {
+			t.Errorf("missing symbol: %s", name)
 		}
 	}
 }

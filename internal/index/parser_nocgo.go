@@ -5,35 +5,178 @@
 package index
 
 import (
+	"fmt"
 	"os"
 	"time"
+
+	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars"
 )
 
-// SymbolsAvailable reports whether this build can extract symbols. See the cgo
-// build of this file for the full comment.
-const SymbolsAvailable = false
+// SymbolsAvailable reports whether this build can extract symbols.
+// Under pure-Go (!cgo), symbols are extracted via gotreesitter.
+const SymbolsAvailable = true
 
-// langParser is a stub when CGO is disabled (tree-sitter requires CGO).
-type langParser struct{}
+// gtsNode wraps a pure-Go gotreesitter Node to satisfy the astNode interface.
+type gtsNode struct {
+	n    *gotreesitter.Node
+	lang *gotreesitter.Language
+}
 
-func newGoParser() *langParser     { return &langParser{} }
-func newJSParser() *langParser     { return &langParser{} }
-func newTSParser() *langParser     { return &langParser{} }
-func newPythonParser() *langParser { return &langParser{} }
-func newRustParser() *langParser   { return &langParser{} }
-func newJavaParser() *langParser   { return &langParser{} }
-func newCParser() *langParser      { return &langParser{} }
-func newCPPParser() *langParser    { return &langParser{} }
+func (g *gtsNode) Type() string {
+	if g == nil || g.n == nil {
+		return ""
+	}
+	return g.n.Type(g.lang)
+}
 
-// ParseFile returns file metadata without symbol extraction when CGO is
-// disabled.
-//
-// It returns a nil error on purpose. Build and Update treat an error as
-// "unparseable" and skip the file, so returning one here dropped every file
-// from the index and released binaries, which goreleaser builds with
-// CGO_ENABLED=0, shipped an empty repo map. Missing symbols degrade the map to
-// a file list; an error removes the project from the model's view entirely.
+func (g *gtsNode) ChildCount() int {
+	if g == nil || g.n == nil {
+		return 0
+	}
+	return g.n.ChildCount()
+}
+
+func (g *gtsNode) Child(i int) astNode {
+	if g == nil || g.n == nil {
+		return nil
+	}
+	c := g.n.Child(i)
+	if c == nil {
+		return nil
+	}
+	return &gtsNode{n: c, lang: g.lang}
+}
+
+func (g *gtsNode) ChildByFieldName(name string) astNode {
+	if g == nil || g.n == nil {
+		return nil
+	}
+	c := g.n.ChildByFieldName(name, g.lang)
+	if c == nil {
+		return nil
+	}
+	return &gtsNode{n: c, lang: g.lang}
+}
+
+func (g *gtsNode) StartPointRow() int {
+	if g == nil || g.n == nil {
+		return 0
+	}
+	return int(g.n.StartPoint().Row)
+}
+
+func (g *gtsNode) StartByte() uint32 {
+	if g == nil || g.n == nil {
+		return 0
+	}
+	return g.n.StartByte()
+}
+
+func (g *gtsNode) EndByte() uint32 {
+	if g == nil || g.n == nil {
+		return 0
+	}
+	return g.n.EndByte()
+}
+
+// langParser wraps a tree-sitter parser and language-specific extraction logic.
+type langParser struct {
+	lang    *gotreesitter.Language
+	extract func(root astNode, src []byte) []Symbol
+}
+
+// newGoParser creates a pure-Go parser for Go source files.
+func newGoParser() *langParser {
+	return &langParser{
+		lang:    grammars.GoLanguage(),
+		extract: extractGo,
+	}
+}
+
+// newJSParser creates a pure-Go parser for JavaScript source files.
+func newJSParser() *langParser {
+	return &langParser{
+		lang:    grammars.JavascriptLanguage(),
+		extract: extractJS,
+	}
+}
+
+// newTSParser creates a pure-Go parser for TypeScript source files.
+func newTSParser() *langParser {
+	return &langParser{
+		lang:    grammars.TypescriptLanguage(),
+		extract: extractTS,
+	}
+}
+
+// newPythonParser creates a pure-Go parser for Python source files.
+func newPythonParser() *langParser {
+	return &langParser{
+		lang:    grammars.PythonLanguage(),
+		extract: extractPython,
+	}
+}
+
+// newRustParser creates a pure-Go parser for Rust source files.
+func newRustParser() *langParser {
+	return &langParser{
+		lang:    grammars.RustLanguage(),
+		extract: extractRust,
+	}
+}
+
+// newJavaParser creates a pure-Go parser for Java source files.
+func newJavaParser() *langParser {
+	return &langParser{
+		lang:    grammars.JavaLanguage(),
+		extract: extractJava,
+	}
+}
+
+// newCParser creates a pure-Go parser for C source files.
+func newCParser() *langParser {
+	return &langParser{
+		lang:    grammars.CLanguage(),
+		extract: extractC,
+	}
+}
+
+// newCPPParser creates a pure-Go parser for C++ source files.
+func newCPPParser() *langParser {
+	return &langParser{
+		lang:    grammars.CppLanguage(),
+		extract: extractCPP,
+	}
+}
+
+// ParseFile parses a source file and extracts symbols in pure Go.
 func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
+	parsers := map[string]*langParser{
+		"go":         newGoParser(),
+		"javascript": newJSParser(),
+		"typescript": newTSParser(),
+		"python":     newPythonParser(),
+		"rust":       newRustParser(),
+		"java":       newJavaParser(),
+		"c":          newCParser(),
+		"cpp":        newCPPParser(),
+	}
+
+	lp, ok := parsers[language]
+	if !ok {
+		return nil, fmt.Errorf("unsupported language: %s", language)
+	}
+
+	parser := gotreesitter.NewParser(lp.lang)
+	tree, err := parser.Parse(content)
+	if err != nil || tree == nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+
+	root := tree.RootNode()
+	symbols := lp.extract(&gtsNode{n: root, lang: lp.lang}, content)
+
 	info, err := os.Stat(path)
 	modTime := time.Time{}
 	var size int64
@@ -42,11 +185,9 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 		size = info.Size()
 	}
 
-	_ = language
-	_ = content
-
 	return &FileSymbols{
 		Path:    path,
+		Symbols: symbols,
 		ModTime: modTime,
 		Size:    size,
 	}, nil
