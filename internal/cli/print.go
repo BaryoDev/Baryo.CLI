@@ -26,6 +26,9 @@ type MCPToolProvider interface {
 	CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition
 	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
 	IsMCPTool(name string) bool
+	// IsReadOnlyTool reports whether a qualified tool name is known to be
+	// read-only. Unknown or unannotated tools report false and get gated.
+	IsReadOnlyTool(name string) bool
 }
 
 // PrintOptions holds all configuration for headless print mode.
@@ -298,12 +301,23 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMes
 // are blocked with an error message.
 func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) llm.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		// Route MCP tools to the MCP manager.
-		if mcpMgr != nil && mcpMgr.IsMCPTool(name) {
-			return mcpMgr.Execute(ctx, name, argsJSON)
+		isMCP := mcpMgr != nil && mcpMgr.IsMCPTool(name)
+		if !isMCP && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
 		}
-		if permissionMode != "auto" && tools.IsDestructive(name) {
-			return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
+		// MCP tools not known to be read-only are gated like native
+		// destructive tools: headless needs --yolo to run them.
+		if permissionMode != "auto" {
+			if isMCP && !mcpMgr.IsReadOnlyTool(name) {
+				return fmt.Sprintf("MCP tool %q is not marked read-only and requires --yolo flag for headless execution", name), true
+			}
+			if !isMCP && tools.IsDestructive(name) {
+				return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
+			}
+		}
+		// Route MCP tools to the MCP manager.
+		if isMCP {
+			return mcpMgr.Execute(ctx, name, argsJSON)
 		}
 		result := tools.Execute(ctx, name, argsJSON)
 		return result.Content, result.IsError

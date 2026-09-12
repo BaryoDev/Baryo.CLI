@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arnelirobles/baryo-cli/internal/config"
 	"github.com/arnelirobles/baryo-cli/internal/procutil"
 	"github.com/arnelirobles/baryo-cli/internal/sandbox"
 )
@@ -250,9 +251,15 @@ func isInsideSkillDir(absPath string) bool {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 
-	allowed := []string{
-		filepath.Join(cwd, "skills"),
-		filepath.Join(cwd, ".baryo", "skills"),
+	var allowed []string
+	// The cwd-relative roots belong to the project, so they are only allowed
+	// for a trusted one. An untrusted repo can otherwise ship a script and
+	// name its path directly, which needs no entry in the skill index.
+	if config.ProjectTrusted() {
+		allowed = append(allowed,
+			filepath.Join(cwd, "skills"),
+			filepath.Join(cwd, ".baryo", "skills"),
+		)
 	}
 	if home != "" {
 		allowed = append(allowed, filepath.Join(home, ".baryo", "skills"))

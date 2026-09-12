@@ -193,6 +193,9 @@ type ChatModel struct {
 // Defined as an interface to avoid import cycles between tui and mcp packages.
 type MCPManager interface {
 	ToolDefinitions() []llm.ToolDefinition
+	// IsReadOnlyTool reports whether a qualified tool name is known to be
+	// read-only. Unknown or unannotated tools report false and get gated.
+	IsReadOnlyTool(name string) bool
 	CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition
 	Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool)
 	IsMCPTool(name string) bool
@@ -3205,6 +3208,13 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	afCfg := m.autoFixCfg
 	hooks := m.hooksConfig
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Unknown names cannot run, so reject them before hooks fire or the
+		// gate asks the user to approve something that does not exist.
+		isMCP := mgr != nil && mgr.IsMCPTool(name)
+		if !isMCP && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
+
 		// Pre-tool hook: runs before execution. Non-zero exit cancels the tool.
 		if hooks.PreTool != "" {
 			hr := runHook(hooks, HookPreTool, HookContext{ToolName: name})
@@ -3217,8 +3227,14 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 			}
 		}
 
-		// Route MCP tools to the MCP manager.
-		if mgr != nil && mgr.IsMCPTool(name) {
+		// Route MCP tools to the MCP manager. Anything not known to be
+		// read-only passes the same gate as a native destructive tool.
+		if isMCP {
+			if !mgr.IsReadOnlyTool(name) {
+				if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
+					return msg, true
+				}
+			}
 			content, isErr := mgr.Execute(ctx, name, argsJSON)
 			// Post-tool hook
 			if hooks.PostTool != "" {
@@ -3230,28 +3246,9 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 			return content, isErr
 		}
 		if tools.IsDestructive(name) {
-			switch mode {
-			case "suggest":
-				return fmt.Sprintf("[suggest mode] Would run %s — approve with --yolo or permission_mode: auto", name), true
-			case "confirm":
-				prompt := formatConfirmPrompt(name, argsJSON)
-				respCh := make(chan bool, 1)
-				ch <- confirmRequest{
-					Name:   name,
-					Args:   argsJSON,
-					Prompt: prompt,
-					RespCh: respCh,
-				}
-				select {
-				case approved := <-respCh:
-					if !approved {
-						return fmt.Sprintf("[denied] %s was not approved", name), true
-					}
-				case <-ctx.Done():
-					return "cancelled", true
-				}
+			if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
+				return msg, true
 			}
-			// "auto" falls through to execute
 		}
 		r := tools.Execute(ctx, name, argsJSON)
 		// Auto-fix: run linter/tests after successful code-modifying tool calls.
@@ -3277,15 +3274,22 @@ func (m *ChatModel) makePlanExecutor() func(ctx context.Context, name, argsJSON 
 	mgr := m.mcpManager
 	allowMCP := m.mcpInReadOnly
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		// Route MCP tools to the MCP manager (if allowed in read-only modes).
+		if (mgr == nil || !mgr.IsMCPTool(name)) && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
+		// Route MCP tools to the MCP manager. Read-only modes allow only tools
+		// known to be read-only, so the mode label means what it says.
 		if mgr != nil && mgr.IsMCPTool(name) {
 			if !allowMCP {
-				return fmt.Sprintf("[read-only mode] %s is not available — MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)", name), true
+				return fmt.Sprintf("[read-only mode] %s is not available, MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)", name), true
+			}
+			if !mgr.IsReadOnlyTool(name) {
+				return fmt.Sprintf("[read-only mode] %s is not available, it is not marked read-only by its server (set trust: read-only on that server to allow)", name), true
 			}
 			return mgr.Execute(ctx, name, argsJSON)
 		}
 		if tools.IsDestructive(name) {
-			return fmt.Sprintf("[read-only mode] %s is not available — only read-only tools are allowed", name), true
+			return fmt.Sprintf("[read-only mode] %s is not available, only read-only tools are allowed", name), true
 		}
 		r := tools.Execute(ctx, name, argsJSON)
 		return r.Content, r.IsError
