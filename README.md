@@ -6,7 +6,7 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Project Status
 
-Current release: **v0.12.1** — a stabilization release focused on crash fixes, atomic file writes, tool-loop correctness, and dependency security updates. See [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what is solid, what is still open, and what comes next.
+Current release: **v0.13.0**. Compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation. See [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what is solid, what is still open, and what comes next.
 
 ## Prerequisites
 
@@ -51,12 +51,6 @@ curl -fsSL https://raw.githubusercontent.com/BaryoDev/Baryo.CLI/main/install.sh 
 ```powershell
 scoop bucket add baryo https://github.com/BaryoDev/Baryo.CLI
 scoop install baryo
-```
-
-### Go install
-
-```bash
-go install github.com/baryodev/baryo-cli@latest
 ```
 
 ### Pre-built binaries

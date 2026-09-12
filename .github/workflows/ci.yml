@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Called by release.yml so a tag cannot publish untested code.
+  workflow_call:
+  # Weekly re-run: govulncheck only sees new CVEs when it runs again.
+  schedule:
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
@@ -62,3 +67,6 @@ jobs:
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Test install.sh checksum verification
+        run: sh scripts/install_test.sh
