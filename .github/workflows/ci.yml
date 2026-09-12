@@ -71,6 +71,13 @@ jobs:
       - name: Test install.sh checksum verification
         run: sh scripts/install_test.sh
 
+      # Builds through the release path, so a broken .goreleaser.yaml or a
+      # release-only build flag is caught before a tag is pushed.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --single-target --clean
+
       - name: Check NOTICE is current
         run: |
           go mod download
