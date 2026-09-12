@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -92,32 +91,6 @@ func findMentionAtCursor(text string, cursorPos int) (start int, partial string,
 	return 0, "", false
 }
 
-// batchGitIgnored checks multiple paths against .gitignore in a single
-// git subprocess call. Returns a set of ignored paths.
-func batchGitIgnored(paths []string) map[string]bool {
-	ignored := make(map[string]bool)
-	if len(paths) == 0 {
-		return ignored
-	}
-
-	cmd := exec.Command("git", "check-ignore", "--stdin", "-z")
-	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n"))
-	out, err := cmd.Output()
-	if err != nil {
-		// Exit code 1 = none ignored, other = git not available (allow all)
-		return ignored
-	}
-
-	// -z produces null-separated output
-	for _, p := range bytes.Split(out, []byte{0}) {
-		s := string(p)
-		if s != "" {
-			ignored[s] = true
-		}
-	}
-	return ignored
-}
-
 // globCompletions returns file paths matching the partial prefix.
 // Directories get a trailing /, .git/ and gitignored files are filtered out.
 // Uses a single batched git check-ignore call instead of per-file subprocess.
@@ -178,12 +151,14 @@ func globCompletions(partial string) []string {
 		}
 	}
 
-	// Batch gitignore check — one subprocess for all paths
+	// One batched ignore check for all paths. The local version of this passed
+	// --stdin -z but joined the input with newlines, which git reads as a single
+	// path name, so it matched nothing and this filtered nothing.
 	absPaths := make([]string, len(allMatches))
 	for i, m := range allMatches {
 		absPaths[i] = m.absPath
 	}
-	ignored := batchGitIgnored(absPaths)
+	ignored := ignore.Filter(context.Background(), absPaths)
 
 	// Build results, filtering ignored
 	var results []string

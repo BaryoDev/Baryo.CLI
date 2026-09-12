@@ -129,6 +129,14 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 	filesWithMatches := 0
 	outputSize := 0
 
+	// One batched ignore check for the whole match set: IsIgnored forks a git
+	// subprocess per call, which on a large tree is thousands of processes.
+	candidates := make([]string, 0, len(files))
+	for _, f := range files {
+		candidates = append(candidates, filepath.Join(searchRoot, f))
+	}
+	ignored := ignore.Filter(ctx, candidates)
+
 	for _, f := range files {
 		absPath := filepath.Join(searchRoot, f)
 
@@ -137,7 +145,7 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 			continue
 		}
 
-		if ignore.IsIgnored(ctx, absPath) {
+		if ignored[absPath] {
 			continue
 		}
 

@@ -91,6 +91,13 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 
 	// Filter out gitignored files, directories, and .git internals.
 	var filtered []string
+	// One batched ignore check instead of a git subprocess per match.
+	candidates := make([]string, 0, len(matches))
+	for _, m := range matches {
+		candidates = append(candidates, filepath.Join(searchRoot, m))
+	}
+	ignored := ignore.Filter(ctx, candidates)
+
 	for _, m := range matches {
 		// Skip .git directory contents.
 		if m == ".git" || strings.HasPrefix(m, ".git/") || strings.HasPrefix(m, ".git"+string(filepath.Separator)) {
@@ -105,7 +112,7 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 			continue
 		}
 
-		if ignore.IsIgnored(ctx, absPath) {
+		if ignored[absPath] {
 			continue
 		}
 		// Return paths relative to cwd.
