@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
@@ -54,6 +55,20 @@ type Config struct {
 	Worktree     bool   // --worktree flag
 	Sandbox      bool   // --sandbox flag (CLI override)
 	TrustProject bool   // --trust-project flag: apply this project's .baryo config
+	Timeout      string // --timeout flag: overall deadline for print mode (e.g. 5m)
+}
+
+// TimeoutDuration returns the parsed --timeout, or 0 when unset or invalid.
+// Zero means no deadline, which is the previous behaviour.
+func (c Config) TimeoutDuration() time.Duration {
+	if c.Timeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // Parse parses CLI arguments and reads piped stdin if present.
@@ -87,6 +102,7 @@ func Parse() Config {
 	fs.StringVar(&cfg.Strategy, "strategy", "", "path to strategy JSON file (use with -p)")
 	fs.BoolVar(&cfg.Worktree, "worktree", false, "run in an isolated git worktree")
 	fs.BoolVar(&cfg.Sandbox, "sandbox", false, "run code in Docker sandbox")
+	fs.StringVar(&cfg.Timeout, "timeout", "", "overall deadline for print mode (e.g. 90s, 5m)")
 	fs.BoolVar(&cfg.TrustProject, "trust-project", false, "apply this project's .baryo config and skills (asks interactively when omitted)")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")

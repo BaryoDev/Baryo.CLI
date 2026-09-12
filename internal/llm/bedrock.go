@@ -80,7 +80,11 @@ func streamChatBedrock(ctx context.Context, ep Endpoint, model string, messages 
 			input.ToolConfig = convertToBedrockTools(tools)
 		}
 
-		output, err := client.ConverseStream(ctx, input)
+		// Child context: the idle watchdog must not cancel the caller's.
+		reqCtx, cancelReq := context.WithCancel(ctx)
+		defer cancelReq()
+
+		output, err := client.ConverseStream(reqCtx, input)
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("bedrock ConverseStream: %v", err)}
 			return
@@ -100,7 +104,12 @@ func streamChatBedrock(ctx context.Context, ep Endpoint, model string, messages 
 		var inputTokens, outputTokens int
 		var finishReason string
 
+		idleTimeout := StreamIdleTimeout
+		idle := newIdleWatchdog(idleTimeout, cancelReq)
+		defer idle.Stop()
+
 		for evt := range stream.Events() {
+			idle.Tick()
 			switch e := evt.(type) {
 			case *types.ConverseStreamOutputMemberContentBlockStart:
 				if start, ok := e.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
@@ -138,7 +147,11 @@ func streamChatBedrock(ctx context.Context, ep Endpoint, model string, messages 
 		}
 
 		if err := stream.Err(); err != nil {
-			ch <- StreamEvent{Error: fmt.Sprintf("bedrock stream error: %v", err)}
+			if idle.TimedOut() {
+				ch <- StreamEvent{Error: idleError(idleTimeout)}
+			} else {
+				ch <- StreamEvent{Error: fmt.Sprintf("bedrock stream error: %v", err)}
+			}
 			return
 		}
 

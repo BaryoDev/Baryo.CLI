@@ -130,7 +130,13 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 			url = ep.BaseURL + "/chat/completions"
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		// A child context so the idle watchdog can abandon the request without
+		// cancelling the caller's context, which would make the error event
+		// unsendable on the select below.
+		reqCtx, cancelReq := context.WithCancel(ctx)
+		defer cancelReq()
+
+		req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
@@ -169,7 +175,11 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 		var lastUsage *UsageStats
 		var finishReason string
 
-		scanner := bufio.NewScanner(resp.Body)
+		idleTimeout := StreamIdleTimeout
+		idle := newIdleReader(resp.Body, idleTimeout, cancelReq)
+		defer idle.Stop()
+
+		scanner := bufio.NewScanner(idle)
 		// Providers can send large tool call arguments in a single SSE line;
 		// the default 64KB limit would silently truncate the stream.
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -237,8 +247,12 @@ func streamChatRaw(ctx context.Context, ep Endpoint, model string, messages []Ch
 		}
 
 		if err := scanner.Err(); err != nil {
+			msg := fmt.Sprintf("stream read error: %v", err)
+			if idle.TimedOut() {
+				msg = idleError(idleTimeout)
+			}
 			select {
-			case ch <- StreamEvent{Error: fmt.Sprintf("stream read error: %v", err)}:
+			case ch <- StreamEvent{Error: msg}:
 			case <-ctx.Done():
 			}
 			return

@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
@@ -237,5 +238,25 @@ func TestParseTunnelFlag(t *testing.T) {
 				t.Errorf("LocalPort = %d, want 11434", cfg.LocalPort)
 			}
 		})
+	}
+}
+
+func TestStreamIdleTimeoutDuration(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{in: "", want: 5 * time.Minute},
+		{in: "30s", want: 30 * time.Second},
+		{in: "2m", want: 2 * time.Minute},
+		{in: "nonsense", want: 5 * time.Minute},
+		{in: "0", want: 5 * time.Minute},
+		{in: "-1m", want: 5 * time.Minute},
+	}
+	for _, c := range cases {
+		cfg := Config{StreamIdleTimeout: c.in}
+		if got := cfg.StreamIdleTimeoutDuration(); got != c.want {
+			t.Errorf("StreamIdleTimeout %q -> %v, want %v", c.in, got, c.want)
+		}
 	}
 }

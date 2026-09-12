@@ -232,7 +232,11 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 
 		url := ep.BaseURL + "/messages"
 
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		// Child context: the idle watchdog must not cancel the caller's.
+		reqCtx, cancelReq := context.WithCancel(ctx)
+		defer cancelReq()
+
+		req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
 		if err != nil {
 			ch <- StreamEvent{Error: fmt.Sprintf("%v", err)}
 			return
@@ -274,7 +278,11 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 		var inputTokens, outputTokens int
 		var finishReason string
 
-		scanner := bufio.NewScanner(resp.Body)
+		idleTimeout := StreamIdleTimeout
+		idle := newIdleReader(resp.Body, idleTimeout, cancelReq)
+		defer idle.Stop()
+
+		scanner := bufio.NewScanner(idle)
 		// Anthropic can return large tool call arguments; increase buffer.
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -365,8 +373,12 @@ func streamChatAnthropic(ctx context.Context, ep Endpoint, model string, message
 		}
 
 		if err := scanner.Err(); err != nil {
+			msg := fmt.Sprintf("stream read error: %v", err)
+			if idle.TimedOut() {
+				msg = idleError(idleTimeout)
+			}
 			select {
-			case ch <- StreamEvent{Error: fmt.Sprintf("stream read error: %v", err)}:
+			case ch <- StreamEvent{Error: msg}:
 			case <-ctx.Done():
 			}
 			return
