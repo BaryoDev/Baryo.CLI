@@ -53,6 +53,7 @@ type Config struct {
 	AutoMode             []AutoModeEntry    `yaml:"auto_mode"`              // ordered models for auto-routing
 	Notifications        *bool              `yaml:"notifications"`          // desktop notifications on completion (default false)
 	SessionRetentionDays int                `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
+	StreamIdleTimeout    string             `yaml:"stream_idle_timeout"`    // abandon a stream after this long with no data (default 5m)
 	Sandbox              *bool              `yaml:"sandbox"`                // run code in Docker sandbox (default false)
 	ShowThinking         *bool              `yaml:"show_thinking"`          // render model thinking blocks (default false)
 }
@@ -104,6 +105,21 @@ func (c *Config) AutoLintEnabled() bool {
 		return false
 	}
 	return *c.AutoLint
+}
+
+// StreamIdleTimeoutDuration returns how long a provider may send nothing before
+// the stream is abandoned. Unset, unparseable and non-positive values fall back
+// to the default, because a zero here would abandon every stream immediately.
+func (c *Config) StreamIdleTimeoutDuration() time.Duration {
+	const fallback = 5 * time.Minute
+	if c.StreamIdleTimeout == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(c.StreamIdleTimeout)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 // AutoTestEnabled returns whether auto-test after code edits is enabled.
@@ -384,6 +400,9 @@ func loadFile(path string, cfg *Config) {
 	}
 	if file.Notifications != nil {
 		cfg.Notifications = file.Notifications
+	}
+	if file.StreamIdleTimeout != "" {
+		cfg.StreamIdleTimeout = file.StreamIdleTimeout
 	}
 	if file.SessionRetentionDays > 0 {
 		cfg.SessionRetentionDays = file.SessionRetentionDays

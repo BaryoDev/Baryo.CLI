@@ -8,10 +8,12 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
@@ -46,6 +48,7 @@ type PrintOptions struct {
 	StrategyInput  string          // pre-formatted strategy context (from --strategy flag)
 	SearchProvider string
 	SearchAPIKey   string
+	Timeout        time.Duration // overall deadline; 0 means none
 }
 
 // RunPrint runs a single prompt through the model in headless mode.
@@ -61,6 +64,11 @@ func RunPrint(opts PrintOptions) int {
 func runPrintText(opts PrintOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
 
 	messages := buildMessages(opts)
 
@@ -121,6 +129,22 @@ func runPrintText(opts PrintOptions) int {
 	}
 
 	fmt.Println()
+	return exitForContext(ctx)
+}
+
+// exitForContext reports the exit code for a stream that has ended. A deadline
+// or an interrupt must not look like success: when the caller's context is
+// already done, the stream drops its error event because the send would block,
+// so the only place that knows is here.
+func exitForContext(ctx context.Context) int {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		fmt.Fprintln(os.Stderr, "error: timed out before the response completed")
+		return 1
+	case ctx.Err() != nil:
+		fmt.Fprintln(os.Stderr, "error: interrupted before the response completed")
+		return 1
+	}
 	return 0
 }
 
@@ -145,10 +169,25 @@ type jsonUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// finishJSON prints the payload and returns the exit code, accounting for a
+// deadline or interrupt the stream could not report. Both JSON exits go through
+// here so a new one cannot quietly return 0.
+func finishJSON(ctx context.Context, out jsonOutput) int {
+	code := exitForContext(ctx)
+	out.ExitCode = code
+	printJSON(out)
+	return code
+}
+
 // runPrintJSON collects all events and prints a single JSON object to stdout.
 func runPrintJSON(opts PrintOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
 
 	messages := buildMessages(opts)
 
@@ -174,8 +213,7 @@ func runPrintJSON(opts PrintOptions) int {
 				}
 			}
 		}
-		printJSON(out)
-		return 0
+		return finishJSON(ctx, out)
 	}
 
 	toolDefs := tools.DockerDefinitions()
@@ -254,8 +292,7 @@ func runPrintJSON(opts PrintOptions) int {
 		}
 	}
 
-	printJSON(out)
-	return 0
+	return finishJSON(ctx, out)
 }
 
 // buildMessages constructs the initial message list for print mode.
@@ -293,7 +330,7 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMes
 		}
 	}
 	fmt.Println()
-	return 0
+	return exitForContext(ctx)
 }
 
 // makeHeadlessExecutor returns a tool executor for headless mode.

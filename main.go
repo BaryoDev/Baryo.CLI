@@ -108,6 +108,9 @@ func main() {
 	cfg := config.Load(trusted)
 	cfg.ApplyCLI(flags.Model, flags.SystemPrompt, flags.Tunnel, flags.Params, flags.Yolo)
 
+	// How long a provider may stall before a stream is abandoned.
+	llm.StreamIdleTimeout = cfg.StreamIdleTimeoutDuration()
+
 	// Start SSH tunnel if configured
 	tun := startTunnel(&cfg)
 	if tun != nil {
@@ -261,6 +264,7 @@ func main() {
 			StrategyInput:  strategyInput,
 			SearchProvider: cfg.SearchProvider,
 			SearchAPIKey:   cfg.SearchAPIKey,
+			Timeout:        flags.TimeoutDuration(),
 		}
 		os.Exit(cli.RunPrint(printOpts))
 		return

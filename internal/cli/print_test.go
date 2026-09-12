@@ -2,8 +2,12 @@ package cli
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
@@ -57,5 +61,70 @@ func TestHeadlessExecutorRunsAnyMCPToolInAutoMode(t *testing.T) {
 	mgr := &fakeMCP{readOnly: map[string]bool{}}
 	if out, isErr := makeHeadlessExecutor("auto", mgr)(context.Background(), "mcp__fs__write", "{}"); isErr {
 		t.Errorf("auto mode should run it, got %q", out)
+	}
+}
+
+// When the overall deadline fires, the stream's error event is dropped on
+// purpose: the send would block on a context that is already done. So print mode
+// has to notice the deadline itself, or a timed-out run exits 0 and a CI job
+// reports success for work that never finished.
+func TestPrintTextReturnsErrorOnTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"stalling\"}}]}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-block
+	}))
+	t.Cleanup(func() {
+		close(block)
+		srv.Close()
+	})
+
+	code := runPrintText(PrintOptions{
+		Endpoint: llm.Endpoint{BaseURL: srv.URL + "/v1", Provider: "openai", APIKey: "test"},
+		Model:    llm.Model{Tag: "test-model"},
+		Prompt:   "hi",
+		Timeout:  400 * time.Millisecond,
+	})
+	if code == 0 {
+		t.Error("a run cut short by --timeout must not report success")
+	}
+}
+
+// JSON mode has its own no-tools branch with its own return, which is how the
+// first fix missed it. Both JSON exits must report a cut-short run.
+func TestPrintJSONReturnsErrorOnTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"stalling\"}}]}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-block
+	}))
+	t.Cleanup(func() {
+		close(block)
+		srv.Close()
+	})
+
+	opts := PrintOptions{
+		Endpoint: llm.Endpoint{BaseURL: srv.URL + "/v1", Provider: "openai", APIKey: "test"},
+		Model:    llm.Model{Tag: "test-model"},
+		Prompt:   "hi",
+		Timeout:  400 * time.Millisecond,
+	}
+	if code := runPrintJSON(opts); code == 0 {
+		t.Error("json mode without tools must not report success after a timeout")
+	}
+
+	opts.EnableTools = true
+	if code := runPrintJSON(opts); code == 0 {
+		t.Error("json mode with tools must not report success after a timeout")
 	}
 }
