@@ -17,6 +17,6 @@
         }
     },
     "homepage": "https://github.com/BaryoDev/Baryo.CLI",
-    "license": "MPL-2.0",
+    "license": "MIT",
     "description": "A local AI chat CLI powered by Docker Model Runner"
 }

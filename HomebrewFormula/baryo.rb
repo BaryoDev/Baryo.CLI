@@ -6,7 +6,7 @@ class Baryo < Formula
   desc "A local AI chat CLI powered by Docker Model Runner"
   homepage "https://github.com/BaryoDev/Baryo.CLI"
   version "0.13.0"
-  license "MPL-2.0"
+  license "MIT"
 
   on_macos do
     if Hardware::CPU.intel?

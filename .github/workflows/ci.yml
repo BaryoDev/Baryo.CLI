@@ -70,3 +70,12 @@ jobs:
 
       - name: Test install.sh checksum verification
         run: sh scripts/install_test.sh
+
+      - name: Check NOTICE is current
+        run: |
+          go mod download
+          python3 scripts/gen_notice.py > /tmp/NOTICE.generated
+          if ! diff -u NOTICE /tmp/NOTICE.generated; then
+            echo "NOTICE is stale. Run: python3 scripts/gen_notice.py > NOTICE"
+            exit 1
+          fi

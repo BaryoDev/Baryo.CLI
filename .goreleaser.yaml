@@ -47,7 +47,7 @@ brews:
     directory: HomebrewFormula
     homepage: "https://github.com/BaryoDev/Baryo.CLI"
     description: "A local AI chat CLI powered by Docker Model Runner"
-    license: "MPL-2.0"
+    license: "MIT"
     install: |
       bin.install "baryo"
     test: |
@@ -60,7 +60,7 @@ scoops:
     directory: ScoopBucket
     homepage: "https://github.com/BaryoDev/Baryo.CLI"
     description: "A local AI chat CLI powered by Docker Model Runner"
-    license: "MPL-2.0"
+    license: "MIT"
 
 release:
   github:
