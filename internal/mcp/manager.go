@@ -14,6 +14,10 @@ import (
 )
 
 // Manager manages multiple MCP server connections.
+//
+// Every method here tolerates a nil receiver. Callers hold it through an
+// interface, and a typed nil pointer in an interface is not a nil interface, so
+// a `!= nil` guard does not stop these methods from being called.
 type Manager struct {
 	clients map[string]*Client // server name → client
 	toolMap map[string]string  // qualified tool name → server name
@@ -76,6 +80,9 @@ func (m *Manager) Start(ctx context.Context, configs []ServerConfig) []error {
 // ToolDefinitions returns llm.ToolDefinition entries for all MCP tools
 // across all connected servers.
 func (m *Manager) ToolDefinitions() []llm.ToolDefinition {
+	if m == nil {
+		return nil
+	}
 	var defs []llm.ToolDefinition
 	for serverName, client := range m.clients {
 		for _, tool := range client.Tools() {
@@ -125,6 +132,9 @@ const contextThreshold = 16384
 //
 // The full set is always routable via Execute when users explicitly request MCP tools.
 func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int) []llm.ToolDefinition {
+	if m == nil {
+		return nil
+	}
 	native := make(map[string]bool, len(nativeNames))
 	for _, n := range nativeNames {
 		native[n] = true
@@ -247,6 +257,9 @@ func (m *Manager) applyTrust(configs []ServerConfig) {
 // Unknown names and unannotated tools return false: this gates tool execution,
 // so it must fail closed.
 func (m *Manager) IsReadOnlyTool(qualifiedName string) bool {
+	if m == nil {
+		return false
+	}
 	serverName, ok := m.toolMap[qualifiedName]
 	if !ok {
 		return false
@@ -272,6 +285,9 @@ func (m *Manager) IsReadOnlyTool(qualifiedName string) bool {
 
 // Execute routes a qualified tool call to the correct MCP server.
 func (m *Manager) Execute(ctx context.Context, qualifiedName, argsJSON string) (string, bool) {
+	if m == nil {
+		return "no MCP servers are connected", true
+	}
 	serverName, ok := m.toolMap[qualifiedName]
 	if !ok {
 		return fmt.Sprintf("unknown MCP tool: %s", qualifiedName), true
@@ -305,12 +321,18 @@ func (m *Manager) Execute(ctx context.Context, qualifiedName, argsJSON string) (
 
 // IsMCPTool returns true if the given name is a registered MCP tool.
 func (m *Manager) IsMCPTool(name string) bool {
+	if m == nil {
+		return false
+	}
 	_, ok := m.toolMap[name]
 	return ok
 }
 
 // ServerNames returns the names of all connected servers in sorted order.
 func (m *Manager) ServerNames() []string {
+	if m == nil {
+		return nil
+	}
 	names := make([]string, 0, len(m.clients))
 	for name := range m.clients {
 		names = append(names, name)
@@ -321,6 +343,9 @@ func (m *Manager) ServerNames() []string {
 
 // ServerTools returns the tool names for a specific server.
 func (m *Manager) ServerTools(name string) []string {
+	if m == nil {
+		return nil
+	}
 	client, ok := m.clients[name]
 	if !ok {
 		return nil
@@ -334,6 +359,9 @@ func (m *Manager) ServerTools(name string) []string {
 
 // Close stops all MCP server processes.
 func (m *Manager) Close() {
+	if m == nil {
+		return
+	}
 	m.cancel()
 	for _, client := range m.clients {
 		client.Close()

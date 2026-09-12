@@ -109,6 +109,9 @@ func main() {
 	// How long a provider may stall before a stream is abandoned.
 	llm.StreamIdleTimeout = cfg.StreamIdleTimeoutDuration()
 
+	// Trajectory recording, which the saved conversation does not cover.
+	tui.SetTraceEnabled(cfg.TraceEnabled())
+
 	// Start SSH tunnel if configured
 	tun := startTunnel(&cfg)
 	if tun != nil {
@@ -258,11 +261,13 @@ func main() {
 			MaxTurns:       flags.MaxTurns,
 			OutputFormat:   flags.Output,
 			EnableTools:    enableTools,
-			MCPManager:     mcpMgr,
+			MCPManager:     mcpProvider(mcpMgr),
 			StrategyInput:  strategyInput,
 			SearchProvider: cfg.SearchProvider,
 			SearchAPIKey:   cfg.SearchAPIKey,
 			Timeout:        flags.TimeoutDuration(),
+			TraceFile:      flags.TraceFile,
+			ProviderKeys:   cfg.ProviderKeys,
 		}
 		os.Exit(cli.RunPrint(printOpts))
 		return
@@ -527,4 +532,14 @@ func promptProjectTrust() bool {
 func stdinIsTerminal() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// mcpProvider returns a nil interface when no manager was started. Assigning a
+// typed nil pointer to an interface field produces a non-nil interface, and
+// every `!= nil` check downstream then calls methods on a nil receiver.
+func mcpProvider(m *mcp.Manager) cli.MCPToolProvider {
+	if m == nil {
+		return nil
+	}
+	return m
 }

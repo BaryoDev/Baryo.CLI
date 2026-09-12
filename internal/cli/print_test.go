@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/arnelirobles/baryo-cli/internal/mcp"
 )
 
 // Headless mode blocks destructive tools without --yolo. Since IsDestructive
 // fails closed, an unregistered name would be reported as needing --yolo, which
 // is misleading: no flag can make a tool that does not exist run.
 func TestHeadlessExecutorRejectsUnknownTool(t *testing.T) {
-	out, isErr := makeHeadlessExecutor("confirm", nil)(context.Background(), "tool_that_does_not_exist", "{}")
+	out, isErr := makeHeadlessExecutor("confirm", nil, nil)(context.Background(), "tool_that_does_not_exist", "{}")
 	if !isErr {
 		t.Error("want an error result")
 	}
@@ -42,7 +43,7 @@ func (f *fakeMCP) IsReadOnlyTool(name string) bool { return f.readOnly[name] }
 // skip that check entirely.
 func TestHeadlessExecutorGatesNonReadOnlyMCPTool(t *testing.T) {
 	mgr := &fakeMCP{readOnly: map[string]bool{"mcp__search__query": true}}
-	exec := makeHeadlessExecutor("confirm", mgr)
+	exec := makeHeadlessExecutor("confirm", mgr, nil)
 
 	out, isErr := exec(context.Background(), "mcp__fs__write", "{}")
 	if !isErr || !strings.Contains(out, "--yolo") {
@@ -59,7 +60,7 @@ func TestHeadlessExecutorGatesNonReadOnlyMCPTool(t *testing.T) {
 
 func TestHeadlessExecutorRunsAnyMCPToolInAutoMode(t *testing.T) {
 	mgr := &fakeMCP{readOnly: map[string]bool{}}
-	if out, isErr := makeHeadlessExecutor("auto", mgr)(context.Background(), "mcp__fs__write", "{}"); isErr {
+	if out, isErr := makeHeadlessExecutor("auto", mgr, nil)(context.Background(), "mcp__fs__write", "{}"); isErr {
 		t.Errorf("auto mode should run it, got %q", out)
 	}
 }
@@ -126,5 +127,26 @@ func TestPrintJSONReturnsErrorOnTimeout(t *testing.T) {
 	opts.EnableTools = true
 	if code := runPrintJSON(opts); code == 0 {
 		t.Error("json mode with tools must not report success after a timeout")
+	}
+}
+
+// main.go declares `var mcpMgr *mcp.Manager` and passes it into this interface
+// field whether or not a server was configured. A typed nil in an interface is
+// not a nil interface, so the `!= nil` guard passes and the method runs on a nil
+// receiver. This crashed every headless run with no MCP servers.
+func TestHeadlessSurvivesTypedNilMCPManager(t *testing.T) {
+	var typedNil *mcp.Manager
+	opts := PrintOptions{
+		Endpoint:    llm.Endpoint{BaseURL: "http://127.0.0.1:1/v1", Provider: "openai"},
+		Model:       llm.Model{Tag: "test-model"},
+		Prompt:      "hi",
+		EnableTools: true,
+		MCPManager:  typedNil,
+		Timeout:     300 * time.Millisecond,
+	}
+	// Connecting to port 1 fails fast; the point is that building the tool
+	// definitions does not panic first.
+	if code := runPrintText(opts); code == 0 {
+		t.Error("expected a non-zero exit from an unreachable endpoint")
 	}
 }

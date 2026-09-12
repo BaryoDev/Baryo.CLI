@@ -15,6 +15,7 @@ import (
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
+	"github.com/arnelirobles/baryo-cli/internal/trace"
 	"github.com/arnelirobles/baryo-cli/internal/tui"
 )
 
@@ -46,7 +47,48 @@ type PrintOptions struct {
 	StrategyInput  string          // pre-formatted strategy context (from --strategy flag)
 	SearchProvider string
 	SearchAPIKey   string
-	Timeout        time.Duration // overall deadline; 0 means none
+	Timeout        time.Duration     // overall deadline; 0 means none
+	TraceFile      string            // write a trajectory trace here; empty disables it
+	ProviderKeys   map[string]string // masked out of the trace
+}
+
+// endpointLabel names the endpoint a task ran against, without leaking a key.
+func endpointLabel(ep llm.Endpoint) string {
+	if ep.Provider != "" {
+		return ep.Provider
+	}
+	if ep.BaseURL != "" {
+		return "remote"
+	}
+	return "local"
+}
+
+// cwd returns the working directory, or "" if it cannot be determined.
+func cwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// openRecorder returns a trace recorder for this run, or nil when --trace-file
+// was not given. A failure to open is reported and then ignored: a missing trace
+// is not a reason to refuse the work.
+func openRecorder(opts PrintOptions) *trace.Recorder {
+	if opts.TraceFile == "" {
+		return nil
+	}
+	secrets := make([]string, 0, len(opts.ProviderKeys))
+	for _, v := range opts.ProviderKeys {
+		secrets = append(secrets, v)
+	}
+	rec, err := trace.New(opts.TraceFile, secrets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot write trace to %s: %v\n", opts.TraceFile, err)
+		return nil
+	}
+	return rec
 }
 
 // RunPrint runs a single prompt through the model in headless mode.
@@ -68,17 +110,24 @@ func runPrintText(opts PrintOptions) int {
 		defer cancel()
 	}
 
+	rec := openRecorder(opts)
+	defer rec.Close()
+	rec.StartTask(opts.Prompt, opts.Model.Tag, endpointLabel(opts.Endpoint), cwd(), "")
+	start := time.Now()
+
 	messages := buildMessages(opts)
 
 	if !opts.EnableTools {
-		return streamSimple(ctx, opts, messages)
+		code := streamSimple(ctx, opts, messages)
+		rec.EndTask("unknown", 0, 0, time.Since(start))
+		return code
 	}
 
 	toolDefs := tools.DockerDefinitions()
 	if opts.MCPManager != nil {
 		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
 	}
-	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
+	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager, rec)
 
 	// Add meta-tool definitions and wrap executor.
 	contextLimit := contextWindowForModel(opts.Model.Tag)
@@ -127,6 +176,7 @@ func runPrintText(opts PrintOptions) int {
 	}
 
 	fmt.Println()
+	rec.EndTask("unknown", 0, 0, time.Since(start))
 	return exitForContext(ctx)
 }
 
@@ -187,6 +237,11 @@ func runPrintJSON(opts PrintOptions) int {
 		defer cancel()
 	}
 
+	rec := openRecorder(opts)
+	defer rec.Close()
+	rec.StartTask(opts.Prompt, opts.Model.Tag, endpointLabel(opts.Endpoint), cwd(), "")
+	start := time.Now()
+
 	messages := buildMessages(opts)
 
 	out := jsonOutput{}
@@ -218,7 +273,7 @@ func runPrintJSON(opts PrintOptions) int {
 	if opts.MCPManager != nil {
 		toolDefs = append(toolDefs, opts.MCPManager.CompactToolDefinitions(tools.Names(), mcpContextWindow(opts.Endpoint, opts.Model.Tag))...)
 	}
-	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager)
+	executor := makeHeadlessExecutor(opts.PermissionMode, opts.MCPManager, rec)
 
 	// Add meta-tool definitions and wrap executor.
 	contextLimit := contextWindowForModel(opts.Model.Tag)
@@ -290,6 +345,7 @@ func runPrintJSON(opts PrintOptions) int {
 		}
 	}
 
+	rec.EndTask("unknown", 0, 0, time.Since(start))
 	return finishJSON(ctx, out)
 }
 
@@ -334,7 +390,7 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMes
 // makeHeadlessExecutor returns a tool executor for headless mode.
 // In "auto" mode, all tools are executed. In other modes, destructive tools
 // are blocked with an error message.
-func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) llm.ToolExecutor {
+func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider, rec *trace.Recorder) llm.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		isMCP := mcpMgr != nil && mcpMgr.IsMCPTool(name)
 		if !isMCP && !tools.Exists(name) {
@@ -352,9 +408,14 @@ func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) llm.Too
 		}
 		// Route MCP tools to the MCP manager.
 		if isMCP {
-			return mcpMgr.Execute(ctx, name, argsJSON)
+			rec.ToolCall(name, argsJSON)
+			content, isErr := mcpMgr.Execute(ctx, name, argsJSON)
+			rec.ToolResult(name, content, isErr)
+			return content, isErr
 		}
+		rec.ToolCall(name, argsJSON)
 		result := tools.Execute(ctx, name, argsJSON)
+		rec.ToolResult(name, result.Content, result.IsError)
 		return result.Content, result.IsError
 	}
 }
