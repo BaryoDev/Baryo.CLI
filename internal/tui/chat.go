@@ -291,7 +291,7 @@ func sendNotification(title string) {
 func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatParams, model llm.Model, searchProvider, searchAPIKey, permissionMode string, providerKeys map[string]string, rewrite, mcpInReadOnly bool, mcpMgr MCPManager) ChatModel {
 	ta := newTextarea()
 	sess, _ := session.New(model.Name, model.Tag)
-	ep := endpointForModel(socketPath, model, providerKeys)
+	ep := llm.EndpointForModel(socketPath, model, providerKeys)
 	hints := llm.DetectModelHints(model.Tag)
 	m := ChatModel{
 		endpoint:        ep,
@@ -360,7 +360,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		model.PromptPrice = p.PromptPrice
 		model.CompletionPrice = p.CompletionPrice
 	}
-	ep := endpointForModel(socketPath, model, providerKeys)
+	ep := llm.EndpointForModel(socketPath, model, providerKeys)
 	hints := llm.DetectModelHints(sess.ModelTag)
 	cm := ChatModel{
 		endpoint:        ep,
@@ -397,19 +397,6 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 	cm.contextTokens = estimateTokens(cm.buildMessages())
 	cm.openRecorder(providerKeys)
 	return cm
-}
-
-// endpointForModel returns the appropriate endpoint based on a model's provider.
-func endpointForModel(socketPath string, model llm.Model, keys map[string]string) llm.Endpoint {
-	if model.Provider == "ollama-local" {
-		return llm.LocalEndpoint("tcp://localhost:11434")
-	}
-	if model.Provider != "" {
-		if key, ok := keys[model.Provider]; ok {
-			return llm.ProviderEndpoint(model.Provider, key)
-		}
-	}
-	return llm.LocalEndpoint(socketPath)
 }
 
 // spinnerFrames are the animation frames for the inline spinner.
@@ -959,7 +946,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 							newModel.PromptPrice = p.PromptPrice
 							newModel.CompletionPrice = p.CompletionPrice
 						}
-						m.endpoint = endpointForModel(m.localSocketPath, newModel, m.providerKeys)
+						m.endpoint = llm.EndpointForModel(m.localSocketPath, newModel, m.providerKeys)
 						m.modelTag = selected.Tag
 						m.modelName = selected.Tag
 						m.modelHints = llm.DetectModelHints(selected.Tag)

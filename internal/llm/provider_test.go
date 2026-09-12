@@ -386,3 +386,46 @@ func TestProvidersMap(t *testing.T) {
 		}
 	}
 }
+
+func TestEndpointForModel(t *testing.T) {
+	socket := "/tmp/baryo.sock"
+	tests := []struct {
+		name  string
+		model Model
+		keys  map[string]string
+		want  Endpoint
+	}{
+		{
+			name:  "local socket",
+			model: Model{Name: "ai/mistral", Tag: "ai/mistral:latest"},
+			keys:  nil,
+			want:  LocalEndpoint(socket),
+		},
+		{
+			name:  "provider with key",
+			model: Model{Name: "gpt-4o", Tag: "gpt-4o", Provider: "openai"},
+			keys:  map[string]string{"openai": "sk-test"},
+			want:  ProviderEndpoint("openai", "sk-test"),
+		},
+		{
+			name:  "provider without key falls back to local",
+			model: Model{Name: "gpt-4o", Tag: "gpt-4o", Provider: "openai"},
+			keys:  map[string]string{},
+			want:  LocalEndpoint(socket),
+		},
+		{
+			name:  "ollama-local",
+			model: Model{Name: "llama3", Tag: "llama3", Provider: "ollama-local"},
+			keys:  map[string]string{"ollama": "unused"},
+			want:  LocalEndpoint("tcp://localhost:11434"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EndpointForModel(socket, tt.model, tt.keys)
+			if got != tt.want {
+				t.Errorf("EndpointForModel() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
