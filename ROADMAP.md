@@ -2,6 +2,22 @@
 
 Baryo's three pillars: **Software Development**, **DevOps**, and **Research**. Every feature should strengthen at least one of these.
 
+## Current plan
+
+The delegation and braindb work is tracked as four phase epics, each with its own
+gate. The design is in
+[design/specs/2026-09-12-baryo-delegation-braindb-design.md](design/specs/2026-09-12-baryo-delegation-braindb-design.md).
+
+| Phase | Epic | Gate |
+|---|---|---|
+| 0. Foundation | [#23](https://github.com/BaryoDev/Baryo.CLI/issues/23) | A released binary indexes files, MCP tools honour the permission gate, a stalled provider cannot hang, a task writes a trace |
+| 1. Measure | [#24](https://github.com/BaryoDev/Baryo.CLI/issues/24) | A recipe must beat bare local by 25 points on repeat-shaped tasks, or the project stops here |
+| 2. Extract | [#25](https://github.com/BaryoDev/Baryo.CLI/issues/25) | `baryo -p` and the TUI provably build the same prompt |
+| 3. Braindb | [#26](https://github.com/BaryoDev/Baryo.CLI/issues/26) | Recipes demote as reliably as they promote, and no project recipe is auto-trusted |
+
+Phase 1 exists to be able to say no. The sections below predate this plan and
+remain the feature backlog.
+
 ## Philosophy: Local-First with Cloud Escape Hatch
 
 Baryo is a **local-first** tool — models run on your machine via Docker, your data never leaves your laptop, and there are no per-token fees. This is the default and recommended experience.
