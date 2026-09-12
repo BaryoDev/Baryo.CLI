@@ -82,6 +82,19 @@ func LocalEndpoint(socketPath string) Endpoint {
 	return Endpoint{SocketPath: socketPath}
 }
 
+// EndpointForModel returns the appropriate endpoint based on a model's provider.
+func EndpointForModel(socketPath string, model Model, keys map[string]string) Endpoint {
+	if model.Provider == "ollama-local" {
+		return LocalEndpoint("tcp://localhost:11434")
+	}
+	if model.Provider != "" {
+		if key, ok := keys[model.Provider]; ok {
+			return ProviderEndpoint(model.Provider, key)
+		}
+	}
+	return LocalEndpoint(socketPath)
+}
+
 // providerModelsResponse is the response from /models with OpenRouter-specific fields.
 type providerModelsResponse struct {
 	Data []providerModelEntry `json:"data"`
