@@ -113,6 +113,9 @@ func RunSubagent(ctx context.Context, cfg SubagentConfig, progressCh chan<- Suba
 // makeSubagentExecutor returns a read-only tool executor for subagents.
 func makeSubagentExecutor(mgr MCPManager, allowMCP bool) llm.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		if (mgr == nil || !mgr.IsMCPTool(name)) && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
 		// Route MCP tools if allowed
 		if mgr != nil && mgr.IsMCPTool(name) {
 			if !allowMCP {

@@ -298,8 +298,12 @@ func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMes
 // are blocked with an error message.
 func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider) llm.ToolExecutor {
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		isMCP := mcpMgr != nil && mcpMgr.IsMCPTool(name)
+		if !isMCP && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
 		// Route MCP tools to the MCP manager.
-		if mcpMgr != nil && mcpMgr.IsMCPTool(name) {
+		if isMCP {
 			return mcpMgr.Execute(ctx, name, argsJSON)
 		}
 		if permissionMode != "auto" && tools.IsDestructive(name) {

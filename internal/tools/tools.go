@@ -74,11 +74,20 @@ func sanitizeArgs(argsJSON string) string {
 	return argsJSON
 }
 
+// Exists reports whether a tool name is registered.
+func Exists(name string) bool {
+	_, ok := registry[name]
+	return ok
+}
+
 // IsDestructive returns true if the named tool is marked as destructive.
+//
+// Unknown names are reported as destructive. Every caller uses this as a
+// permission gate, so a name the registry has never seen must fail closed.
 func IsDestructive(name string) bool {
 	tool, ok := registry[name]
 	if !ok {
-		return false
+		return true
 	}
 	return tool.Destructive
 }

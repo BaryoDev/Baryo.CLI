@@ -93,9 +93,11 @@ func TestRegisterAndExecute(t *testing.T) {
 	delete(registry, "test_tool")
 }
 
+// Unknown names fail closed; see TestIsDestructiveFailsClosedForUnknownTool in
+// gate_test.go for why. This used to assert the opposite.
 func TestIsDestructive_UnknownTool(t *testing.T) {
-	if IsDestructive("nonexistent") {
-		t.Error("unknown tool should not be destructive")
+	if !IsDestructive("nonexistent") {
+		t.Error("unknown tool should be treated as destructive")
 	}
 }
 

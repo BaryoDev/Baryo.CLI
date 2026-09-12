@@ -3196,6 +3196,13 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	afCfg := m.autoFixCfg
 	hooks := m.hooksConfig
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		// Unknown names cannot run, so reject them before hooks fire or the
+		// gate asks the user to approve something that does not exist.
+		isMCP := mgr != nil && mgr.IsMCPTool(name)
+		if !isMCP && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
+
 		// Pre-tool hook: runs before execution. Non-zero exit cancels the tool.
 		if hooks.PreTool != "" {
 			hr := runHook(hooks, HookPreTool, HookContext{ToolName: name})
@@ -3209,7 +3216,7 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 		}
 
 		// Route MCP tools to the MCP manager.
-		if mgr != nil && mgr.IsMCPTool(name) {
+		if isMCP {
 			content, isErr := mgr.Execute(ctx, name, argsJSON)
 			// Post-tool hook
 			if hooks.PostTool != "" {
@@ -3268,6 +3275,9 @@ func (m *ChatModel) makePlanExecutor() func(ctx context.Context, name, argsJSON 
 	mgr := m.mcpManager
 	allowMCP := m.mcpInReadOnly
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		if (mgr == nil || !mgr.IsMCPTool(name)) && !tools.Exists(name) {
+			return fmt.Sprintf("unknown tool: %s", name), true
+		}
 		// Route MCP tools to the MCP manager (if allowed in read-only modes).
 		if mgr != nil && mgr.IsMCPTool(name) {
 			if !allowMCP {
