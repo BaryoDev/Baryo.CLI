@@ -265,9 +265,22 @@ func isInsideSkillDir(absPath string) bool {
 		allowed = append(allowed, filepath.Join(home, ".baryo", "skills"))
 	}
 
+	// Compare resolved against resolved. A symlink inside a skill directory must
+	// not redirect execution outside it, while a skills directory that is itself
+	// a symlink (a dotfiles checkout, say) has to keep working. Comparing the
+	// literal path would allow the first; comparing only literal roots would
+	// break the second.
+	target, err := resolveExistingPrefix(filepath.Clean(absPath))
+	if err != nil {
+		return false
+	}
 	for _, dir := range allowed {
-		// Ensure trailing separator so "/skills-other" doesn't match "/skills"
-		if strings.HasPrefix(absPath, dir+string(os.PathSeparator)) {
+		root, err := resolveExistingPrefix(dir)
+		if err != nil {
+			continue
+		}
+		// Trailing separator so "/skills-other" doesn't match "/skills".
+		if strings.HasPrefix(target, root+string(os.PathSeparator)) {
 			return true
 		}
 	}
