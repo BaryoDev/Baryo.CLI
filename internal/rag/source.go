@@ -105,8 +105,7 @@ func (ss *SourceStore) Chunks() []Chunk {
 // discoverSourceFiles walks the root and returns relative paths of source files,
 // prioritizing code files over config/doc files and capping at maxSourceFiles.
 func (ss *SourceStore) discoverSourceFiles(ctx context.Context) ([]string, error) {
-	var codeFiles []string
-	var otherFiles []string
+	var candidates []string
 
 	err := filepath.WalkDir(ss.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -118,7 +117,12 @@ func (ss *SourceStore) discoverSourceFiles(ctx context.Context) ([]string, error
 
 		name := d.Name()
 
+		// Never skip the root itself: WalkDir visits it first, so a project in
+		// a dotted directory such as ~/.dotfiles would lose its whole tree.
 		if d.IsDir() {
+			if path == ss.root {
+				return nil
+			}
 			if sourceSkipDirs[name] || (strings.HasPrefix(name, ".") && name != ".") {
 				return filepath.SkipDir
 			}
@@ -135,24 +139,32 @@ func (ss *SourceStore) discoverSourceFiles(ctx context.Context) ([]string, error
 			return nil
 		}
 
-		if ignore.IsIgnored(ctx, path) {
-			return nil
-		}
-
-		rel, err := filepath.Rel(ss.root, path)
-		if err != nil {
-			return nil
-		}
-
-		if codeExts[ext] {
-			codeFiles = append(codeFiles, rel)
-		} else {
-			otherFiles = append(otherFiles, rel)
-		}
+		candidates = append(candidates, path)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// One batched ignore check for the whole tree instead of a git subprocess
+	// per file.
+	ignored := ignore.Filter(ctx, candidates)
+
+	var codeFiles []string
+	var otherFiles []string
+	for _, path := range candidates {
+		if ignored[path] {
+			continue
+		}
+		rel, relErr := filepath.Rel(ss.root, path)
+		if relErr != nil {
+			continue
+		}
+		if codeExts[strings.ToLower(filepath.Ext(path))] {
+			codeFiles = append(codeFiles, rel)
+		} else {
+			otherFiles = append(otherFiles, rel)
+		}
 	}
 
 	// Sort each group by path for deterministic output.

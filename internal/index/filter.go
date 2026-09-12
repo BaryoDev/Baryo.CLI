@@ -57,7 +57,7 @@ func LangForFile(path string) string {
 // source files. It skips ignored directories, binary files, and files over 1MB.
 func DiscoverFiles(root string) ([]string, error) {
 	ctx := context.Background()
-	var files []string
+	var candidates []string
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -66,8 +66,13 @@ func DiscoverFiles(root string) ([]string, error) {
 
 		name := d.Name()
 
-		// Skip hidden dirs and known non-source dirs.
+		// Skip hidden dirs and known non-source dirs. Never the root itself:
+		// WalkDir visits it first, and a project in a dotted directory such as
+		// ~/.dotfiles would otherwise have its whole tree skipped.
 		if d.IsDir() {
+			if path == root {
+				return nil
+			}
 			if skipDirs[name] || (strings.HasPrefix(name, ".") && name != ".") {
 				return filepath.SkipDir
 			}
@@ -88,23 +93,27 @@ func DiscoverFiles(root string) ([]string, error) {
 			return nil
 		}
 
-		// Check ignore rules (.baryoignore + .gitignore).
-		if ignore.IsIgnored(ctx, path) {
-			return nil
-		}
-
-		// Check for binary content (null bytes in first 512 bytes).
-		if isBinary(path) {
-			return nil
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		files = append(files, rel)
+		candidates = append(candidates, path)
 		return nil
 	})
+
+	// One batched ignore check for the whole tree. IsIgnored forks a git
+	// subprocess per path, so this walk used to cost one process per file, and
+	// it runs after every completed turn. Filtering before isBinary also avoids
+	// opening files that are excluded anyway.
+	ignored := ignore.Filter(ctx, candidates)
+
+	files := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		if ignored[path] || isBinary(path) {
+			continue
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			continue
+		}
+		files = append(files, rel)
+	}
 
 	return files, err
 }

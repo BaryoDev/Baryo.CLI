@@ -41,24 +41,102 @@ type rule struct {
 
 // IsIgnored returns true if the path should be excluded.
 // It checks: builtin patterns → .baryoignore → git check-ignore.
+//
+// This spawns a git subprocess per call. Use Filter for more than one path.
 func IsIgnored(ctx context.Context, absPath string) bool {
-	name := filepath.Base(absPath)
+	if matchesInProcess(loadRules(), absPath) {
+		return true
+	}
+	return isGitIgnored(ctx, absPath)
+}
 
-	// 1. Builtin patterns (match basename only).
+// Filter returns the subset of absPaths that should be excluded.
+//
+// Builtin patterns and .baryoignore are applied in process, then git is asked
+// about whatever is left in a single subprocess. IsIgnored forks git once per
+// path, which on a walk of N files costs N process spawns.
+func Filter(ctx context.Context, absPaths []string) map[string]bool {
+	ignored := make(map[string]bool, len(absPaths))
+	if len(absPaths) == 0 {
+		return ignored
+	}
+
+	rules := loadRules()
+	remaining := make([]string, 0, len(absPaths))
+	for _, p := range absPaths {
+		if matchesInProcess(rules, p) {
+			ignored[p] = true
+			continue
+		}
+		remaining = append(remaining, p)
+	}
+	if len(remaining) == 0 {
+		return ignored
+	}
+
+	for p := range gitCheckIgnore(ctx, commonDir(remaining), remaining) {
+		ignored[p] = true
+	}
+	return ignored
+}
+
+// matchesInProcess reports whether the builtin patterns or .baryoignore rules
+// exclude a path, without touching git.
+func matchesInProcess(rules []rule, absPath string) bool {
+	name := filepath.Base(absPath)
 	for _, pat := range builtinPatterns {
 		if ok, _ := doublestar.Match(pat, name); ok {
 			return true
 		}
 	}
+	return matchRules(rules, absPath)
+}
 
-	// 2. .baryoignore rules.
-	rules := loadRules()
-	if matchRules(rules, absPath) {
-		return true
+// commonDir returns the deepest directory containing every path, which git is
+// run from so one call can cover the whole batch.
+func commonDir(paths []string) string {
+	dir := filepath.Dir(paths[0])
+	for _, p := range paths[1:] {
+		for dir != string(filepath.Separator) && dir != "." {
+			if p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return dir
+}
+
+// gitCheckIgnore asks git about every path in one subprocess. It is a variable
+// so tests can count spawns.
+//
+// --stdin with -z needs NUL-separated input as well as output: newline-separated
+// input is read as a single path name and silently matches nothing.
+var gitCheckIgnore = func(ctx context.Context, workDir string, absPaths []string) map[string]bool {
+	ignored := make(map[string]bool)
+	if len(absPaths) == 0 {
+		return ignored
 	}
 
-	// 3. Git check-ignore fallback.
-	return isGitIgnored(ctx, absPath)
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "--stdin", "-z")
+	cmd.Dir = workDir
+	cmd.Stdin = strings.NewReader(strings.Join(absPaths, "\x00"))
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit 1 means none were ignored; anything else means git is
+		// unavailable or unhappy, and then nothing is excluded on its behalf.
+		return ignored
+	}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			ignored[p] = true
+		}
+	}
+	return ignored
 }
 
 // loadRules returns the cached .baryoignore rules, re-parsing if the file changed.

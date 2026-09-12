@@ -114,6 +114,14 @@ func walkDir(ctx context.Context, dir, indent string, depth, maxDepth int, b *st
 		return
 	}
 
+	// One batched ignore check per directory instead of one git subprocess per
+	// entry. walkDir already handles exactly one directory per call.
+	candidates := make([]string, 0, len(entries))
+	for _, e := range entries {
+		candidates = append(candidates, filepath.Join(dir, e.Name()))
+	}
+	ignored := ignore.Filter(ctx, candidates)
+
 	for _, e := range entries {
 		if *count >= maxListEntries {
 			*overflow++
@@ -127,7 +135,7 @@ func walkDir(ctx context.Context, dir, indent string, depth, maxDepth int, b *st
 
 		absPath := filepath.Join(dir, e.Name())
 
-		if ignore.IsIgnored(ctx, absPath) {
+		if ignored[absPath] {
 			continue
 		}
 
