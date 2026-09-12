@@ -43,7 +43,7 @@ type Config struct {
 	ProviderKeys         map[string]string  `yaml:"provider_keys"`
 	MCPServers           []mcp.ServerConfig `yaml:"mcp_servers"`
 	Rewrite              *bool              `yaml:"rewrite"`                // prompt rewrite pass (default true)
-	MCPInReadOnly        *bool              `yaml:"mcp_in_read_only"`       // allow MCP tools in read-only modes (default true)
+	MCPInReadOnly        *bool              `yaml:"mcp_in_read_only"`       // allow read-only MCP tools in read-only modes (default true)
 	ExportPath           string             `yaml:"export_path"`            // default directory for /export output
 	AutoLint             *bool              `yaml:"auto_lint"`              // run linter after code edits (default false)
 	AutoTest             *bool              `yaml:"auto_test"`              // run tests after code edits (default false)

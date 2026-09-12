@@ -19,6 +19,7 @@ import (
 type Manager struct {
 	clients map[string]*Client // server name → client
 	toolMap map[string]string  // qualified tool name → server name
+	trust   map[string]string  // server name → trust level from config
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -29,6 +30,7 @@ func NewManager() *Manager {
 	return &Manager{
 		clients: make(map[string]*Client),
 		toolMap: make(map[string]string),
+		trust:   make(map[string]string),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -44,6 +46,7 @@ type connectResult struct {
 // Start connects to all configured MCP servers concurrently. Failed connections
 // are non-fatal — the manager continues without them and returns errors for logging.
 func (m *Manager) Start(ctx context.Context, configs []ServerConfig) []error {
+	m.applyTrust(configs)
 	results := make([]connectResult, len(configs))
 	var wg sync.WaitGroup
 
@@ -227,6 +230,43 @@ func trimSchema(v interface{}) interface{} {
 		m["items"] = trimSchema(items)
 	}
 	return m
+}
+
+// applyTrust records the configured trust level for each server.
+func (m *Manager) applyTrust(configs []ServerConfig) {
+	for _, cfg := range configs {
+		m.trust[cfg.Name] = cfg.Trust
+	}
+}
+
+// IsReadOnlyTool reports whether a qualified MCP tool name is known to be
+// read-only, either because its server is trusted as read-only in config or
+// because the server annotated the tool with readOnlyHint: true.
+//
+// Unknown names and unannotated tools return false: this gates tool execution,
+// so it must fail closed.
+func (m *Manager) IsReadOnlyTool(qualifiedName string) bool {
+	serverName, ok := m.toolMap[qualifiedName]
+	if !ok {
+		return false
+	}
+	if m.trust[serverName] == TrustReadOnly {
+		return true
+	}
+	client, ok := m.clients[serverName]
+	if !ok {
+		return false
+	}
+	toolName := strings.TrimPrefix(qualifiedName, "mcp__"+serverName+"__")
+	for _, tool := range client.Tools() {
+		if tool.Name != toolName {
+			continue
+		}
+		return tool.Annotations != nil &&
+			tool.Annotations.ReadOnlyHint != nil &&
+			*tool.Annotations.ReadOnlyHint
+	}
+	return false
 }
 
 // Execute routes a qualified tool call to the correct MCP server.

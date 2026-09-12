@@ -6,12 +6,17 @@ package mcp
 
 import "encoding/json"
 
+// TrustReadOnly marks every tool on a server as read-only, so its calls are not
+// gated. Use it for servers that ship no annotations but only read.
+const TrustReadOnly = "read-only"
+
 // ServerConfig describes an MCP server to connect to.
 type ServerConfig struct {
 	Name    string   `yaml:"name"`
 	Command string   `yaml:"command"`
 	Args    []string `yaml:"args"`
 	Env     []string `yaml:"env"`
+	Trust   string   `yaml:"trust"` // "read-only", or empty for gated
 }
 
 // --- JSON-RPC 2.0 types ---
@@ -78,11 +83,19 @@ type ServerCapabilities struct {
 	Tools *struct{} `json:"tools,omitempty"`
 }
 
+// ToolAnnotations carries the optional behavioural hints from the MCP spec.
+// ReadOnlyHint is a pointer so an absent hint is distinguishable from false:
+// absent means unknown, and unknown is gated.
+type ToolAnnotations struct {
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
+}
+
 // MCPToolDef describes a tool exposed by an MCP server.
 type MCPToolDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	InputSchema json.RawMessage  `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
 
 // ToolListResult is the response from tools/list.
