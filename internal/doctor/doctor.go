@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arnelirobles/baryo-cli/internal/index"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
@@ -35,10 +36,31 @@ func isTCP(socketPath string) bool {
 // RunChecks performs the startup diagnostic sequence, stopping at the first failure.
 // socketPath is the resolved inference socket path.
 func RunChecks(socketPath string) []CheckResult {
+	var results []CheckResult
 	if isTCP(socketPath) {
-		return runTCPChecks(socketPath)
+		results = runTCPChecks(socketPath)
+	} else {
+		results = runLocalChecks(socketPath)
 	}
-	return runLocalChecks(socketPath)
+	return append(results, symbolCheck())
+}
+
+// symbolCheck reports whether this build can extract code symbols. A build
+// without tree-sitter still indexes every file, so this is informational: it is
+// a warning, which AllPassed treats as passing, never a hard failure.
+func symbolCheck() CheckResult {
+	if index.SymbolsAvailable {
+		return CheckResult{
+			Name:    "Symbol extraction",
+			Passed:  true,
+			Message: "repo map includes functions and types",
+		}
+	}
+	return CheckResult{
+		Name:    "Symbol extraction",
+		Warning: true,
+		Message: "unavailable in this build (compiled without CGO), so the repo map lists file paths without symbols. Build from source with CGO_ENABLED=1 to get them.",
+	}
 }
 
 // runTCPChecks validates a TCP endpoint (remote Ollama / Model Runner).

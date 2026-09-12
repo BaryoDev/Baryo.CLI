@@ -22,6 +22,11 @@ import (
 	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
+// SymbolsAvailable reports whether this build can extract symbols. The
+// tree-sitter parsers are cgo-only, so a CGO_ENABLED=0 build indexes files
+// without them and the repo map degrades to a file list.
+const SymbolsAvailable = true
+
 // langParser wraps a tree-sitter parser and language-specific extraction logic.
 type langParser struct {
 	lang    *sitter.Language

@@ -5,10 +5,13 @@
 package index
 
 import (
-	"fmt"
 	"os"
 	"time"
 )
+
+// SymbolsAvailable reports whether this build can extract symbols. See the cgo
+// build of this file for the full comment.
+const SymbolsAvailable = false
 
 // langParser is a stub when CGO is disabled (tree-sitter requires CGO).
 type langParser struct{}
@@ -22,7 +25,14 @@ func newJavaParser() *langParser   { return &langParser{} }
 func newCParser() *langParser      { return &langParser{} }
 func newCPPParser() *langParser    { return &langParser{} }
 
-// ParseFile returns file metadata without symbol extraction when CGO is disabled.
+// ParseFile returns file metadata without symbol extraction when CGO is
+// disabled.
+//
+// It returns a nil error on purpose. Build and Update treat an error as
+// "unparseable" and skip the file, so returning one here dropped every file
+// from the index and released binaries, which goreleaser builds with
+// CGO_ENABLED=0, shipped an empty repo map. Missing symbols degrade the map to
+// a file list; an error removes the project from the model's view entirely.
 func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 	info, err := os.Stat(path)
 	modTime := time.Time{}
@@ -39,5 +49,5 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 		Path:    path,
 		ModTime: modTime,
 		Size:    size,
-	}, fmt.Errorf("tree-sitter parsing requires CGO")
+	}, nil
 }
