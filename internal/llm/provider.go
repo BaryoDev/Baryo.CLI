@@ -83,6 +83,11 @@ func LocalEndpoint(socketPath string) Endpoint {
 }
 
 // EndpointForModel returns the appropriate endpoint based on a model's provider.
+//
+// The "ollama-local" provider routes to the local Ollama daemon at
+// tcp://localhost:11434. Any other provider routes to that provider when a key
+// for it is present in keys. Otherwise it falls back to the local socketPath,
+// which is also what a provider with no configured key gets.
 func EndpointForModel(socketPath string, model Model, keys map[string]string) Endpoint {
 	if model.Provider == "ollama-local" {
 		return LocalEndpoint("tcp://localhost:11434")
