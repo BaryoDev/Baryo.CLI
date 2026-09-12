@@ -210,7 +210,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(2)
 		}
-		ep := endpointForModel(cfg, model)
+		ep := llm.EndpointForModel(cfg.SocketPath, model, cfg.ProviderKeys)
 
 		// Inject memories into system prompt for headless mode.
 		systemPrompt := cfg.SystemPrompt
@@ -447,19 +447,6 @@ func tryProviderModel(cfg *config.Config) (llm.Model, bool) {
 		CompletionPrice: p.CompletionPrice,
 	}
 	return dm, true
-}
-
-// endpointForModel returns the appropriate endpoint for a model.
-func endpointForModel(cfg config.Config, model llm.Model) llm.Endpoint {
-	if model.Provider == "ollama-local" {
-		return llm.LocalEndpoint("tcp://localhost:11434")
-	}
-	if model.Provider != "" {
-		if key, ok := cfg.ProviderKeys[model.Provider]; ok {
-			return llm.ProviderEndpoint(model.Provider, key)
-		}
-	}
-	return llm.LocalEndpoint(cfg.SocketPath)
 }
 
 // isProviderModel returns true if the model is a cloud provider model.

@@ -386,3 +386,67 @@ func TestProvidersMap(t *testing.T) {
 		}
 	}
 }
+
+func TestEndpointForModel(t *testing.T) {
+	const defaultSocket = "/var/run/docker.sock"
+
+	t.Run("local socket when model has no provider", func(t *testing.T) {
+		model := Model{Name: "llama3.2:3b", Tag: "llama3.2:3b", Provider: ""}
+		keys := map[string]string{"openai": "sk-test"}
+
+		ep := EndpointForModel(defaultSocket, model, keys)
+		if ep.SocketPath != defaultSocket {
+			t.Errorf("expected SocketPath = %q, got %q", defaultSocket, ep.SocketPath)
+		}
+		if ep.BaseURL != "" || ep.APIKey != "" || ep.Provider != "" {
+			t.Errorf("expected clean local endpoint, got %+v", ep)
+		}
+	})
+
+	t.Run("provider with configured key", func(t *testing.T) {
+		model := Model{Name: "gpt-4o", Tag: "gpt-4o", Provider: "openai"}
+		keys := map[string]string{"openai": "sk-openai-key-123"}
+
+		ep := EndpointForModel(defaultSocket, model, keys)
+		if ep.Provider != "openai" {
+			t.Errorf("expected Provider = %q, got %q", "openai", ep.Provider)
+		}
+		if ep.APIKey != "sk-openai-key-123" {
+			t.Errorf("expected APIKey = %q, got %q", "sk-openai-key-123", ep.APIKey)
+		}
+		if ep.BaseURL != Providers["openai"] {
+			t.Errorf("expected BaseURL = %q, got %q", Providers["openai"], ep.BaseURL)
+		}
+		if ep.SocketPath != "" {
+			t.Errorf("expected empty SocketPath for cloud provider, got %q", ep.SocketPath)
+		}
+	})
+
+	t.Run("provider without key falls back to local socket", func(t *testing.T) {
+		model := Model{Name: "claude-3-5-sonnet", Tag: "claude-3-5-sonnet", Provider: "anthropic"}
+		keys := map[string]string{"openai": "sk-openai-key"} // no anthropic key
+
+		ep := EndpointForModel(defaultSocket, model, keys)
+		if ep.SocketPath != defaultSocket {
+			t.Errorf("expected fallback SocketPath = %q, got %q", defaultSocket, ep.SocketPath)
+		}
+		if ep.Provider != "" || ep.APIKey != "" || ep.BaseURL != "" {
+			t.Errorf("expected clean fallback local endpoint, got %+v", ep)
+		}
+	})
+
+	t.Run("ollama-local special case routes to localhost:11434", func(t *testing.T) {
+		model := Model{Name: "mistral", Tag: "mistral", Provider: "ollama-local"}
+		keys := map[string]string{"ollama-local": "ignored-key"}
+
+		ep := EndpointForModel(defaultSocket, model, keys)
+		const wantOllama = "tcp://localhost:11434"
+		if ep.SocketPath != wantOllama {
+			t.Errorf("expected SocketPath = %q, got %q", wantOllama, ep.SocketPath)
+		}
+		if ep.Provider != "" || ep.APIKey != "" {
+			t.Errorf("expected local endpoint without cloud provider credentials, got %+v", ep)
+		}
+	})
+}
+
