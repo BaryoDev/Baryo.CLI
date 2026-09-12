@@ -6,7 +6,19 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Project Status
 
-Current release: **v0.13.0**. Compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation. See [CHANGELOG.md](CHANGELOG.md) for what changed and [ROADMAP.md](ROADMAP.md) for what is solid, what is still open, and what comes next.
+Current release: **v0.13.0**. Compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation.
+
+**Unreleased on `main`:** a project's own config and skills no longer apply until
+you trust the directory, MCP tools pass the same permission gate as built-in
+destructive tools, a stalled provider no longer hangs forever, `run_script`
+resolves symlinks before checking its sandbox, the repo index no longer comes
+back empty in released binaries, ignore checks are batched (892ms to 14ms on a
+walk that runs every turn), the prompt prefix is stable so a local server can
+reuse its KV cache, tool calls and results are recorded to a trace, and the
+project is MIT licensed.
+
+See [CHANGELOG.md](CHANGELOG.md) for released changes and [ROADMAP.md](ROADMAP.md)
+for what comes next.
 
 ## Prerequisites
 
@@ -193,6 +205,36 @@ Sessions are automatically titled from the first user message. Configure automat
 # ~/.baryo/config.yaml
 session_retention_days: 30   # delete sessions older than 30 days (0 = keep all)
 ```
+
+### Trajectory traces
+
+A saved session holds the conversation, which is the model's narration of what it
+did. It does not hold what it actually did: tool calls, their arguments and their
+results are executed and then discarded.
+
+Baryo records those separately, to
+`~/.baryo/sessions/<id>.trace.jsonl`, one JSON object per line:
+
+```json
+{"t":"task_start","prompt":"fix the failing test","model":"ai/qwen3","endpoint":"local"}
+{"t":"tool_call","name":"read_file","args":"{\"path\":\"main.go\"}"}
+{"t":"tool_result","name":"read_file","bytes":1843,"is_error":false,"content":"..."}
+{"t":"task_end","outcome":"unknown","wall_ms":4120}
+```
+
+Three things to know about it:
+
+- **It is never sent to the model.** The conversation is the prompt; a trace is a
+  parallel record. Folding tool output back into the prompt would change what
+  every later turn sends and can push real context off the end of a small window.
+- **Secrets are masked before writing.** Configured provider keys, plus token
+  shapes such as `sk-`, `ghp_`, `AKIA` and `xox*`, and records are capped so one
+  large file read cannot dominate the trace.
+- **It is deleted with its session** by `session_retention_days`.
+
+Turn it off with `trace: false`. In headless mode use `--trace-file <path>` to
+write one trace per run wherever you want it, which is what an automated harness
+needs.
 
 ### Intelligent routing
 
@@ -399,6 +441,12 @@ The checks run in order:
 3. Model Runner enabled (inference socket exists)
 4. At least one model pulled
 
+Doctor also reports whether this build can extract code symbols. The tree-sitter
+parsers need CGO, and published binaries are built without it, so a released
+binary indexes every file but the repo map lists paths without functions and
+types. That shows as a warning rather than a failure, and it never stops baryo
+from starting. Build from source with `CGO_ENABLED=1` to get symbols.
+
 You can also run `/doctor` inside the TUI to check diagnostics mid-session.
 
 ### Markdown rendering
@@ -590,6 +638,9 @@ params:
 | `--worktree` | Run in an isolated git worktree |
 | `--sandbox` | Run code in Docker sandbox containers |
 | `--debug` | Enable debug logging to `~/.baryo/debug.log` |
+| `--timeout <d>` | Overall deadline for print mode (e.g. `90s`, `5m`) |
+| `--trace-file <p>` | Write a trajectory trace (tool calls, results, verification) to this path |
+| `--trust-project` | Apply this project's `.baryo` config and skills for this run |
 | `--skip-checks` | Skip startup health checks |
 | `--version` | Print version and exit |
 | `--help` | Print usage and exit |
@@ -615,14 +666,49 @@ Baryo supports layered configuration through YAML files and environment variable
 Create a YAML config file at either location:
 
 - **User-level:** `~/.baryo/config.yaml`
-- **Project-level:** `.baryo/config.yaml` (overrides user config)
+- **Project-level:** `.baryo/config.yaml` (overrides user config, and only when the project is trusted, see [Project trust](#project-trust))
 
 ```yaml
 # ~/.baryo/config.yaml
 model: ai/gemma3
 socket_path: ~/Library/Containers/com.docker.docker/Data/inference.sock
 system_prompt: "You are a helpful assistant. Be concise."
+
+# Abandon a stream if the provider sends nothing for this long (default 5m).
+# Headers arrive before a model starts generating, so this is what catches a
+# provider that accepts the request and then stalls.
+stream_idle_timeout: 5m
+
+# Record tool calls, their results and any verification to
+# ~/.baryo/sessions/<id>.trace.jsonl (default true). See Trajectory traces.
+trace: true
 ```
+
+### Project trust
+
+A project's own `.baryo/config.yaml` can start processes through `hooks` and
+`mcp_servers`, open an SSH tunnel, change the permission mode and replace the
+system prompt. So cloning a repository and running baryo in it would run that
+repository's code.
+
+Project configuration and project skills therefore do nothing until you trust
+the directory:
+
+- **Interactively**, baryo asks once per directory and remembers the answer in
+  `~/.baryo/trusted/`. Trust is keyed on the resolved path, so a symlinked
+  checkout is not a second identity.
+- **Non-interactively** (`-p`, `doctor`), the project is untrusted unless you
+  pass `--trust-project`, which applies for that run only and records nothing.
+
+An untrusted project's config file is ignored in full rather than filtered key
+by key, and one line on stderr says so. `BARYO_*` environment variables are
+yours, so they always apply.
+
+`BARYO.md` is the exception: it still loads from an untrusted project, because
+reading project instructions is the point of the tool. It is wrapped in a block
+telling the model it is information about the project rather than authority to
+run anything, and it is skipped entirely when an untrusted project is combined
+with `permission_mode: auto`, which is the one case with no human in the loop.
 
 ### Environment variables
 
@@ -936,6 +1022,30 @@ Models that support the native OpenAI tool-calling API will use it directly. For
 
 If a model explicitly rejects tool use (e.g. Cohere's `c4ai-aya-*` models, or models that return "tool calling is not supported"), Baryo automatically retries the request without tools and disables them for the rest of the session. You'll see an info message in the chat and subsequent messages skip tools entirely — no repeated errors.
 
+### Permission modes
+
+Tools that modify the filesystem, run code or change git state are gated. The
+mode applies to built-in destructive tools, to meta-tools such as `commit_changes`
+and `create_pr`, and to MCP tools that are not known to be read-only.
+
+| Mode | Behaviour |
+|------|-----------|
+| `confirm` | **Default.** Asks before each gated call, showing the tool and its arguments |
+| `suggest` | Never runs a gated call; reports what it would have run |
+| `auto` | Runs everything without asking. Same as `-y` / `--yolo` |
+
+```yaml
+# ~/.baryo/config.yaml
+permission_mode: confirm
+```
+
+An unrecognised value falls back to `confirm` with a warning rather than being
+passed through, since anything that is not `suggest` or `confirm` would be
+treated as permission to run.
+
+In headless mode (`-p`) there is nobody to ask, so gated calls are refused
+unless `--yolo` is passed. Read-only tools are unaffected in every mode.
+
 ### Auto-fix on lint/test
 
 When enabled, Baryo automatically runs your project's linter and/or tests after every code-modifying tool call (`edit_file`, `apply_diff`, `write_file`, `delete_file`). Errors are appended to the tool result so the model sees them immediately and self-corrects.
@@ -1068,7 +1178,25 @@ mcp_servers:
     env: ["GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx"]
 ```
 
-MCP tools appear alongside built-in tools transparently — the model can call them the same way it calls `read_file` or `grep`. Use `/mcp` inside the TUI to list connected servers and their available tools.
+MCP tools appear alongside built-in tools transparently, and the model calls them the same way it calls `read_file` or `grep`. Use `/mcp` inside the TUI to list connected servers and their available tools.
+
+**MCP tools pass the same permission gate as built-in destructive tools.** A tool
+is exempt only when it is known to be read-only, either because its server
+annotates it with the spec's `annotations.readOnlyHint`, or because you mark the
+whole server in config:
+
+```yaml
+mcp_servers:
+  - name: ddg-search
+    command: uvx
+    args: ["duckduckgo-mcp-server"]
+    trust: read-only      # its calls are not gated
+```
+
+Anything not known to be read-only is prompted in `confirm` mode, blocked in
+`suggest` mode, and needs `--yolo` in headless mode. Read-only agent modes
+(`plan`, `ask`, `architect`, `review`, `research`) and subagents allow only the
+read-only ones.
 
 MCP works in both interactive and headless (`-p`) modes. Failed server connections are non-fatal; the app continues without them and logs a warning.
 
