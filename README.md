@@ -1094,7 +1094,7 @@ Use the `/init` command inside the TUI to generate a `BARYO.md`. The model reads
 
 ### Skills
 
-Baryo includes a starter skill pack and supports community skills based on the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Skills extend the model with domain-specific knowledge, scripts, and code execution capabilities.
+Baryo includes a starter skill pack of its own and reads any skill that follows the [Anthropic Agent Skills](https://github.com/anthropics/skills) format. Third-party skills are not bundled: install the ones you want into `~/.baryo/skills/` under their own licences. Skills extend the model with domain-specific knowledge, scripts, and code execution capabilities.
 
 **First-run setup:** On first launch, Baryo asks if you'd like to download 5 starter skills (code review, code generation, refactoring, debugging, documentation). Press `y` to install them to `~/.baryo/skills/`, or `n` to skip. You can always run `/setup` later to download or update them.
 
@@ -1184,8 +1184,9 @@ Skills are **lazy-loaded** — only names and descriptions are indexed on startu
 # Download starter skills automatically
 /setup
 
-# Or install additional skills manually
-cp -r skills/pdf ~/.baryo/skills/pdf
+# Or install additional skills from Anthropic's repo
+git clone https://github.com/anthropics/skills /tmp/anthropic-skills
+cp -r /tmp/anthropic-skills/document-skills/pdf ~/.baryo/skills/pdf
 ```
 
 ### Context pinning

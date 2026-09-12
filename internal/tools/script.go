@@ -46,7 +46,7 @@ func init() {
 					"properties": map[string]interface{}{
 						"path": map[string]interface{}{
 							"type":        "string",
-							"description": "Path to the script file (e.g. skills/pdf/scripts/extract_form_field_info.py)",
+							"description": "Path to the script file inside a skill directory (e.g. ~/.baryo/skills/<skill>/scripts/run.py)",
 						},
 						"args": map[string]interface{}{
 							"type":        "string",
@@ -81,7 +81,7 @@ func init() {
 						},
 						"working_dir": map[string]interface{}{
 							"type":        "string",
-							"description": "Working directory to run from (e.g. skills/slack-gif-creator so imports like 'from core.gif_builder import GIFBuilder' work)",
+							"description": "Working directory to run from (e.g. a skill directory, so the skill's own modules can be imported)",
 						},
 					},
 					"required": []string{"code", "language"},

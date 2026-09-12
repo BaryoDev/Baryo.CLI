@@ -24,8 +24,11 @@ A local AI chat CLI powered by Docker Model Runner with cloud provider support, 
 - `rag/` - Retrieval-augmented generation and document handling
 - `search/` - Web search and research capabilities
 
-### `/skills/` - Specialized Functionality
-205+ pre-built skills for document processing, testing, and creative workflows including PDF, DOCX, PPTX, XLSX handling and web application testing.
+### `/skills/` - Skill format reference
+A skill template and the Agent Skills spec link. Baryo ships no third-party
+skills: starter skills live in `default-skills/` and install to
+`~/.baryo/skills/` via `/setup`, and anything else the user installs there
+themselves.
 
 ### `/cmd/` - Command Executables
 Entry points for different binary builds (main application).
