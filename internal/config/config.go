@@ -52,6 +52,7 @@ type Config struct {
 	Notifications        *bool              `yaml:"notifications"`          // desktop notifications on completion (default false)
 	SessionRetentionDays int                `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
 	StreamIdleTimeout    string             `yaml:"stream_idle_timeout"`    // abandon a stream after this long with no data (default 5m)
+	Trace                *bool              `yaml:"trace"`                  // record tool calls and results per session (default true)
 	Sandbox              *bool              `yaml:"sandbox"`                // run code in Docker sandbox (default false)
 	ShowThinking         *bool              `yaml:"show_thinking"`          // render model thinking blocks (default false)
 }
@@ -103,6 +104,17 @@ func (c *Config) AutoLintEnabled() bool {
 		return false
 	}
 	return *c.AutoLint
+}
+
+// TraceEnabled reports whether tool calls and results are recorded to
+// ~/.baryo/sessions/<id>.trace.jsonl. Defaults to true: the saved conversation
+// keeps only the narration, so without this there is no record of what a task
+// actually did. Set trace: false to turn it off.
+func (c *Config) TraceEnabled() bool {
+	if c.Trace == nil {
+		return true
+	}
+	return *c.Trace
 }
 
 // StreamIdleTimeoutDuration returns how long a provider may send nothing before
@@ -398,6 +410,9 @@ func loadFile(path string, cfg *Config) {
 	}
 	if file.Notifications != nil {
 		cfg.Notifications = file.Notifications
+	}
+	if file.Trace != nil {
+		cfg.Trace = file.Trace
 	}
 	if file.StreamIdleTimeout != "" {
 		cfg.StreamIdleTimeout = file.StreamIdleTimeout

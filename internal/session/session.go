@@ -86,6 +86,21 @@ func archivePath(dir, id string) string {
 	return filepath.Join(dir, id+".archive.jsonl")
 }
 
+// TracePath returns the trajectory trace file for a session. It sits beside the
+// session so retention cleanup covers it.
+func TracePath(id string) (string, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, id+".trace.jsonl"), nil
+}
+
+// tracePath is the in-directory form used by cleanup.
+func tracePath(dir, id string) string {
+	return filepath.Join(dir, id+".trace.jsonl")
+}
+
 // Archive appends messages to the session's append-only archive file
 // (<id>.archive.jsonl, one JSON message per line). Compaction calls this
 // before discarding older messages so the full history survives on disk.
@@ -361,6 +376,7 @@ func CleanOld(days int) (int, error) {
 			if err := os.Remove(path); err == nil {
 				deleted++
 				os.Remove(archivePath(dir, s.ID)) // best-effort; may not exist
+				os.Remove(tracePath(dir, s.ID))   // best-effort; may not exist
 			}
 		}
 	}

@@ -54,6 +54,7 @@ type Config struct {
 	Sandbox      bool   // --sandbox flag (CLI override)
 	TrustProject bool   // --trust-project flag: apply this project's .baryo config
 	Timeout      string // --timeout flag: overall deadline for print mode (e.g. 5m)
+	TraceFile    string // --trace-file flag: write a trajectory trace here
 }
 
 // TimeoutDuration returns the parsed --timeout, or 0 when unset or invalid.
@@ -100,6 +101,7 @@ func Parse() Config {
 	fs.StringVar(&cfg.Strategy, "strategy", "", "path to strategy JSON file (use with -p)")
 	fs.BoolVar(&cfg.Worktree, "worktree", false, "run in an isolated git worktree")
 	fs.BoolVar(&cfg.Sandbox, "sandbox", false, "run code in Docker sandbox")
+	fs.StringVar(&cfg.TraceFile, "trace-file", "", "write a trajectory trace (tool calls, results, verification) to this path")
 	fs.StringVar(&cfg.Timeout, "timeout", "", "overall deadline for print mode (e.g. 90s, 5m)")
 	fs.BoolVar(&cfg.TrustProject, "trust-project", false, "apply this project's .baryo config and skills (asks interactively when omitted)")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")

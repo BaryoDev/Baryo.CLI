@@ -33,6 +33,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/session"
 	"github.com/arnelirobles/baryo-cli/internal/setup"
 	"github.com/arnelirobles/baryo-cli/internal/tools"
+	"github.com/arnelirobles/baryo-cli/internal/trace"
 )
 
 // ChatModel is the chat conversation screen.
@@ -54,6 +55,7 @@ type ChatModel struct {
 	inputHistory    []string    // previous user inputs
 	historyIdx      int         // current position in input history (-1 = not browsing)
 	session         *session.Session
+	recorder        *trace.Recorder // trajectory trace; nil when disabled
 
 	textarea  textarea.Model
 	viewport  viewport.Model
@@ -291,7 +293,7 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatPar
 	sess, _ := session.New(model.Name, model.Tag)
 	ep := endpointForModel(socketPath, model, providerKeys)
 	hints := llm.DetectModelHints(model.Tag)
-	return ChatModel{
+	m := ChatModel{
 		endpoint:        ep,
 		localSocketPath: socketPath,
 		systemPrompt:    systemPrompt,
@@ -321,6 +323,8 @@ func NewChat(socketPath, systemPrompt, memoriesPrompt string, params llm.ChatPar
 		mcpInReadOnly:   mcpInReadOnly,
 		pinnedFiles:     make(map[string]string),
 	}
+	m.openRecorder(providerKeys)
+	return m
 }
 
 // NewChatFromSession restores a chat screen from a saved session.
@@ -391,6 +395,7 @@ func NewChatFromSession(socketPath, systemPrompt, memoriesPrompt string, params 
 		pinnedFiles:     make(map[string]string),
 	}
 	cm.contextTokens = estimateTokens(cm.buildMessages())
+	cm.openRecorder(providerKeys)
 	return cm
 }
 
@@ -1294,6 +1299,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				sendNotification("Response complete")
 			}
 
+			m.recorder.EndTask("unknown", 0, 0, time.Since(m.streamStart))
 			m.resetStreamState()
 			m.contextTokens = estimateTokens(m.buildMessages())
 			m.saveSession()
@@ -1975,6 +1981,7 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		m.messages = nil
 		m.history = nil
 		m.session = sess
+		m.openRecorder(m.providerKeys)
 		m.agentMode = ModeChat
 		m.strategyPhase = strategyIdle
 		m.strategyContext = ""
@@ -3153,6 +3160,8 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
+	m.recorder.StartTask(text, m.modelTag, endpointLabel(m.endpoint), workingDir(), gitHead())
+
 	var toolDefs []llm.ToolDefinition
 	var executor llm.ToolExecutor
 
@@ -3205,6 +3214,7 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 	mgr := m.mcpManager
 	afCfg := m.autoFixCfg
 	hooks := m.hooksConfig
+	rec := m.recorder
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		// Unknown names cannot run, so reject them before hooks fire or the
 		// gate asks the user to approve something that does not exist.
@@ -3233,7 +3243,9 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 					return msg, true
 				}
 			}
+			rec.ToolCall(name, argsJSON)
 			content, isErr := mgr.Execute(ctx, name, argsJSON)
+			rec.ToolResult(name, content, isErr)
 			// Post-tool hook
 			if hooks.PostTool != "" {
 				hr := runHook(hooks, HookPostTool, HookContext{ToolName: name, Output: content})
@@ -3248,7 +3260,9 @@ func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON stri
 				return msg, true
 			}
 		}
+		rec.ToolCall(name, argsJSON)
 		r := tools.Execute(ctx, name, argsJSON)
+		rec.ToolResult(name, r.Content, r.IsError)
 		// Auto-fix: run linter/tests after successful code-modifying tool calls.
 		if !r.IsError && isCodeModifyingTool(name) {
 			if checkOutput := runAutoCheck(ctx, afCfg); checkOutput != "" {
