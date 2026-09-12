@@ -115,7 +115,21 @@ func main() {
 	}
 
 	// Load BARYO.md and skills.md project instructions
-	if instructions := config.LoadProjectInstructions(); instructions != "" {
+	// Project instruction files load even for an untrusted project, labelled as
+	// untrusted, because reading them is the point of the tool. The exception is
+	// permission_mode auto on an untrusted project: there is no human there to
+	// catch a repo-supplied instruction, so they are skipped.
+	allowProjectFiles := trusted || cfg.PermissionMode != "auto"
+	if !allowProjectFiles {
+		if files := config.ProjectInstructionFiles(); len(files) > 0 {
+			fmt.Fprintf(os.Stderr, "baryo: skipping %s from an untrusted project in auto mode (pass --trust-project to apply)\n", strings.Join(files, ", "))
+		}
+	} else if !trusted {
+		if files := config.ProjectInstructionFiles(); len(files) > 0 {
+			fmt.Fprintf(os.Stderr, "baryo: reading %s from an untrusted project as context only\n", strings.Join(files, ", "))
+		}
+	}
+	if instructions := config.LoadProjectInstructions(allowProjectFiles); instructions != "" {
 		cfg.SystemPrompt = cfg.SystemPrompt + "\n\n<project-context>\n" + instructions + "\n</project-context>"
 	}
 
