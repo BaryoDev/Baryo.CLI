@@ -132,7 +132,10 @@ func (m *Manager) CompactToolDefinitions(nativeNames []string, contextWindow int
 	largeContext := contextWindow > contextThreshold
 
 	var defs []llm.ToolDefinition
-	for serverName, client := range m.clients {
+	// Iterate servers in sorted order: this slice lands in the prompt prefix, and
+	// map iteration order would change it on every request, costing a re-prefill.
+	for _, serverName := range m.ServerNames() {
+		client := m.clients[serverName]
 		// Small models: skip entire servers whose domain is covered by native tools.
 		if !largeContext && redundantServers[serverName] {
 			continue
