@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -984,7 +985,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 			// Rewrite pass: short, tool-oriented messages get rewritten for clarity.
 			// Only in dynamic mode — unnecessary when tools are always/never present.
-			if m.rewrite && hasTools && !hasSkill && m.supportsTools && len(text) <= 80 && modeCfg.Tools == ToolsDynamic {
+			if shouldRewrite(m.rewrite, m.endpoint, hasTools, hasSkill, m.supportsTools, text, modeCfg.Tools) {
 				m.isStream = true
 				m.toolStatus = "rewriting prompt..."
 				m.streamStart = time.Now()
@@ -2505,9 +2506,17 @@ func (m *ChatModel) buildPinnedContext() string {
 	if len(m.pinnedFiles) == 0 {
 		return ""
 	}
+	// Sorted: this block lands in the system prompt, and map iteration order
+	// would reshuffle it every turn, costing a KV cache re-prefill.
+	paths := make([]string, 0, len(m.pinnedFiles))
+	for path := range m.pinnedFiles {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
 	var sb strings.Builder
 	sb.WriteString("<pinned-files>\n")
-	for path := range m.pinnedFiles {
+	for _, path := range paths {
 		// Re-read file to catch edits
 		data, err := os.ReadFile(path)
 		content := ""

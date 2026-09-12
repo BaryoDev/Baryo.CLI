@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/llm"
@@ -83,13 +84,24 @@ func IsDestructive(name string) bool {
 	return tool.Destructive
 }
 
-// AllDefinitions returns the tool definitions for all registered tools.
+// AllDefinitions returns the tool definitions for all registered tools,
+// sorted by name. The order must be stable across calls and across processes:
+// chat templates render this block into the prompt prefix, and local inference
+// servers only reuse their KV cache while that prefix is byte-identical.
 func AllDefinitions() []Definition {
 	defs := make([]Definition, 0, len(registry))
 	for _, t := range registry {
 		defs = append(defs, t.Def)
 	}
+	sortDefinitions(defs)
 	return defs
+}
+
+// sortDefinitions orders definitions by function name in place.
+func sortDefinitions(defs []Definition) {
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Function.Name < defs[j].Function.Name
+	})
 }
 
 // DockerDefinitions converts all registered tool definitions to llm.ToolDefinition format.
@@ -118,6 +130,7 @@ func Names() []string {
 	for name := range registry {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -130,6 +143,7 @@ func ReadOnlyDefinitions() []Definition {
 			defs = append(defs, t.Def)
 		}
 	}
+	sortDefinitions(defs)
 	return defs
 }
 
