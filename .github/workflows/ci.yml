@@ -53,8 +53,8 @@ jobs:
         run: CGO_ENABLED=0 go test -count=1 ./...
 
       - name: Run tests (CGO)
-        # The tree-sitter parsers in internal/index are cgo-only; without
-        # this pass their tests never run in CI.
+        # Source builds with a C toolchain use the cgo tree-sitter parsers, and
+        # releases use the pure-Go ones above. This pass keeps the cgo path tested.
         run: CGO_ENABLED=1 go test -count=1 ./...
 
       - name: Run tests (race detector)

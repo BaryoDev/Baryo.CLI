@@ -122,6 +122,24 @@ def notice_file(directory):
     return None
 
 
+# Grammars compiled into github.com/odvcencio/gotreesitter for the languages the
+# pure-Go parser uses. The module ships one root LICENSE covering its own code, so
+# the upstream grammar copyrights are recorded here. Commits come from the module's
+# grammars/languages.lock; copyright lines from each repository's LICENSE at that
+# commit. Update both when the gotreesitter version changes.
+GRAMMARS = [
+    ("go", "tree-sitter/tree-sitter-go", "2346a3ab1bb3857b48b29d779a1ef9799a248cd7", "Copyright (c) 2014 Max Brunsfeld"),
+    ("javascript", "tree-sitter/tree-sitter-javascript", "58404d8cf191d69f2674a8fd507bd5776f46cb11", "Copyright (c) 2014 Max Brunsfeld"),
+    ("typescript", "tree-sitter/tree-sitter-typescript", "75b3874edb2dc714fb1fd77a32013d0f8699989f", "Copyright (c) 2017 Max Brunsfeld"),
+    ("python", "tree-sitter/tree-sitter-python", "26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64", "Copyright (c) 2016 Max Brunsfeld"),
+    ("rust", "tree-sitter/tree-sitter-rust", "77a3747266f4d621d0757825e6b11edcbf991ca5", "Copyright (c) 2017 Maxim Sokolov"),
+    ("java", "tree-sitter/tree-sitter-java", "e10607b45ff745f5f876bfa3e94fbcc6b44bdc11", "Copyright (c) 2017 Ayman Nadeem"),
+    ("c", "tree-sitter/tree-sitter-c", "ae19b676b13bdcc13b7665397e6d9b14975473dd", "Copyright (c) 2014 Max Brunsfeld"),
+    ("cpp", "tree-sitter/tree-sitter-cpp", "8b5b49eb196bec7040441bee33b2c9a4838d6967", "Copyright (c) 2014 Max Brunsfeld"),
+]
+GRAMMAR_MODULE = "github.com/odvcencio/gotreesitter"
+
+
 # Licences that would make an MIT release misleading. A new dependency carrying
 # one of these fails the lint job rather than being noticed later.
 COPYLEFT = {"MPL-2.0", "GPL", "LGPL", "AGPL"}
@@ -187,6 +205,15 @@ def main():
         for path, text in sorted(vendor_notices):
             w("\n" + "=" * 70 + f"\n{path}\n" + "=" * 70 + "\n\n")
             w(text + "\n")
+
+    if any(p == GRAMMAR_MODULE for p, _, _ in rows):
+        w("\n" + "-" * 70 + "\n\n")
+        w(f"Grammars bundled by {GRAMMAR_MODULE}\n\n")
+        w("Each grammar below is MIT licensed by its authors. The MIT licence text\n")
+        w("above applies, with these copyright notices:\n\n")
+        for lang, repo, commit, holder in GRAMMARS:
+            w(f"  {lang}: https://github.com/{repo} at {commit}\n")
+            w(f"    {holder}\n")
 
     copyleft = [f"{p} {v} ({n})" for p, v, n in rows if n in COPYLEFT]
     if copyleft:
