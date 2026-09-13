@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`baryo export` writes session history out.** `--format baryo-jsonl` is built in: one self-describing JSONL file with a manifest record, a record per session, and one event per message — archived messages first, then the live conversation. Tool calls and their results are preserved and labelled, since those are exactly what a summary loses. `--since`, `--session` and `--out` scope it.
+- **Plugins.** A plugin is a directory with a `plugin.yaml` and an executable, run as a subprocess speaking JSON over stdin and stdout. `baryo plugins` lists what is installed, `baryo plugins inspect <name>` shows what it can do and what it asks for before you trust it. `exporter` is the first capability kind; `tool`, `hook`, `skill` and `provider` are reserved and refuse to load with a clear message.
+- **A plugin can only execute a file it ships.** An absolute command, a path climbing out of the plugin directory, or a symlink resolving outside it is refused, so reviewing a plugin means reviewing one directory. Project plugins (`.baryo/plugins/`) additionally require `--trust-project`, the same gate that already covers a project's config, skills and hooks — and a project plugin cannot take a global plugin's name.
+- **Archived messages carry a timestamp and a sequence number.** `llm.ChatMessage` has neither, so an archive line could not say when its message happened, which an exporter needs and ctx's history format requires per event. The sequence is counted from the file so that resuming a session in a new process does not restart it. Archives written before this keep working, report the zero time rather than an invented one, and are flagged in an export warning. `session.LoadArchiveRecords` exposes the metadata; `LoadArchive` is unchanged.
+
 - **`scripts/ci-local.sh` runs the gates CI runs.** Every contribution arrives from a fork, and a fork's pull request cannot see anything not already merged here, so finding out that gofmt objects used to cost a push and a review round trip. One command now gives the same answer locally, keeps going after a failure, and prints the full list at the end.
 - **CI runs on every branch except `main`.** A contributor working in a fork gets the full pipeline on their own pushes instead of first learning what CI thinks after opening a pull request. `main` is covered by the pull request that merges into it, by the release workflow that calls this one, and by the weekly schedule.
 - **Secret scan (gitleaks) over full history**, with a step that plants a credential and fails the build if the scan does not catch it. The scanner is the checksum-verified MIT binary rather than the licensed Action, which reports success without a licence and works the same on a fork, where no repository secret is available.
@@ -15,6 +20,7 @@
 
 ### Fixed
 
+- **Four paths that dropped conversation history now archive it.** Compaction archived the messages it replaced and was the only path that did: `/clear` discarded the whole conversation, and the search, research and strategy compactions each shrank a bulky message in place. In all four cases the original was gone, which is the content a later `/sessions search` — or an export — wants back.
 - **`NOTICE` is generated from both cgo settings, not just the local one.** `go list -deps` answers for one build configuration, and `internal/index` has real dependencies behind `//go:build` tags. A machine with a C toolchain defaults to cgo on, so the generator attributed the cgo build and silently omitted whatever only the `CGO_ENABLED=0` build links — which is the build `goreleaser` publishes. Neither the generator nor the CI check could see the gap, because both agreed with each other.
 - `govulncheck` is pinned (`v1.8.0`) like every other tool in the pipeline. The pin has a floor as well as a ceiling: govulncheck analyses with the toolchain it was built with, so a version older than this module's `go` directive refuses every package.
 

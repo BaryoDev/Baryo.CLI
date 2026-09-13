@@ -86,6 +86,29 @@ func archivePath(dir, id string) string {
 	return filepath.Join(dir, id+".archive.jsonl")
 }
 
+// Dir returns the directory holding sessions, creating it if needed. Exported for
+// anything that has to hand the location to another process, such as a plugin exporter.
+func Dir() (string, error) { return sessionsDir() }
+
+// FilePath returns the session file for an id.
+func FilePath(id string) (string, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, id+".json"), nil
+}
+
+// ArchivePath returns the archive file for a session. The file may not exist: a session
+// that never compacted has nothing archived.
+func ArchivePath(id string) (string, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return archivePath(dir, id), nil
+}
+
 // TracePath returns the trajectory trace file for a session. It sits beside the
 // session so retention cleanup covers it.
 func TracePath(id string) (string, error) {
