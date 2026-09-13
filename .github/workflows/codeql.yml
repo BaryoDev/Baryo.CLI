@@ -31,8 +31,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Buildless extraction, not autobuild. autobuild failed on this repository after
+          # extracting 97 of 142 Go files, with go-extractor diagnostics and no error the
+          # API's truncated log exposes — while the actions analysis in the same run, which
+          # is buildless, succeeded with the same token. A heuristic build is the fragile
+          # part here: internal/index has two parser implementations behind build tags, one
+          # of them a cgo C library and the other a pure-Go module carrying bundled grammars,
+          # so whichever configuration autobuild picks leaves the other unread.
+          #
+          # Buildless extraction reads the source instead of compiling it. That costs some
+          # fidelity on generated or reflective code, and buys an analysis that does not
+          # depend on guessing a build. If it turns out to read fewer files than autobuild
+          # did, `build-mode: manual` with an explicit `go build ./...` is the next step.
           - language: go
-            build-mode: autobuild
+            build-mode: none
           # Every workflow in .github/ is executable configuration, and one of them runs
           # with repository credentials. CodeQL's actions pack reads them for the usual
           # mistakes: an unpinned action, a script interpolating untrusted input.
@@ -41,6 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Kept even though the Go analysis is buildless: extraction still resolves modules
+      # with the toolchain, and pinning it to go.mod keeps that resolution the same as every
+      # other job here rather than whatever the runner image ships.
       - if: matrix.language == 'go'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
