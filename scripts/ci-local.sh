@@ -51,6 +51,15 @@ skip() { printf '   skipped: %s\n' "$1"; }
 step "Conflict markers"
 run "conflict markers" sh scripts/check-conflict-markers.sh
 
+step "Workflow run blocks"
+# Needs PyYAML to read the workflows. CI installs it; locally it is a skip rather than a
+# failure, since a contributor who has not touched .github/ does not need it.
+if python3 -c 'import yaml' 2>/dev/null; then
+	run "workflow shell" sh scripts/check-workflow-shell.sh
+else
+	skip "PyYAML not installed (pip install pyyaml); CI will still run this"
+fi
+
 step "Changelog fragments"
 run "changelog fragments" bash scripts/changelog-assemble.sh --check
 run "changelog assembler" bash scripts/test-changelog-assemble.sh

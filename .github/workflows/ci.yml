@@ -95,7 +95,16 @@ jobs:
             echo "::error::The conflict marker check passed with a conflicted file staged. The gate is not working."
             exit 1
           fi
-          echo "Conflicted file was caught. The check is live.
+          echo "Conflicted file was caught. The check is live."
+
+      # A run block is shell that nothing parses until the job executes it. An unbalanced
+      # quote is a perfectly good YAML string, so it reaches the runner and fails the job
+      # minutes in, after setup and everything ahead of it has already run. That happened to
+      # the proof step below, which is why this check exists.
+      - name: Check workflow run blocks are valid shell
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          sh scripts/check-workflow-shell.sh
 
       # Fragments are validated where a mistake is cheap to fix. Assembly happens at release
       # time, by a human reading the diff.
