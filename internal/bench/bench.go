@@ -33,6 +33,13 @@ const (
 	ArmC = "C" // cloud model, no recipe (ceiling)
 )
 
+// Phase 1 Gate status values.
+const (
+	GateStatusPassed           = "PASSED"
+	GateStatusNotMet           = "NOT_MET"
+	GateStatusInsufficientData = "INSUFFICIENT_DATA"
+)
+
 // Task represents a single benchmark evaluation task.
 type Task struct {
 	ID            string `json:"id"`
@@ -52,6 +59,7 @@ type Result struct {
 	Model            string    `json:"model"`
 	StartCommit      string    `json:"start_commit"`
 	RepeatShaped     bool      `json:"repeat_shaped"`
+	InfraFailure     bool      `json:"infra_failure,omitempty"`
 	RunExitCode      int       `json:"run_exit_code"`
 	RunError         string    `json:"run_error,omitempty"`
 	VerifyExitCode   int       `json:"verify_exit_code"`
@@ -65,16 +73,17 @@ type Result struct {
 
 // Config configures the three-arm runner.
 type Config struct {
-	BaryoBinary string        // Path to baryo executable (default: "baryo")
-	LocalModel  string        // Model identifier for Arms A and B
-	CloudModel  string        // Model identifier for Arm C
-	RecipesDir  string        // Optional directory with <task_id>.md recipes
-	TracesDir   string        // Directory to store per-run trace files
-	ResultsFile string        // Path to results file (JSONL format)
-	Timeout     time.Duration // Timeout per run (default: 5m)
-	Arms        []string      // List of arms to execute (default: ["A", "B", "C"])
-	Stdout      io.Writer
-	Stderr      io.Writer
+	BaryoBinary   string        // Path to baryo executable (default: "baryo")
+	LocalModel    string        // Model identifier for Arms A and B
+	CloudModel    string        // Model identifier for Arm C
+	RecipesDir    string        // Optional directory with <task_id>.md recipes
+	TracesDir     string        // Directory to store per-run trace files
+	ResultsFile   string        // Path to results file (JSONL format)
+	Timeout       time.Duration // Timeout per baryo run (default: 5m)
+	VerifyTimeout time.Duration // Timeout per verify command execution (default: 2m)
+	Arms          []string      // List of arms to execute (default: ["A", "B", "C"])
+	Stdout        io.Writer
+	Stderr        io.Writer
 }
 
 // Runner orchestrates the evaluation of tasks across arms.
@@ -91,11 +100,17 @@ func NewRunner(cfg Config) (*Runner, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
+	if cfg.VerifyTimeout <= 0 {
+		cfg.VerifyTimeout = 2 * time.Minute
+	}
 	if len(cfg.Arms) == 0 {
 		cfg.Arms = []string{ArmA, ArmB, ArmC}
 	}
 	if cfg.TracesDir == "" {
 		cfg.TracesDir = "traces"
+	}
+	if absTraces, err := filepath.Abs(cfg.TracesDir); err == nil {
+		cfg.TracesDir = absTraces
 	}
 	if cfg.ResultsFile == "" {
 		cfg.ResultsFile = "results.jsonl"
@@ -121,6 +136,7 @@ func NewRunner(cfg Config) (*Runner, error) {
 }
 
 // loadExistingResults reads existing results from ResultsFile to make runs idempotent.
+// Results with InfraFailure are excluded so they can be retried.
 func (r *Runner) loadExistingResults() error {
 	f, err := os.Open(r.cfg.ResultsFile)
 	if os.IsNotExist(err) {
@@ -141,6 +157,9 @@ func (r *Runner) loadExistingResults() error {
 		if err := json.Unmarshal([]byte(line), &res); err != nil {
 			continue
 		}
+		if res.InfraFailure {
+			continue
+		}
 		key := fmt.Sprintf("%s:%s", res.TaskID, res.Arm)
 		r.completed[key] = true
 	}
@@ -154,14 +173,22 @@ func LoadTasks(path string) ([]Task, error) {
 		return nil, fmt.Errorf("reading tasks file: %w", err)
 	}
 
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, errors.New("no tasks found in file")
+	}
+
 	var tasks []Task
 	// First try JSON array format
-	if err := json.Unmarshal(data, &tasks); err == nil && len(tasks) > 0 {
+	if err := json.Unmarshal(data, &tasks); err == nil {
+		if len(tasks) == 0 {
+			return nil, errors.New("no tasks found in file")
+		}
 		return tasks, nil
 	}
 
 	// Fallback to JSONL format
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(strings.NewReader(trimmed))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -213,7 +240,9 @@ func (r *Runner) Run(ctx context.Context, tasks []Task) ([]Result, error) {
 			if err := r.recordResult(res); err != nil {
 				fmt.Fprintf(r.cfg.Stderr, "Error recording result for %s: %v\n", key, err)
 			}
-			r.completed[key] = true
+			if !res.InfraFailure {
+				r.completed[key] = true
+			}
 			allResults = append(allResults, res)
 		}
 	}
@@ -240,12 +269,22 @@ func (r *Runner) runTaskArm(ctx context.Context, task Task, arm string) (Result,
 	case ArmC:
 		res.Model = r.cfg.CloudModel
 	default:
+		res.InfraFailure = true
 		return res, fmt.Errorf("unknown arm %q", arm)
 	}
 
-	// 2. Prepare isolated git worktree
+	// 2. Validate task has machine-checkable verify command
+	if strings.TrimSpace(task.VerifyCommand) == "" {
+		res.InfraFailure = true
+		res.RunError = "task has no verify command"
+		res.WallClockMS = time.Since(start).Milliseconds()
+		return res, errors.New("task has no verify command")
+	}
+
+	// 3. Prepare isolated git worktree
 	worktreePath, cleanup, err := r.createWorktree(task.Repo, task.StartCommit, task.ID, arm)
 	if err != nil {
+		res.InfraFailure = true
 		res.RunError = fmt.Sprintf("worktree creation failed: %v", err)
 		res.RunExitCode = 1
 		res.WallClockMS = time.Since(start).Milliseconds()
@@ -253,11 +292,12 @@ func (r *Runner) runTaskArm(ctx context.Context, task Task, arm string) (Result,
 	}
 	defer cleanup()
 
-	// 3. Prepare prompt and inject recipe for Arm B
+	// 4. Prepare prompt and inject recipe for Arm B
 	prompt := task.Prompt
 	if arm == ArmB {
 		recipe, err := r.resolveRecipe(task)
 		if err != nil {
+			res.InfraFailure = true
 			res.RunError = fmt.Sprintf("recipe resolution failed: %v", err)
 			res.RunExitCode = 1
 			res.WallClockMS = time.Since(start).Milliseconds()
@@ -266,11 +306,16 @@ func (r *Runner) runTaskArm(ctx context.Context, task Task, arm string) (Result,
 		prompt = FormatRecipePrompt(recipe, task.Prompt)
 	}
 
-	// 4. Trace file configuration
-	traceFile := filepath.Join(r.cfg.TracesDir, fmt.Sprintf("%s_arm_%s.jsonl", task.ID, arm))
+	// 5. Trace file configuration: ensure absolute path and purge stale trace file
+	traceFileName := fmt.Sprintf("%s_arm_%s.jsonl", task.ID, arm)
+	traceFile := filepath.Join(r.cfg.TracesDir, traceFileName)
+	if abs, err := filepath.Abs(traceFile); err == nil {
+		traceFile = abs
+	}
+	_ = os.Remove(traceFile)
 	res.TraceFile = traceFile
 
-	// 5. Execute Baryo in headless print mode
+	// 6. Execute Baryo in headless print mode
 	runExitCode, runErr := r.executeBaryo(ctx, worktreePath, prompt, res.Model, traceFile)
 	res.RunExitCode = runExitCode
 	if runErr != nil {
@@ -289,16 +334,12 @@ func (r *Runner) runTaskArm(ctx context.Context, task Task, arm string) (Result,
 		res.WallClockMS = time.Since(start).Milliseconds()
 	}
 
-	// 6. If Baryo ran successfully (or exited 0), execute machine verify command
-	// Note: We run verify even if Baryo errored as long as files were changed,
-	// but distinguish run success from verify success.
-	if task.VerifyCommand != "" {
-		vCode, vOut, vErr := r.runVerify(ctx, worktreePath, task.VerifyCommand)
-		res.VerifyExitCode = vCode
-		res.VerifyOutput = vOut
-		if vErr != nil && res.RunError == "" {
-			res.RunError = fmt.Sprintf("verify error: %v", vErr)
-		}
+	// 7. Execute machine verify command inside worktree
+	vCode, vOut, vErr := r.runVerify(ctx, worktreePath, task.VerifyCommand)
+	res.VerifyExitCode = vCode
+	res.VerifyOutput = vOut
+	if vErr != nil && res.RunError == "" {
+		res.RunError = fmt.Sprintf("verify error: %v", vErr)
 	}
 
 	return res, nil
@@ -378,15 +419,16 @@ func (r *Runner) executeBaryo(ctx context.Context, worktree, prompt, model, trac
 
 	cmd := exec.CommandContext(runCtx, r.cfg.BaryoBinary, args...)
 	cmd.Dir = worktree
+	cmd.WaitDelay = 2 * time.Second
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return 124, fmt.Errorf("baryo timed out after %v", r.cfg.Timeout)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode(), fmt.Errorf("baryo failed (exit %d): %s", exitErr.ExitCode(), strings.TrimSpace(string(output)))
-		}
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return 124, fmt.Errorf("baryo timed out after %v", r.cfg.Timeout)
 		}
 		return 1, fmt.Errorf("baryo execution error: %w", err)
 	}
@@ -394,11 +436,18 @@ func (r *Runner) executeBaryo(ctx context.Context, worktree, prompt, model, trac
 	return 0, nil
 }
 
-// runVerify executes the machine-checkable verify command inside the worktree.
+// runVerify executes the machine-checkable verify command inside the worktree with a dedicated timeout.
 func (r *Runner) runVerify(ctx context.Context, worktree, verifyCmd string) (int, string, error) {
-	// Execute verify in bash/sh
-	cmd := exec.CommandContext(ctx, "sh", "-c", verifyCmd)
+	verifyTimeout := r.cfg.VerifyTimeout
+	if verifyTimeout <= 0 {
+		verifyTimeout = 2 * time.Minute
+	}
+	verifyCtx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(verifyCtx, "sh", "-c", verifyCmd)
 	cmd.Dir = worktree
+	cmd.WaitDelay = 2 * time.Second
 
 	output, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(string(output))
@@ -407,6 +456,9 @@ func (r *Runner) runVerify(ctx context.Context, worktree, verifyCmd string) (int
 	}
 
 	if err != nil {
+		if errors.Is(verifyCtx.Err(), context.DeadlineExceeded) {
+			return 124, outStr, fmt.Errorf("verify command timed out after %v", verifyTimeout)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode(), outStr, nil
@@ -416,7 +468,8 @@ func (r *Runner) runVerify(ctx context.Context, worktree, verifyCmd string) (int
 	return 0, outStr, nil
 }
 
-// ParseTraceUsage inspects a Baryo trace file and extracts token counts and wall clock ms.
+// ParseTraceUsage inspects a Baryo trace file and extracts token counts and wall clock ms
+// from the last task_end record in the file.
 func ParseTraceUsage(tracePath string) (promptTokens, completionTokens int, wallMS int64, err error) {
 	f, err := os.Open(tracePath)
 	if err != nil {
@@ -424,6 +477,7 @@ func ParseTraceUsage(tracePath string) (promptTokens, completionTokens int, wall
 	}
 	defer f.Close()
 
+	var found bool
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -441,10 +495,16 @@ func ParseTraceUsage(tracePath string) (promptTokens, completionTokens int, wall
 				completionTokens = record.Usage["completion"]
 			}
 			wallMS = record.WallMS
-			return promptTokens, completionTokens, wallMS, nil
+			found = true
 		}
 	}
-	return 0, 0, 0, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return 0, 0, 0, err
+	}
+	if !found {
+		return 0, 0, 0, nil
+	}
+	return promptTokens, completionTokens, wallMS, nil
 }
 
 // recordResult appends one result row to the configured ResultsFile in JSONL format.
@@ -469,10 +529,12 @@ type Summary struct {
 	ArmPassRates           map[string]float64 `json:"arm_pass_rates"`
 	RepeatShapedPassRates  map[string]float64 `json:"repeat_shaped_pass_rates"`
 	GateDeltaPercentagePts float64            `json:"gate_delta_percentage_pts"`
-	GatePassed             bool               `json:"gate_passed"` // true if Arm B - Arm A >= 25% on repeat-shaped
+	GateStatus             string             `json:"gate_status"` // PASSED, NOT_MET, INSUFFICIENT_DATA
+	GatePassed             bool               `json:"gate_passed"` // true only if Arm B - Arm A >= 25% on repeat-shaped with valid floor data
 }
 
 // ComputeSummary aggregates result metrics and checks the Phase 1 Gate.
+// Infrastructure failures (InfraFailure == true) are excluded from pass rates and gate checks.
 func ComputeSummary(results []Result) Summary {
 	totalPerArm := make(map[string]int)
 	passPerArm := make(map[string]int)
@@ -480,7 +542,12 @@ func ComputeSummary(results []Result) Summary {
 	totalRepeatPerArm := make(map[string]int)
 	passRepeatPerArm := make(map[string]int)
 
+	var validRuns int
 	for _, res := range results {
+		if res.InfraFailure {
+			continue
+		}
+		validRuns++
 		arm := res.Arm
 		totalPerArm[arm]++
 		if res.VerifyExitCode == 0 {
@@ -506,15 +573,28 @@ func ComputeSummary(results []Result) Summary {
 		}
 	}
 
-	// Gate: Arm B must beat Arm A by at least 25 percentage points on repeat-shaped subset
-	delta := repeatRates[ArmB] - repeatRates[ArmA]
-	gatePassed := delta >= 25.0
+	// Gate: Arm B must beat Arm A by at least 25 percentage points on repeat-shaped subset.
+	// Both Arm A (floor/control) and Arm B (hypothesis) must have at least one evaluated repeat-shaped run.
+	var delta float64
+	var gatePassed bool
+	gateStatus := GateStatusInsufficientData
+
+	if totalRepeatPerArm[ArmA] > 0 && totalRepeatPerArm[ArmB] > 0 {
+		delta = repeatRates[ArmB] - repeatRates[ArmA]
+		gatePassed = delta >= 25.0
+		if gatePassed {
+			gateStatus = GateStatusPassed
+		} else {
+			gateStatus = GateStatusNotMet
+		}
+	}
 
 	return Summary{
-		TotalRuns:              len(results),
+		TotalRuns:              validRuns,
 		ArmPassRates:           passRates,
 		RepeatShapedPassRates:  repeatRates,
 		GateDeltaPercentagePts: delta,
+		GateStatus:             gateStatus,
 		GatePassed:             gatePassed,
 	}
 }

@@ -83,6 +83,17 @@ func TestLoadTasks(t *testing.T) {
 	if _, err := LoadTasks(emptyFile); err == nil {
 		t.Error("expected error for empty file, got nil")
 	}
+
+	// 4. Test empty JSON array [] error
+	emptyArrayFile := filepath.Join(tmpDir, "empty_array.json")
+	if err := os.WriteFile(emptyArrayFile, []byte("[]"), 0o644); err != nil {
+		t.Fatalf("failed writing emptyArrayFile: %v", err)
+	}
+	if _, err := LoadTasks(emptyArrayFile); err == nil {
+		t.Error("expected error for empty JSON array [], got nil")
+	} else if err.Error() != "no tasks found in file" {
+		t.Errorf("expected 'no tasks found in file', got %q", err.Error())
+	}
 }
 
 func TestFormatRecipePrompt(t *testing.T) {
@@ -104,9 +115,12 @@ func TestParseTraceUsage(t *testing.T) {
 	tmpDir := t.TempDir()
 	tracePath := filepath.Join(tmpDir, "sample.trace.jsonl")
 
+	// Verify it returns the last task_end record when multiple exist
 	traceData := `{"t":"task_start","prompt":"fix issue"}
 {"t":"tool_call","name":"read_file","args":"{\"path\":\"foo.go\"}"}
 {"t":"tool_result","name":"read_file","bytes":100}
+{"t":"task_end","outcome":"verified","usage":{"prompt":1000,"completion":200},"wall_ms":3000}
+{"t":"task_start","prompt":"fix issue re-run"}
 {"t":"task_end","outcome":"verified","usage":{"prompt":1420,"completion":380},"wall_ms":5400}
 `
 	if err := os.WriteFile(tracePath, []byte(traceData), 0o644); err != nil {
@@ -118,13 +132,13 @@ func TestParseTraceUsage(t *testing.T) {
 		t.Fatalf("unexpected error parsing trace usage: %v", err)
 	}
 	if pTokens != 1420 {
-		t.Errorf("expected 1420 prompt tokens, got %d", pTokens)
+		t.Errorf("expected 1420 prompt tokens (from latest record), got %d", pTokens)
 	}
 	if cTokens != 380 {
-		t.Errorf("expected 380 completion tokens, got %d", cTokens)
+		t.Errorf("expected 380 completion tokens (from latest record), got %d", cTokens)
 	}
 	if wallMS != 5400 {
-		t.Errorf("expected 5400 wall ms, got %d", wallMS)
+		t.Errorf("expected 5400 wall ms (from latest record), got %d", wallMS)
 	}
 }
 
@@ -147,11 +161,14 @@ func TestComputeSummaryAndGate(t *testing.T) {
 		{TaskID: "t1", Arm: ArmC, RepeatShaped: true, VerifyExitCode: 0},
 		{TaskID: "t2", Arm: ArmC, RepeatShaped: true, VerifyExitCode: 0},
 		{TaskID: "t3", Arm: ArmC, RepeatShaped: false, VerifyExitCode: 0},
+
+		// Infrastructure failure: must be excluded from calculation
+		{TaskID: "t4", Arm: ArmB, RepeatShaped: true, InfraFailure: true, VerifyExitCode: -1},
 	}
 
 	summary := ComputeSummary(results)
 	if summary.TotalRuns != 9 {
-		t.Errorf("expected 9 total runs, got %d", summary.TotalRuns)
+		t.Errorf("expected 9 valid runs (excluding 1 infra failure), got %d", summary.TotalRuns)
 	}
 	if summary.RepeatShapedPassRates[ArmA] != 50.0 {
 		t.Errorf("expected Arm A repeat pass rate 50%%, got %.1f%%", summary.RepeatShapedPassRates[ArmA])
@@ -161,6 +178,9 @@ func TestComputeSummaryAndGate(t *testing.T) {
 	}
 	if summary.GateDeltaPercentagePts != 50.0 {
 		t.Errorf("expected gate delta 50.0 pp, got %.1f", summary.GateDeltaPercentagePts)
+	}
+	if summary.GateStatus != GateStatusPassed {
+		t.Errorf("expected GateStatus = %q, got %q", GateStatusPassed, summary.GateStatus)
 	}
 	if !summary.GatePassed {
 		t.Errorf("expected GatePassed = true for 50pp delta")
@@ -177,6 +197,22 @@ func TestComputeSummaryAndGate(t *testing.T) {
 	if failSummary.GatePassed {
 		t.Errorf("expected GatePassed = false for 0pp delta")
 	}
+	if failSummary.GateStatus != GateStatusNotMet {
+		t.Errorf("expected GateStatus = %q, got %q", GateStatusNotMet, failSummary.GateStatus)
+	}
+
+	// Test missing floor data (only Arm B runs): must report INSUFFICIENT_DATA and NOT pass
+	insufficientResults := []Result{
+		{TaskID: "t1", Arm: ArmB, RepeatShaped: true, VerifyExitCode: 0},
+		{TaskID: "t2", Arm: ArmB, RepeatShaped: true, VerifyExitCode: 0},
+	}
+	insufficientSummary := ComputeSummary(insufficientResults)
+	if insufficientSummary.GatePassed {
+		t.Errorf("expected GatePassed = false when Arm A floor is missing")
+	}
+	if insufficientSummary.GateStatus != GateStatusInsufficientData {
+		t.Errorf("expected GateStatus = %q, got %q", GateStatusInsufficientData, insufficientSummary.GateStatus)
+	}
 }
 
 func TestRunnerIdempotency(t *testing.T) {
@@ -192,7 +228,19 @@ func TestRunnerIdempotency(t *testing.T) {
 		Timestamp:      time.Now(),
 	}
 	resData, _ := json.Marshal(existingResult)
-	if err := os.WriteFile(resultsFile, append(resData, '\n'), 0o644); err != nil {
+
+	// An infra failure record that should NOT be marked completed
+	infraFailResult := Result{
+		TaskID:         "task-2",
+		Arm:            ArmA,
+		InfraFailure:   true,
+		VerifyExitCode: -1,
+		Timestamp:      time.Now(),
+	}
+	infraData, _ := json.Marshal(infraFailResult)
+
+	content := string(resData) + "\n" + string(infraData) + "\n"
+	if err := os.WriteFile(resultsFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed writing results file: %v", err)
 	}
 
@@ -210,6 +258,9 @@ func TestRunnerIdempotency(t *testing.T) {
 	}
 	if runner.completed["task-1:B"] {
 		t.Error("expected task-1:B to NOT be marked completed")
+	}
+	if runner.completed["task-2:A"] {
+		t.Error("expected task-2:A (infra failure) to NOT be marked completed")
 	}
 }
 

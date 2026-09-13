@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -22,7 +23,7 @@ func main() {
 		tasksPath   = flag.String("tasks", "tasks.json", "path to tasks file (.json or .jsonl)")
 		baryoBin    = flag.String("baryo", "baryo", "path to baryo binary")
 		localModel  = flag.String("local-model", "qwen2.5-coder:7b", "local model name for Arms A & B")
-		cloudModel  = flag.String("cloud-model", "claude-3-5-sonnet-20241022", "cloud model name for Arm C")
+		cloudModel  = flag.String("cloud-model", "claude-3-7-sonnet-latest", "cloud model name for Arm C")
 		recipesDir  = flag.String("recipes", "recipes", "directory containing <task_id>.md recipes")
 		tracesDir   = flag.String("traces", "traces", "directory to write per-run trace files")
 		resultsPath = flag.String("results", "results.jsonl", "path to results file")
@@ -80,15 +81,14 @@ func main() {
 	fmt.Printf("=== Baryo Phase 1 Benchmark Runner ===\n")
 	fmt.Printf("Tasks: %d | Arms: %s | Local Model: %s | Cloud Model: %s\n\n", len(tasks), strings.Join(arms, ", "), *localModel, *cloudModel)
 
-	results, err := runner.Run(ctx, tasks)
-	if err != nil && err != context.Canceled {
+	_, err = runner.Run(ctx, tasks)
+	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "Benchmark run encountered an error: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("\n=== Phase 1 Benchmark Summary ===")
 	runSummary(*resultsPath)
-
-	_ = results
 }
 
 func runSummary(resultsPath string) {
@@ -120,9 +120,12 @@ func runSummary(resultsPath string) {
 		)
 	}
 	fmt.Printf("Repeat-shaped Delta (Arm B - Arm A): %+.1f percentage points (Target: >= +25.0 pp)\n", summary.GateDeltaPercentagePts)
-	if summary.GatePassed {
+	switch summary.GateStatus {
+	case bench.GateStatusPassed:
 		fmt.Printf(">> Phase 1 Gate: PASSED (Hypothesis validated) <<\n")
-	} else {
+	case bench.GateStatusInsufficientData:
+		fmt.Printf(">> Phase 1 Gate: INSUFFICIENT DATA (Requires repeat-shaped runs for both Arm A and Arm B) <<\n")
+	default:
 		fmt.Printf(">> Phase 1 Gate: NOT YET MET <<\n")
 	}
 }
