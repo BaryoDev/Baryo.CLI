@@ -7,7 +7,6 @@ package index
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
@@ -16,6 +15,12 @@ import (
 // SymbolsAvailable reports whether this build can extract symbols.
 // Under pure-Go (!cgo), symbols are extracted via gotreesitter.
 const SymbolsAvailable = true
+
+// maxSymbolParseSize caps the files the pure-Go parser reads for symbols. It
+// allocates far more than the cgo parser: a 1 MiB file, which DiscoverFiles
+// allows, measured about 450 MiB of heap. Larger files stay in the index
+// without symbols, and the RAG store chunks them by lines instead.
+const maxSymbolParseSize = 256 << 10
 
 // gtsNode wraps a pure-Go gotreesitter Node to satisfy the astNode interface.
 type gtsNode struct {
@@ -168,6 +173,10 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 
+	if len(content) > maxSymbolParseSize {
+		return fileWithoutSymbols(path), nil
+	}
+
 	parser := gotreesitter.NewParser(lp.lang)
 	tree, err := parser.Parse(content)
 	if err != nil {
@@ -178,20 +187,16 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 	}
 
 	root := tree.RootNode()
-	symbols := lp.extract(&gtsNode{n: root, lang: lp.lang}, content)
+	fs := fileWithoutSymbols(path)
+	fs.Symbols = lp.extract(&gtsNode{n: root, lang: lp.lang}, content)
+	return fs, nil
+}
 
-	info, err := os.Stat(path)
-	modTime := time.Time{}
-	var size int64
-	if err == nil {
-		modTime = info.ModTime()
-		size = info.Size()
+func fileWithoutSymbols(path string) *FileSymbols {
+	fs := &FileSymbols{Path: path}
+	if info, err := os.Stat(path); err == nil {
+		fs.ModTime = info.ModTime()
+		fs.Size = info.Size()
 	}
-
-	return &FileSymbols{
-		Path:    path,
-		Symbols: symbols,
-		ModTime: modTime,
-		Size:    size,
-	}, nil
+	return fs
 }
