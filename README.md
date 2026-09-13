@@ -441,11 +441,10 @@ The checks run in order:
 3. Model Runner enabled (inference socket exists)
 4. At least one model pulled
 
-Doctor also reports whether this build can extract code symbols. The tree-sitter
-parsers need CGO, and published binaries are built without it, so a released
-binary indexes every file but the repo map lists paths without functions and
-types. That shows as a warning rather than a failure, and it never stops baryo
-from starting. Build from source with `CGO_ENABLED=1` to get symbols.
+Doctor also reports whether this build can extract code symbols. Symbol
+extraction is enabled across all builds: published release binaries use a pure-Go
+tree-sitter engine, while CGO builds link native tree-sitter grammars. In both
+configurations, the repo map indexes functions and types.
 
 You can also run `/doctor` inside the TUI to check diagnostics mid-session.
 
@@ -521,7 +520,7 @@ echo "Always use conventional commits: feat, fix, chore, docs." > ~/.baryo/knowl
 3. Matching content is injected as a `<context>` block in the system prompt (with `<sources>`, `<documents>`, and `<sessions>` sections)
 4. Budget scales with context window: 0% for <16K, 3-10% for larger windows
 
-**Source file indexing:** Baryo automatically indexes your project's source files (`.go`, `.ts`, `.py`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, and more). When you ask about your codebase, relevant code chunks are included in the context — no need to manually `@`-mention files. If tree-sitter parsing is available (CGO build), chunks are split at symbol boundaries (one chunk per function/type); otherwise, line-based chunking is used as a fallback. Up to 500 files are indexed, with code files prioritized over config/docs.
+**Source file indexing:** Baryo automatically indexes your project's source files (`.go`, `.ts`, `.py`, `.rs`, `.java`, `.rb`, `.c`, `.cpp`, and more). When you ask about your codebase, relevant code chunks are included in the context — no need to manually `@`-mention files. Tree-sitter parsing splits chunks at symbol boundaries (one chunk per function/type); line-based chunking is used as a fallback for unstructured or unsupported formats. Up to 500 files are indexed, with code files prioritized over config/docs.
 
 **Session memory:** Past conversations are automatically indexed. If you discussed something in a previous session, relevant Q&A pairs surface as context for new questions.
 

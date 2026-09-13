@@ -170,8 +170,11 @@ func ParseFile(path, language string, content []byte) (*FileSymbols, error) {
 
 	parser := gotreesitter.NewParser(lp.lang)
 	tree, err := parser.Parse(content)
-	if err != nil || tree == nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+	if tree == nil {
+		return nil, fmt.Errorf("failed to parse %s", path)
 	}
 
 	root := tree.RootNode()

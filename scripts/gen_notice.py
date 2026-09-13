@@ -31,22 +31,25 @@ LICENCE_NAMES = [
 
 
 def modules():
-    """Return (path, version, dir) for every module linked into the binary."""
-    out = subprocess.run(
-        ["go", "list", "-deps", "-f",
-         "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}", "."],
-        capture_output=True, text=True, check=True).stdout
+    """Return (path, version, dir) for every module linked into the binary under either cgo or pure-Go."""
     seen = {}
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        path, version, directory = parts
-        if path == "github.com/arnelirobles/baryo-cli" or not directory:
-            continue
-        seen[path] = (version, directory)
+    for cgo in ("0", "1"):
+        env = os.environ.copy()
+        env["CGO_ENABLED"] = cgo
+        out = subprocess.run(
+            ["go", "list", "-deps", "-f",
+             "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}", "."],
+            capture_output=True, text=True, check=True, env=env).stdout
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            path, version, directory = parts
+            if path == "github.com/arnelirobles/baryo-cli" or not directory:
+                continue
+            seen[path] = (version, directory)
     return sorted((p, v, d) for p, (v, d) in seen.items())
 
 

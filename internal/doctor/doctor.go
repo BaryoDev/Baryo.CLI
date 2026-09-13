@@ -45,9 +45,7 @@ func RunChecks(socketPath string) []CheckResult {
 	return append(results, symbolCheck())
 }
 
-// symbolCheck reports whether this build can extract code symbols. A build
-// without tree-sitter still indexes every file, so this is informational: it is
-// a warning, which AllPassed treats as passing, never a hard failure.
+// symbolCheck reports whether this build can extract code symbols.
 func symbolCheck() CheckResult {
 	if index.SymbolsAvailable {
 		return CheckResult{
@@ -59,7 +57,7 @@ func symbolCheck() CheckResult {
 	return CheckResult{
 		Name:    "Symbol extraction",
 		Warning: true,
-		Message: "unavailable in this build (compiled without CGO), so the repo map lists file paths without symbols. Build from source with CGO_ENABLED=1 to get them.",
+		Message: "unavailable in this build, so the repo map lists file paths without symbols.",
 	}
 }
 
