@@ -30,25 +30,56 @@ LICENCE_NAMES = [
 ]
 
 
+# The platforms GoReleaser publishes (.goreleaser.yaml). NOTICE has to cover every
+# published artifact, and `go list -deps` answers for one target at a time: bubbletea pulls
+# erikgeiser/coninput and mattn/go-localereader on Windows only, so a NOTICE generated on
+# Linux omits two MIT dependencies that ship in the Windows binaries.
+RELEASE_TARGETS = [
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("windows", "amd64"),
+    ("windows", "arm64"),
+]
+
+
+def build_configurations():
+    """Yield (GOOS, GOARCH, CGO_ENABLED) for every build whose dependencies we attribute.
+
+    Releases are built with CGO_ENABLED=0 for every target above. A developer building from
+    source on their own machine gets cgo by default, which links a different tree-sitter
+    parser, so the host platform is also resolved with cgo on.
+    """
+    for goos, goarch in RELEASE_TARGETS:
+        yield goos, goarch, "0"
+
+    host_os = subprocess.run(["go", "env", "GOOS"], capture_output=True, text=True,
+                             check=True).stdout.strip()
+    host_arch = subprocess.run(["go", "env", "GOARCH"], capture_output=True, text=True,
+                               check=True).stdout.strip()
+    yield host_os, host_arch, "1"
+
+
 def modules():
     """Return (path, version, dir) for every module linked into any build we ship.
 
-    Both cgo settings are resolved and the results merged. `go list -deps` answers for
-    one build configuration, and this project has real dependencies behind //go:build
-    tags: internal/index parses with cgo tree-sitter under cgo and a pure-Go parser
-    without it. Releases are built with CGO_ENABLED=0 (.goreleaser.yaml), while a
-    developer machine with a C toolchain defaults to cgo on, so asking once attributes
-    whichever build happened to be local and silently omits the other. That is an
-    attribution gap no other gate can see, because the generated file and the committed
-    file agree.
+    Every build configuration is resolved and the results merged, because `go list -deps`
+    answers for exactly one of them. This project has real dependencies behind build
+    constraints on both axes: internal/index parses with cgo tree-sitter or a pure-Go
+    parser depending on CGO_ENABLED, and bubbletea's terminal input differs by GOOS. Asking
+    once attributes whichever build happened to be local and silently omits the others.
+
+    That gap is invisible to every other gate, because the generated file and the committed
+    file agree with each other — which is exactly how it went unnoticed.
 
     The union is deliberately wider than any single binary: a module named here may be
-    absent from one build. Over-attributing is harmless, omitting is the licence
+    absent from a given build. Over-attributing is harmless; omitting is the licence
     problem.
     """
     seen = {}
-    for cgo in ("0", "1"):
-        env = dict(os.environ, CGO_ENABLED=cgo)
+    for goos, goarch, cgo in build_configurations():
+        env = dict(os.environ, GOOS=goos, GOARCH=goarch, CGO_ENABLED=cgo)
         out = subprocess.run(
             ["go", "list", "-deps", "-f",
              "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}", "."],

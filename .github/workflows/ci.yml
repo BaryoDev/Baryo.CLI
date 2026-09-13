@@ -83,14 +83,19 @@ jobs:
       - name: Prove the conflict marker check can fail
         run: |
           set -eu
-          printf '# proof\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> other\n' > conflict-proof.md
-          git add conflict-proof.md
-          trap 'git rm -q --cached conflict-proof.md; rm -f conflict-proof.md' EXIT
+          # The filename deliberately contains a space. The first version of this gate
+          # looped over `git ls-files` unquoted, so a path like this split into two
+          # non-existent files and the check passed over it — and this proof, which used a
+          # plain filename, did not notice.
+          proof='conflict proof.md'
+          printf '# proof\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> other\n' > "$proof"
+          git add "$proof"
+          trap 'git rm -q --cached "$proof"; rm -f "$proof"' EXIT
           if sh scripts/check-conflict-markers.sh; then
             echo "::error::The conflict marker check passed with a conflicted file staged. The gate is not working."
             exit 1
           fi
-          echo "Conflicted file was caught. The check is live."
+          echo "Conflicted file was caught. The check is live.
 
       # Fragments are validated where a mistake is cheap to fix. Assembly happens at release
       # time, by a human reading the diff.

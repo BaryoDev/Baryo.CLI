@@ -13,9 +13,16 @@ set -eu
 cd "$(dirname "$0")/.."
 
 go mod download
-python3 scripts/gen_notice.py >/tmp/NOTICE.generated
 
-if diff -u NOTICE /tmp/NOTICE.generated; then
+# mktemp rather than a fixed /tmp path: a predictable name in a shared directory can be
+# pre-created as a symlink by another local user, and two concurrent runs would otherwise
+# overwrite each other's output and compare against the wrong file.
+generated=$(mktemp "${TMPDIR:-/tmp}/NOTICE.generated.XXXXXX")
+trap 'rm -f "$generated"' EXIT HUP INT TERM
+
+python3 scripts/gen_notice.py >"$generated"
+
+if diff -u NOTICE "$generated"; then
 	echo "NOTICE is current."
 	exit 0
 fi

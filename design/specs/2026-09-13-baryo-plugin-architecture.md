@@ -1,8 +1,14 @@
 # Baryo: plugin architecture, and history export as its first case
 
 Date: 2026-09-13
-Status: design, awaiting review
+Status: stages 1-5 implemented; stage 6 and the open questions in §10 outstanding
 Reviewed code at: `d454fa8` (main)
+
+**Implementation status.** §8 stages 1 and 2 (the archive envelope, and archiving the
+compaction paths that were dropping content) and stages 3 to 5 (`baryo export`, plugin
+manifests and discovery, the `exporter` kind) are implemented. Stage 6 (`tool`, `hook` and
+`provider` kinds) is not. Where this document and the code disagree, the code is right and
+this document is the bug; §6 and §3.1 have already been corrected once on that basis.
 
 ## 1. What this is for
 
@@ -57,9 +63,15 @@ archive line cannot say when its message happened. A ctx `event` record requires
 only covers tool activity. Neither is faithful.
 
 Fix: wrap each archive line in an envelope, `{"ts": ..., "seq": ..., "msg": {...}}`.
-Backward compatible — an old line unmarshals into the envelope with a zero `ts`, and the
-exporter can mark those records `fidelity: "partial"`, which is exactly what that ctx field
-is for.
+Backward compatible, and the reader accepts both shapes — an old bare-message line yields a
+zero `ts`, which the exporter reports as `fidelity: "partial"` rather than guessing.
+
+Worth being exact about what that `ts` is: **the time the message was archived, not the time
+it was sent.** `llm.ChatMessage` has no timestamp, so compaction is the earliest point where
+one can honestly be attached, and it bounds the message from above rather than dating it.
+That is a real improvement over nothing — it orders records and bounds them within a session
+— but recording true send times means timestamping messages where they are created, which is
+a separate change to the conversation model and is not in this one.
 
 **3.2 Only one of four compaction paths archives.** `chat.go:1044` is the sole `Archive`
 call. The search (`chat.go:1162`), research (`chat.go:1181`) and strategy paths each
@@ -129,23 +141,32 @@ description: Export Baryo sessions to ctx-history-jsonl-v2 for retrieval by ctx.
 provides:
   - kind: exporter
     id: ctx-history-jsonl-v2
-    # Invoked as: <command> [args...] with a JSON request on stdin.
+    # Invoked as: <command> [args...] with a JSON request on stdin. Args are passed
+    # verbatim — there is no variable substitution, deliberately: the output directory
+    # arrives in the request's out_dir, so there is exactly one place it comes from and
+    # no second one to disagree with it.
     command: ./baryo-ctx-export
-    args: ["--out", "${BARYO_EXPORT_DIR}"]
-# Declared, shown at install, and enforced by the host rather than trusted.
+    args: ["--verbose"]
+# Declared and displayed, so a user can read what a plugin asks for before trusting it.
+# NOT enforced today: see below.
 permissions:
   sessions: read      # ~/.baryo/sessions, including archives and traces
   network: none
-  filesystem: write:${BARYO_EXPORT_DIR}
+  filesystem: write   # the request's out_dir
 ```
 
 Three properties matter more than the exact field names:
 
 - **Capabilities are declared, not discovered.** The host knows what a plugin can do before
   running it, so `baryo plugins list` can show it and a reviewer can read it.
-- **Permissions are enforced by the host, not promised by the plugin.** An exporter
-  declaring `network: none` runs with no network access; the existing sandbox
-  (`internal/sandbox`) is the mechanism.
+- **Permissions are declared and displayed, not yet enforced.** A plugin runs with the same
+  access as Baryo itself, and `baryo plugins inspect` says so in as many words. Enforcing
+  them needs fail-closed isolation on every supported OS, which `internal/sandbox` does not
+  provide — it wraps execution in Docker and errors out when Docker is absent, so it cannot
+  be the mechanism for something that must work everywhere. Until that exists, `network:
+  none` is a statement of intent a reviewer can check the plugin against, not a guarantee
+  the host makes. A permissions block that reads as enforced and is not would be worse than
+  no permissions block at all.
 - **Project plugins ride the existing trust gate.** `internal/config/trust.go` already
   decides whether a cloned repository's `.baryo` config and skills take effect, with
   `--trust-project` and a remembered decision. A project-supplied plugin is strictly more
@@ -253,6 +274,9 @@ first.
   endpoints that get reported as Baryo bugs?
 - **Signing and distribution.** A registry (`ROADMAP.md` mentions one) implies provenance.
   Deferred, but deciding it late means migrating plugins that already exist.
-- **Does the sandbox actually constrain a subprocess well enough** on every supported OS to
-  make the `permissions` block in §6 a real guarantee rather than documentation? If not, say
-  so in the manifest docs rather than implying enforcement.
+- **What enforces `permissions`?** `internal/sandbox` is Docker-based and fails when Docker is
+  absent, so it cannot back a promise that must hold on every supported OS. Options are a
+  per-OS mechanism (seccomp or namespaces on Linux, sandbox-exec on macOS, a job object on
+  Windows), requiring Docker for plugins that declare restrictions, or leaving the fields
+  advisory and saying so — which is the current state. Until one is chosen, the README and
+  `plugins inspect` must keep saying the fields are not enforced.

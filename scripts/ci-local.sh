@@ -19,7 +19,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--quick) quick=1 ;;
 	-h | --help)
-		sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '/^# Usage:/,/^# *sh scripts\/ci-local.sh --quick/p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -87,7 +87,14 @@ else
 	fi
 
 	step "Tests (race detector)"
-	run "tests (race)" go test -race -count=1 ./...
+	# The race detector is built on cgo, so it needs a C compiler just as the cgo pass
+	# does. Without this guard a machine with no toolchain records a failure where the
+	# script promises a skip, which is the kind of noise that teaches people to ignore it.
+	if command -v gcc >/dev/null 2>&1 || command -v cc >/dev/null 2>&1; then
+		run "tests (race)" go test -race -count=1 ./...
+	else
+		skip "no C compiler found; the race detector needs cgo. CI will still run this pass"
+	fi
 
 	step "staticcheck"
 	run "staticcheck" go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
