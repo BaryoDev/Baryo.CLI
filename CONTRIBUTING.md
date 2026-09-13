@@ -77,6 +77,25 @@ pure-Go parser for the `CGO_ENABLED=0` builds that releases ship. They are separ
 A passing test under one says nothing about the other, which is why CI runs both and so
 should you.
 
+### Changelog entries go in `changelog.d/`, not `CHANGELOG.md`
+
+Add one file per change, named `<slug>.<section>.md`:
+
+```sh
+cat > changelog.d/my-fix.Fixed.md <<'EOF'
+- **The widget retried twice.** The backoff loop double-counted, so the second attempt
+  started before the first had finished.
+EOF
+```
+
+The section is one of `Breaking`, `Added`, `Changed`, `Removed`, `Fixed`, `Security`. Write
+the entry exactly as it should read in the changelog, opening with a bolded lead.
+
+Editing `CHANGELOG.md` directly means every open branch conflicts on that one file after
+every merge, and nothing compiles Markdown — so a botched resolution passes every other gate
+here. Two branches adding two files do not conflict. `changelog.d/README.md` has the details;
+a maintainer folds the fragments in at release time.
+
 ### If you change dependencies
 
 `NOTICE` is generated, and attribution is a licence obligation rather than a formality:

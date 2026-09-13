@@ -92,6 +92,23 @@ jobs:
           fi
           echo "Conflicted file was caught. The check is live."
 
+      # Fragments are validated where a mistake is cheap to fix. Assembly happens at release
+      # time, by a human reading the diff.
+      - name: Check changelog fragments
+        run: bash scripts/changelog-assemble.sh --check
+
+      # Where assembly puts an entry, proven against fixtures in a temp directory. An
+      # unscoped search for "### Fixed" finds the first one in the file, which after a release
+      # belongs to the version that just shipped: the entries land under an old release and
+      # the script still reports success.
+      - name: Prove the changelog assembler files entries under Unreleased
+        run: bash scripts/test-changelog-assemble.sh
+
+      # The release config is only exercised on a tag, which is the worst moment to find out
+      # it uses a property goreleaser has removed.
+      - name: Check the release config
+        run: go run github.com/goreleaser/goreleaser/v2@v2.12.5 check
+
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -186,3 +203,44 @@ jobs:
             exit 1
           fi
           echo "Planted credential was caught. The scan is live."
+
+  sbom:
+    name: SBOM generates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      # The same tool and version the release uses, because a smoke test that drifts from the
+      # thing it is smoke testing stops being evidence about it. Pinned and checksum-verified
+      # like gitleaks, and for the same reason: this extracts and runs a downloaded binary.
+      - name: Install syft
+        run: |
+          set -eu
+          VERSION=1.33.0
+          SHA256=adc1b944a827ed3432bcd9f1dbdbc8fa3c0dca7d3d449e7084c90248c2c6cb50
+          curl -sSL --fail -o /tmp/syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${VERSION}/syft_${VERSION}_linux_amd64.tar.gz"
+          echo "${SHA256}  /tmp/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft
+          syft version
+
+      # Built the way releases are built. A dependency behind a //go:build tag is either
+      # linked or absent depending on cgo, and the bill of materials is only true about the
+      # artifact it was generated from.
+      - name: Generate an SBOM for the release build
+        run: |
+          set -eu
+          CGO_ENABLED=0 go build -ldflags "-s -w" -o /tmp/baryo .
+          syft scan file:/tmp/baryo -o cyclonedx-json=/tmp/baryo.cdx.json -q
+
+          # A tool that writes an empty file still exits 0, so the file is checked rather than
+          # the command. An SBOM listing nothing describes nothing.
+          f=/tmp/baryo.cdx.json
+          [ -s "$f" ] || { echo "::error::$f is missing or empty."; exit 1; }
+          COMPONENTS=$(python3 -c "import json; print(len(json.load(open('$f')).get('components', [])))")
+          [ "$COMPONENTS" -gt 0 ] || { echo "::error::$f lists no components, so it describes nothing."; exit 1; }
+          echo "SBOM: $COMPONENTS components" >> "$GITHUB_STEP_SUMMARY"

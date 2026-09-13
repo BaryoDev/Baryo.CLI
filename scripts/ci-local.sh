@@ -51,6 +51,10 @@ skip() { printf '   skipped: %s\n' "$1"; }
 step "Conflict markers"
 run "conflict markers" sh scripts/check-conflict-markers.sh
 
+step "Changelog fragments"
+run "changelog fragments" bash scripts/changelog-assemble.sh --check
+run "changelog assembler" bash scripts/test-changelog-assemble.sh
+
 step "Formatting (gofmt)"
 unformatted=$(gofmt -l .)
 if [ -n "$unformatted" ]; then

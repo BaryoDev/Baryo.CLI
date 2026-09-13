@@ -26,9 +26,43 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Last stop before anything is published. A release whose changelog does not describe
+      # it, or that leaves unassembled fragments behind, cannot be quietly fixed afterwards:
+      # the archives, the Homebrew formula and the Scoop manifest are already out.
+      #
+      # --releasing because the tag necessarily exists by now; every other check still holds.
+      - name: Check the release is ready
+        run: sh scripts/check-release-ready.sh --releasing "${GITHUB_REF_NAME}"
+
+      # goreleaser generates the SBOMs declared in .goreleaser.yaml with syft, and skips them
+      # with a warning if it is missing — so a release would publish without them and say so
+      # only in a log nobody reads. Pinned and checksum-verified, same as everywhere else.
+      - name: Install syft
+        run: |
+          set -eu
+          VERSION=1.33.0
+          SHA256=adc1b944a827ed3432bcd9f1dbdbc8fa3c0dca7d3d449e7084c90248c2c6cb50
+          curl -sSL --fail -o /tmp/syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${VERSION}/syft_${VERSION}_linux_amd64.tar.gz"
+          echo "${SHA256}  /tmp/syft.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft
+          syft version
+
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # An SBOM that was silently not generated looks exactly like one that was, so the
+      # release is checked rather than assumed.
+      - name: Confirm SBOMs were published
+        run: |
+          set -eu
+          count=$(find dist -name '*.sbom.json' -o -name '*.sbom' | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::The release published no SBOMs. Check that syft was on PATH."
+            exit 1
+          fi
+          echo "Published $count SBOM(s)." >> "$GITHUB_STEP_SUMMARY"

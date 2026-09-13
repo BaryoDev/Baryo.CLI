@@ -1,0 +1,53 @@
+name: Release ready
+
+# Answers "can we tag?" before anyone does.
+#
+# Pushing a tag is the irreversible step here: it publishes archives, updates the Homebrew
+# formula and the Scoop manifest, and a release whose changelog does not describe it cannot
+# be quietly fixed afterwards. Merging feels like finishing, so the release bookkeeping —
+# folding the changelog fragments in, opening the version's section — is the part that gets
+# forgotten, and nothing notices until the release is already out.
+#
+# Runs on demand, and weekly so the answer is visible without anyone asking.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to check (e.g. v0.14.0). Defaults to the newest in CHANGELOG.md."
+        required: false
+        type: string
+  schedule:
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Can a release ship
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The script asks git whether the tag already exists, which needs the tags.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # The step fails when the release is not ready, which is the point: this is a gate, not
+      # a report. The summary below still runs, so the reasons are visible either way.
+      - name: Check release readiness
+        run: |
+          set -o pipefail
+          sh scripts/check-release-ready.sh ${{ inputs.version }} 2>&1 | tee /tmp/ready.txt
+
+      # The result belongs somewhere a human will see it without opening a job log.
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '## Release readiness'
+            echo
+            echo '```'
+            cat /tmp/ready.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
