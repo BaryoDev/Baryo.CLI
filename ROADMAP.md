@@ -192,6 +192,11 @@ Allow users to add custom tools via config.
 - **Community plugin registry** — curated list of community plugins on the website/repo
 - **Plugin hooks** — plugins can register for lifecycle events
 
+Design: [`design/specs/2026-09-13-baryo-plugin-architecture.md`](design/specs/2026-09-13-baryo-plugin-architecture.md).
+Five extension points (`tool`, `hook`, `skill`, `provider`, `exporter`), plugins as
+subprocesses rather than Go `plugin` builds, project plugins behind the existing
+`--trust-project` gate, and history export to ctx as the first case.
+
 ### DevOps Toolkit (already planned)
 Purpose-built tools for infrastructure, deployment, and container management.
 
