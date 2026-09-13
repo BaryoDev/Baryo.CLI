@@ -124,13 +124,26 @@ func TestBuiltinExportsArchivedThenLiveMessages(t *testing.T) {
 			t.Errorf("event %d has event_index %v", i, e["event_index"])
 		}
 	}
-	// Archived messages have timestamps; live ones have none to report, and must not be
-	// given an invented one.
-	if events[0]["occurred_at"] == nil {
-		t.Error("an archived event was exported without occurred_at")
+	// An archived event publishes archived_at, the upper bound it actually knows, and says
+	// so in time_fidelity. A live event has no time at all and must not be given one.
+	// Nothing anywhere claims occurred_at: Baryo does not record when a message was sent,
+	// and a field by that name would be read as though it did.
+	if events[0]["archived_at"] == nil {
+		t.Error("an archived event was exported without archived_at")
 	}
-	if events[2]["occurred_at"] != nil {
-		t.Error("a live event was given an occurred_at it does not have")
+	if got := events[0]["time_fidelity"]; got != "archived_upper_bound" {
+		t.Errorf("archived event time_fidelity = %v, want archived_upper_bound", got)
+	}
+	if events[2]["archived_at"] != nil {
+		t.Error("a live event was given an archived_at it does not have")
+	}
+	if got := events[2]["time_fidelity"]; got != "unknown" {
+		t.Errorf("live event time_fidelity = %v, want unknown", got)
+	}
+	for i, e := range events {
+		if _, claims := e["occurred_at"]; claims {
+			t.Errorf("event %d claims occurred_at; no message in Baryo has a send time", i)
+		}
 	}
 }
 
@@ -228,8 +241,11 @@ func TestBuiltinWarnsAboutUndatedArchives(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
-	if events[0]["occurred_at"] != nil {
+	if events[0]["archived_at"] != nil {
 		t.Error("an undated archived message was given a timestamp")
+	}
+	if got := events[0]["time_fidelity"]; got != "unknown" {
+		t.Errorf("undated record time_fidelity = %v, want unknown", got)
 	}
 }
 

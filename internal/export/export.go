@@ -31,6 +31,11 @@ const BuiltinID = "baryo-jsonl"
 
 // BuiltinSchema versions the native format. An external adapter reading these files should
 // refuse a schema it does not know rather than guess at the shape.
+//
+// On time: no event carries an occurred_at, because nothing in Baryo records when a message
+// was sent. An archived event carries archived_at, an upper bound, and every event declares
+// time_fidelity so an adapter can map it to its own format's fidelity field rather than
+// assuming. ctx's history format, for one, has exactly that notion.
 const BuiltinSchema = "baryo-history-jsonl-v1"
 
 // Gather collects the sessions to export.
@@ -147,7 +152,7 @@ func Builtin(req plugin.ExportRequest) (plugin.ExportResponse, error) {
 		// Said plainly rather than papered over with a guessed timestamp. An importer can
 		// decide what to do with an undated record; it cannot undo an invented one.
 		resp.Warnings = append(resp.Warnings, fmt.Sprintf(
-			"%d archived messages predate archive timestamps and are exported without occurred_at", undated))
+			"%d archived messages predate archive timestamps and carry no time at all", undated))
 	}
 	return resp, nil
 }
@@ -183,8 +188,9 @@ func writeEvents(enc *json.Encoder, ref plugin.SessionRef) (count, undated int, 
 		return count, undated, nil // already counted what we could read
 	}
 	for _, msg := range s.Messages {
-		// Live messages carry no per-message time either. The session's own UpdatedAt is
-		// the closest honest bound, and it is labelled as the session's, not the message's.
+		// Live messages have no time of their own and none is invented for them: the
+		// session record carries started_at and ended_at, which bound the whole session,
+		// and that is the honest extent of what is known.
 		if err := encodeEvent(enc, ref.ID, idx, "", "live", msg); err != nil {
 			return count, undated, err
 		}
@@ -194,19 +200,39 @@ func writeEvents(enc *json.Encoder, ref plugin.SessionRef) (count, undated int, 
 	return count, undated, nil
 }
 
+// Time fidelity values. A consumer has to know what a timestamp means before it can use
+// one, and this format cannot currently offer a message's own time for any record.
+const (
+	// fidelityUpperBound: the record carries archived_at, the moment compaction wrote the
+	// message away. The message happened at or before it, by an unknown margin.
+	fidelityUpperBound = "archived_upper_bound"
+	// fidelityUnknown: no time at all. Live messages and archives written before the
+	// envelope existed.
+	fidelityUnknown = "unknown"
+)
+
 // encodeEvent writes one event record.
-func encodeEvent(enc *json.Encoder, sessionID string, idx int, at, origin string, msg llm.ChatMessage) error {
+//
+// There is deliberately no occurred_at field. The only time available is when compaction
+// archived a message, and llm.ChatMessage has no timestamp of its own, so a field named
+// occurred_at would invite an importer to read an upper bound as the moment the message
+// happened — the same mistake as inventing a timestamp, one level up. What is known is
+// published under archived_at, and every record says what its time is worth in
+// time_fidelity.
+func encodeEvent(enc *json.Encoder, sessionID string, idx int, archivedAt, origin string, msg llm.ChatMessage) error {
 	rec := map[string]any{
-		"record_type": "event",
-		"session_id":  sessionID,
-		"event_index": idx,
-		"origin":      origin, // archived or live
-		"role":        msg.Role,
-		"event_type":  eventType(msg),
-		"message":     msg,
+		"record_type":   "event",
+		"session_id":    sessionID,
+		"event_index":   idx,
+		"origin":        origin, // archived or live
+		"role":          msg.Role,
+		"event_type":    eventType(msg),
+		"time_fidelity": fidelityUnknown,
+		"message":       msg,
 	}
-	if at != "" {
-		rec["occurred_at"] = at
+	if archivedAt != "" {
+		rec["archived_at"] = archivedAt
+		rec["time_fidelity"] = fidelityUpperBound
 	}
 	return enc.Encode(rec)
 }

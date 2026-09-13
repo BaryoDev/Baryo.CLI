@@ -219,15 +219,22 @@ which is the main evidence that this extension point is the right shape:
 | `manifest` | `record_type`, `schema_version` | constant; `producer` = `baryo/<version>`, `exported_at` = now |
 | `source` | `source_id`, `provider_key`, `source_format` | `provider_key: "baryo"`, `source_id` per machine + sessions dir, `trust: provider_export` |
 | `session` | `source_id`, `provider_session_id`, `started_at` | session `ID`, `CreatedAt`; `cwd`, `ended_at` = `UpdatedAt` |
-| `event` | `source_id`, `provider_session_id`, `event_index`, `occurred_at` | one per message, archive first then live, `event_index` = position; `role`, `payload` = the `ChatMessage`; `event_type` = `message` / `tool_call` / `tool_result` |
+| `event` | `source_id`, `provider_session_id`, `event_index`, `occurred_at` | one per message, archive first then live, `event_index` = position; `role`, `payload` = the `ChatMessage`; `event_type` = `message` / `tool_call` / `tool_result`. **`occurred_at` is the one required field Baryo cannot supply** — see below |
 | `file_reference` | ... `value`, `event_index` | paths from `tool_call` arguments in the trace |
 | `edge` | `from`/`to_provider_session_id` | `/clear` and resume transitions, once those are recorded |
 
 Two honest limits to carry into the export rather than paper over:
 
-- `occurred_at` is only faithful after gap 3.1 is fixed. Until then those records are
-  `fidelity: "partial"` — ctx has the field, and using it correctly is better than
-  inventing timestamps.
+- **`occurred_at` cannot be supplied faithfully, and 3.1 does not change that.** Nothing in
+  Baryo records when a message was sent; the archive envelope records when compaction wrote
+  it away. That is an upper bound, and publishing it as `occurred_at` would invite an
+  importer to read it as the moment the message happened — the same mistake as inventing a
+  timestamp, one level up. The native format therefore emits `archived_at` plus a
+  `time_fidelity` of `archived_upper_bound` or `unknown`, and no `occurred_at` at all. An
+  adapter targeting ctx has to decide what to do with that: map the bound into `occurred_at`
+  with `fidelity: "partial"`, which ctx's schema explicitly allows, or omit the event. Either
+  is defensible; doing it silently is not. Real send times need messages timestamped where
+  they are created, which is §3.1's remaining half and a change to the conversation model.
 - Ordering across the archive/live boundary is reconstructible (the archive is append-only
   and compaction appends in order), but there is no explicit sequence number. `seq` in the
   3.1 envelope removes the inference.

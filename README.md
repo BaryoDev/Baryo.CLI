@@ -1499,8 +1499,12 @@ record per session, then one event per message — archived messages first, then
 still live in the conversation. Tool calls and their results are preserved and labelled,
 because that is precisely what a summary loses.
 
-Archived messages carry a timestamp. Archives written by Baryo before v0.14 do not, and
-the export says so in a warning rather than inventing one.
+On time, the format says only what it knows. Nothing in Baryo records when a message was
+sent, so no event carries an `occurred_at`. An archived message carries `archived_at` — the
+moment compaction wrote it away, an upper bound — and every event declares `time_fidelity`
+(`archived_upper_bound` or `unknown`) so a consumer maps it deliberately instead of
+assuming. Archives written before v0.14 have no timestamp at all, and the export reports
+those in a warning rather than inventing one.
 
 ## Plugins
 
