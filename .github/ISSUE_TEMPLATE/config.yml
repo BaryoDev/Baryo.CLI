@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/BaryoDev/Baryo.CLI/security/advisories/new
+    about: Report privately. Please do not open a public issue for anything exploitable.
+  - name: How to contribute
+    url: https://github.com/BaryoDev/Baryo.CLI/blob/main/CONTRIBUTING.md
+    about: Working from a fork, running the same gates CI runs, and what a good pull request looks like.
+  - name: Question or idea
+    url: https://github.com/BaryoDev/Baryo.CLI/discussions
+    about: For anything open-ended, or to sound out a large change before building it.

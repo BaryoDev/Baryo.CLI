@@ -1,10 +1,22 @@
 name: CI
 
 on:
+  # Every branch except main, so a contributor working in a fork gets the full pipeline
+  # on their own pushes instead of first learning what CI thinks after opening a pull
+  # request here. Every contribution to this repository arrives from a fork, so that
+  # round trip was the normal case, not an edge one.
+  #
+  # main is excluded rather than forgotten: it is only written by a merged pull request,
+  # which ran this workflow, or by a release tag, which calls this workflow below. The
+  # weekly schedule covers it the rest of the time.
   push:
-    branches: [main]
+    branches-ignore: [main]
   pull_request:
     branches: [main]
+  # The merge queue tests a batch of pull requests against main together. Without this
+  # trigger a required check never reports on the merge_group event and the queue waits
+  # for something that will not arrive. Harmless while no queue is enabled.
+  merge_group:
   # Called by release.yml so a tag cannot publish untested code.
   workflow_call:
   # Weekly re-run: govulncheck only sees new CVEs when it runs again.
@@ -13,6 +25,13 @@ on:
 
 permissions:
   contents: read
+
+# One run per ref. A contributor pushing three times in a minute should not hold three
+# macOS runners. Queued-not-started runs are superseded; nothing in flight on main or in
+# the merge queue is cancelled, because those two report required checks.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -53,6 +72,26 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Markdown and YAML are where a botched merge hides: nothing compiles them, so a
+      # CHANGELOG full of conflict markers passes every other gate here and ships.
+      - name: Check for conflict markers
+        run: sh scripts/check-conflict-markers.sh
+
+      # The gate above is only worth its second if it can fail. Stage a conflicted file
+      # and confirm the check refuses it. Staged rather than committed: the check reads
+      # the index, and the file leaves it again before anything else runs.
+      - name: Prove the conflict marker check can fail
+        run: |
+          set -eu
+          printf '# proof\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> other\n' > conflict-proof.md
+          git add conflict-proof.md
+          trap 'git rm -q --cached conflict-proof.md; rm -f conflict-proof.md' EXIT
+          if sh scripts/check-conflict-markers.sh; then
+            echo "::error::The conflict marker check passed with a conflicted file staged. The gate is not working."
+            exit 1
+          fi
+          echo "Conflicted file was caught. The check is live."
+
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -65,8 +104,17 @@ jobs:
       - name: Run staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
+      # Pinned, like every other tool here. The vulnerability database is fetched at run
+      # time, so pinning the binary does not pin what it knows about: the weekly schedule
+      # above still surfaces new CVEs. What it does prevent is a new release of the
+      # scanner itself turning every build red without anything here having changed.
+      #
+      # The pin has a floor as well as a ceiling: govulncheck analyses with the toolchain
+      # it was built with, so a version older than this module's `go` directive refuses
+      # every package with "requires newer Go version". Raising the directive means
+      # raising this too.
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
       - name: Test install.sh checksum verification
         run: sh scripts/install_test.sh
@@ -78,11 +126,63 @@ jobs:
           version: "~> v2"
           args: build --snapshot --single-target --clean
 
+      # Resolves dependencies for both cgo settings and merges them. Releases are built
+      # with CGO_ENABLED=0 while this runner defaults to cgo on, and internal/index has
+      # real dependencies behind //go:build tags, so asking once attributes one build and
+      # silently omits the other's.
       - name: Check NOTICE is current
+        run: sh scripts/check-notice.sh
+
+  security:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # gitleaks scans history. The default depth of 1 gives it one commit, which
+          # means a credential committed last month is invisible and the scan reports
+          # clean having looked at almost nothing.
+          fetch-depth: 0
+
+      # The hosted Action requires a paid licence for an organization and silently
+      # reports success without one. The binary is MIT licensed, needs no licence, and
+      # works identically on a fork, where no secret of ours is available anyway.
+      - name: Install gitleaks
         run: |
-          go mod download
-          python3 scripts/gen_notice.py > /tmp/NOTICE.generated
-          if ! diff -u NOTICE /tmp/NOTICE.generated; then
-            echo "NOTICE is stale. Run: python3 scripts/gen_notice.py > NOTICE"
+          set -eu
+          VERSION=8.28.0
+          SHA256=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+          curl -sSL --fail -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          # Verified before extraction, not after: this job would otherwise extract and
+          # run an unauthenticated binary. Checksum taken from the release's checksums.txt.
+          echo "${SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Secret scan
+        run: gitleaks git . --redact --verbose
+
+      # A secret scan that has never caught anything and a broken one look the same from
+      # here. Plant a credential shape the rule set is known to match and confirm the
+      # scanner refuses it. The shape is checked rather than assumed: several obvious
+      # fakes, including an example AWS key, are allowlisted by the default rules and
+      # would have made this proof prove nothing.
+      - name: Prove the secret scan can fail
+        run: |
+          set -eu
+          mkdir -p /tmp/leakproof
+          # Assembled at run time from pieces rather than written out whole. A complete
+          # credential-shaped literal committed here is itself a secret as far as any
+          # scanner is concerned: GitHub's push protection rejected exactly that, and it
+          # was right to — the string would then sit in this repository's history forever,
+          # tripping every scan that looks at it. Neither half matches on its own; the
+          # file gitleaks reads contains the whole thing.
+          prefix=xoxb
+          printf '%s-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx\n' "$prefix" \
+            > /tmp/leakproof/planted.txt
+          if gitleaks dir /tmp/leakproof --redact --no-banner; then
+            echo "::error::The secret scan passed with a planted credential. The gate is not working."
             exit 1
           fi
+          echo "Planted credential was caught. The scan is live."

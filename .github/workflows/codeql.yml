@@ -1,0 +1,62 @@
+name: CodeQL
+
+# Static analysis for code-level vulnerabilities — command injection, path traversal,
+# unsafe deserialization — that the other scanners here do not look for: gitleaks finds
+# committed secrets, govulncheck finds known-vulnerable dependencies, and neither reads
+# this project's own logic.
+#
+# That logic is the part worth scanning. Baryo runs shell commands, applies diffs, writes
+# files and resolves paths on behalf of a model, so an injection or traversal bug is
+# reachable by anything that can influence a model's output.
+#
+# Findings land in the repository's Security tab and as annotations on the diff.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "design/**"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["**/*.md", "design/**"]
+  schedule:
+    - cron: "27 3 * * 1" # weekly, so drift is caught without a push
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload results to the Security tab
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          # Every workflow in .github/ is executable configuration, and one of them runs
+          # with repository credentials. CodeQL's actions pack reads them for the usual
+          # mistakes: an unpinned action, a script interpolating untrusted input.
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended rather than the default pack: the default set is tuned to
+          # keep noise low on any repository, and this one's whole job is executing
+          # untrusted instructions against a filesystem.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
+        with:
+          category: "/language:${{ matrix.language }}"

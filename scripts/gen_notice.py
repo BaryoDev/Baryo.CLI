@@ -31,22 +31,38 @@ LICENCE_NAMES = [
 
 
 def modules():
-    """Return (path, version, dir) for every module linked into the binary."""
-    out = subprocess.run(
-        ["go", "list", "-deps", "-f",
-         "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}", "."],
-        capture_output=True, text=True, check=True).stdout
+    """Return (path, version, dir) for every module linked into any build we ship.
+
+    Both cgo settings are resolved and the results merged. `go list -deps` answers for
+    one build configuration, and this project has real dependencies behind //go:build
+    tags: internal/index parses with cgo tree-sitter under cgo and a pure-Go parser
+    without it. Releases are built with CGO_ENABLED=0 (.goreleaser.yaml), while a
+    developer machine with a C toolchain defaults to cgo on, so asking once attributes
+    whichever build happened to be local and silently omits the other. That is an
+    attribution gap no other gate can see, because the generated file and the committed
+    file agree.
+
+    The union is deliberately wider than any single binary: a module named here may be
+    absent from one build. Over-attributing is harmless, omitting is the licence
+    problem.
+    """
     seen = {}
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        path, version, directory = parts
-        if path == "github.com/arnelirobles/baryo-cli" or not directory:
-            continue
-        seen[path] = (version, directory)
+    for cgo in ("0", "1"):
+        env = dict(os.environ, CGO_ENABLED=cgo)
+        out = subprocess.run(
+            ["go", "list", "-deps", "-f",
+             "{{with .Module}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}", "."],
+            capture_output=True, text=True, check=True, env=env).stdout
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            path, version, directory = parts
+            if path == "github.com/arnelirobles/baryo-cli" or not directory:
+                continue
+            seen[path] = (version, directory)
     return sorted((p, v, d) for p, (v, d) in seen.items())
 
 

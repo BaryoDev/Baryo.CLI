@@ -1481,6 +1481,15 @@ ssh_tunnel:
   # ssh_port: 22
 ```
 
+## Contributing
+
+Contributions arrive as pull requests from forks — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the fork workflow, and run
+`sh scripts/ci-local.sh` before pushing to get the same answer CI will give you.
+
+Security reports go through a [private advisory](https://github.com/BaryoDev/Baryo.CLI/security/advisories/new),
+not a public issue: [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT License](LICENSE)

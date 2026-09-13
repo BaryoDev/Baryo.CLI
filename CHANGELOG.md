@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`scripts/ci-local.sh` runs the gates CI runs.** Every contribution arrives from a fork, and a fork's pull request cannot see anything not already merged here, so finding out that gofmt objects used to cost a push and a review round trip. One command now gives the same answer locally, keeps going after a failure, and prints the full list at the end.
+- **CI runs on every branch except `main`.** A contributor working in a fork gets the full pipeline on their own pushes instead of first learning what CI thinks after opening a pull request. `main` is covered by the pull request that merges into it, by the release workflow that calls this one, and by the weekly schedule.
+- **Secret scan (gitleaks) over full history**, with a step that plants a credential and fails the build if the scan does not catch it. The scanner is the checksum-verified MIT binary rather than the licensed Action, which reports success without a licence and works the same on a fork, where no repository secret is available.
+- **Conflict marker gate**, plus a step proving it can fail. Nothing compiles Markdown, so a CHANGELOG committed mid-merge passed every other gate.
+- **CodeQL** for Go and for the workflows themselves, on `security-extended`.
+- **Dependabot** for Go modules and for GitHub Actions. Actions are pinned by commit SHA here, which is correct and also means a pin goes stale silently.
+- `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CODEOWNERS`, a pull request template, and issue forms.
+- Design: [plugin architecture](design/specs/2026-09-13-baryo-plugin-architecture.md) — five extension points, plugins as subprocesses rather than Go `plugin` builds, project plugins behind the existing `--trust-project` gate, and history export to ctx as the first case.
+
+### Fixed
+
+- **`NOTICE` is generated from both cgo settings, not just the local one.** `go list -deps` answers for one build configuration, and `internal/index` has real dependencies behind `//go:build` tags. A machine with a C toolchain defaults to cgo on, so the generator attributed the cgo build and silently omitted whatever only the `CGO_ENABLED=0` build links — which is the build `goreleaser` publishes. Neither the generator nor the CI check could see the gap, because both agreed with each other.
+- `govulncheck` is pinned (`v1.8.0`) like every other tool in the pipeline. The pin has a floor as well as a ceiling: govulncheck analyses with the toolchain it was built with, so a version older than this module's `go` directive refuses every package.
+
 ## v0.13.0 — Lossless compaction (2026-07-13)
 
 Context compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation.
