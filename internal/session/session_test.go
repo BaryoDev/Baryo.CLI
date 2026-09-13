@@ -139,3 +139,145 @@ func TestCleanOldRemovesArchive(t *testing.T) {
 		t.Errorf("archive file still exists after CleanOld")
 	}
 }
+
+// An archived record carries when it was archived and where it sits in the sequence.
+// Without both, an exporter cannot say when anything happened and cannot order records
+// once a corrupt line has been skipped.
+func TestArchiveRecordsCarryTimestampAndSequence(t *testing.T) {
+	setTestHome(t)
+	s, err := New("test-model", "test:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now().UTC().Add(-time.Second)
+	if err := s.Archive([]llm.ChatMessage{
+		llm.NewChatMessage("user", "first"),
+		llm.NewChatMessage("assistant", "second"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A second call must continue the sequence, not restart it.
+	if err := s.Archive([]llm.ChatMessage{llm.NewChatMessage("user", "third")}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := LoadArchiveRecords(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	after := time.Now().UTC().Add(time.Second)
+	for i, rec := range records {
+		if rec.Seq != i {
+			t.Errorf("record %d has Seq %d, want %d", i, rec.Seq, i)
+		}
+		if rec.At.Before(before) || rec.At.After(after) {
+			t.Errorf("record %d timestamp %v is outside the window %v..%v", i, rec.At, before, after)
+		}
+	}
+	if got := *records[2].Msg.Content; got != "third" {
+		t.Errorf("third record content = %q", got)
+	}
+}
+
+// Sequence numbering has to survive the process, because a session can be resumed. It is
+// counted from the file for that reason; a counter on the Session would restart at zero
+// and silently produce two records claiming the same position.
+func TestArchiveSequenceSurvivesReload(t *testing.T) {
+	setTestHome(t)
+	s, err := New("test-model", "test:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Archive([]llm.ChatMessage{llm.NewChatMessage("user", "before")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reloaded.Archive([]llm.ChatMessage{llm.NewChatMessage("user", "after")}); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := LoadArchiveRecords(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	if records[0].Seq != 0 || records[1].Seq != 1 {
+		t.Errorf("sequence restarted across reload: got %d then %d", records[0].Seq, records[1].Seq)
+	}
+}
+
+// Archives written before the envelope existed hold bare llm.ChatMessage objects. They
+// must still read back, still be searchable, and must not be given an invented timestamp.
+func TestLoadArchiveReadsPreEnvelopeLines(t *testing.T) {
+	home := setTestHome(t)
+	s, err := New("test-model", "test:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly what the old Archive wrote: one bare message per line, no envelope.
+	legacy := llm.NewChatMessage("user", "the widget used to misbehave")
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, ".baryo", "sessions")
+	path := filepath.Join(dir, s.ID+".archive.jsonl")
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := LoadArchiveRecords(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records from a legacy archive, want 1", len(records))
+	}
+	if got := *records[0].Msg.Content; got != "the widget used to misbehave" {
+		t.Errorf("legacy content = %q", got)
+	}
+	if !records[0].At.IsZero() {
+		t.Errorf("legacy record got timestamp %v, want the zero time rather than an invented one", records[0].At)
+	}
+
+	// Still searchable, which is what the archive is read for today.
+	results, err := Search("misbehave")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search over a legacy archive returned %d results, want 1", len(results))
+	}
+
+	// And a new record appended after legacy lines continues past them.
+	if err := s.Archive([]llm.ChatMessage{llm.NewChatMessage("user", "new")}); err != nil {
+		t.Fatal(err)
+	}
+	records, err = LoadArchiveRecords(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records after appending, want 2", len(records))
+	}
+	if records[1].Seq != 1 {
+		t.Errorf("record appended after a legacy line has Seq %d, want 1", records[1].Seq)
+	}
+}
