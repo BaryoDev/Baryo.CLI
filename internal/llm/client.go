@@ -309,9 +309,8 @@ func StreamChat(ctx context.Context, ep Endpoint, model string, messages []ChatM
 			if !ok {
 				break
 			}
-			if res.Usage != nil {
-				lastUsage = res.Usage
-			}
+			// A continuation is another billed request, so add it to the total.
+			lastUsage = addUsage(lastUsage, res.Usage)
 			if res.FinishReason != "length" {
 				break
 			}
