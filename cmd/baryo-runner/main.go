@@ -23,7 +23,7 @@ func main() {
 		tasksPath   = flag.String("tasks", "tasks.json", "path to tasks file (.json or .jsonl)")
 		baryoBin    = flag.String("baryo", "baryo", "path to baryo binary")
 		localModel  = flag.String("local-model", "qwen2.5-coder:7b", "local model name for Arms A & B")
-		cloudModel  = flag.String("cloud-model", "claude-3-7-sonnet-latest", "cloud model name for Arm C")
+		cloudModel  = flag.String("cloud-model", "", "cloud model name for Arm C, required when Arm C runs (e.g. claude-sonnet-5)")
 		recipesDir  = flag.String("recipes", "recipes", "directory containing <task_id>.md recipes")
 		tracesDir   = flag.String("traces", "traces", "directory to write per-run trace files")
 		resultsPath = flag.String("results", "results.jsonl", "path to results file")
@@ -49,6 +49,15 @@ func main() {
 		trimmed := strings.TrimSpace(strings.ToUpper(a))
 		if trimmed != "" {
 			arms = append(arms, trimmed)
+		}
+	}
+
+	// Arm C is the ceiling the other arms are measured against, so its model is
+	// a deliberate choice. A default would quietly age into a model nobody picked.
+	for _, a := range arms {
+		if a == bench.ArmC && strings.TrimSpace(*cloudModel) == "" {
+			fmt.Fprintln(os.Stderr, "Error: -cloud-model is required when Arm C runs; pass one or drop C from -arms")
+			os.Exit(2)
 		}
 	}
 
