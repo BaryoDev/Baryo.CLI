@@ -118,8 +118,8 @@ func runPrintText(opts PrintOptions) int {
 	messages := buildMessages(opts)
 
 	if !opts.EnableTools {
-		code := streamSimple(ctx, opts, messages)
-		rec.EndTask("unknown", 0, 0, time.Since(start))
+		code, usage := streamSimple(ctx, opts, messages)
+		endTask(rec, usage, start)
 		return code
 	}
 
@@ -151,7 +151,11 @@ func runPrintText(opts PrintOptions) int {
 
 	ch := llm.StreamChatWithToolsN(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params, toolDefs, executor, maxRounds)
 
+	var usage *llm.UsageStats
 	for evt := range ch {
+		if evt.Usage != nil {
+			usage = evt.Usage
+		}
 		if evt.ToolsDisabled {
 			fmt.Fprintf(os.Stderr, "warning: tools not supported by this model — responding without tools\n")
 			continue
@@ -176,7 +180,7 @@ func runPrintText(opts PrintOptions) int {
 	}
 
 	fmt.Println()
-	rec.EndTask("unknown", 0, 0, time.Since(start))
+	endTask(rec, usage, start)
 	return exitForContext(ctx)
 }
 
@@ -266,6 +270,7 @@ func runPrintJSON(opts PrintOptions) int {
 				}
 			}
 		}
+		endTask(rec, usageOf(out.Usage), start)
 		return finishJSON(ctx, out)
 	}
 
@@ -345,7 +350,7 @@ func runPrintJSON(opts PrintOptions) int {
 		}
 	}
 
-	rec.EndTask("unknown", 0, 0, time.Since(start))
+	endTask(rec, usageOf(out.Usage), start)
 	return finishJSON(ctx, out)
 }
 
@@ -372,19 +377,40 @@ func buildMessages(opts PrintOptions) []llm.ChatMessage {
 }
 
 // streamSimple streams a simple chat without tools (backward compatible path).
-func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMessage) int {
+func streamSimple(ctx context.Context, opts PrintOptions, messages []llm.ChatMessage) (int, *llm.UsageStats) {
+	var usage *llm.UsageStats
 	ch := llm.StreamChat(ctx, opts.Endpoint, opts.Model.Tag, messages, opts.Params)
 	for evt := range ch {
 		if evt.Error != "" {
 			fmt.Fprintf(os.Stderr, "error: %s\n", evt.Error)
-			return 1
+			return 1, usage
 		}
 		if evt.Token != "" {
 			fmt.Print(evt.Token)
 		}
+		if evt.Usage != nil {
+			usage = evt.Usage
+		}
 	}
 	fmt.Println()
-	return exitForContext(ctx)
+	return exitForContext(ctx), usage
+}
+
+func usageOf(u *jsonUsage) *llm.UsageStats {
+	if u == nil {
+		return nil
+	}
+	return &llm.UsageStats{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens}
+}
+
+// endTask records the task_end trace line with the tokens the provider
+// reported. A provider that reports none leaves both counts at zero.
+func endTask(rec *trace.Recorder, usage *llm.UsageStats, start time.Time) {
+	var prompt, completion int
+	if usage != nil {
+		prompt, completion = usage.PromptTokens, usage.CompletionTokens
+	}
+	rec.EndTask("unknown", prompt, completion, time.Since(start))
 }
 
 // makeHeadlessExecutor returns a tool executor for headless mode.

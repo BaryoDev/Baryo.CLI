@@ -147,8 +147,8 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 							return
 						}
 					}
-					if res, ok := <-retryResCh; ok && res.Usage != nil {
-						lastUsage = res.Usage
+					if res, ok := <-retryResCh; ok {
+						lastUsage = addUsage(lastUsage, res.Usage)
 					}
 					out <- StreamEvent{Done: true, Usage: lastUsage}
 					return
@@ -171,10 +171,9 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 				return
 			}
 
-			// Track usage from each round.
-			if res.Usage != nil {
-				lastUsage = res.Usage
-			}
+			// Each round is a separate request billed for its whole prompt, so the
+			// usage on Done is the sum across rounds, not the last round alone.
+			lastUsage = addUsage(lastUsage, res.Usage)
 
 			logger.Debug("tool loop round complete", "finish_reason", res.FinishReason, "tool_calls", len(res.ToolCalls), "content_len", len(contentBuf))
 
@@ -294,4 +293,21 @@ func StreamChatWithToolsN(ctx context.Context, ep Endpoint, model string, messag
 	}()
 
 	return out
+}
+
+// addUsage returns total plus u. Either may be nil; the result is nil only when
+// both are, so a provider that never reports usage still reports none.
+func addUsage(total, u *UsageStats) *UsageStats {
+	if u == nil {
+		return total
+	}
+	if total == nil {
+		sum := *u
+		return &sum
+	}
+	return &UsageStats{
+		PromptTokens:     total.PromptTokens + u.PromptTokens,
+		CompletionTokens: total.CompletionTokens + u.CompletionTokens,
+		TotalTokens:      total.TotalTokens + u.TotalTokens,
+	}
 }
