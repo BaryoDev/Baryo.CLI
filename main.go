@@ -72,6 +72,13 @@ func main() {
 		}
 		fmt.Print(script)
 		return
+	case cli.ModePlugins:
+		// A project plugin ships an executable this process would run, so it gets the same
+		// gate as a project's config and skills, and never prompts: listing what is
+		// installed must not be the thing that asks for trust.
+		os.Exit(cli.RunPlugins(flags, flags.TrustProject || config.IsProjectTrusted(".")))
+	case cli.ModeExport:
+		os.Exit(cli.RunExport(flags, flags.TrustProject || config.IsProjectTrusted(".")))
 	}
 
 	// Create git worktree if requested

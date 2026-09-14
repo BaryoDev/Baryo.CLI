@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Go modules. Versions live in go.mod; go.sum is updated with them.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # Two pull requests per ecosystem, never one per module: routine bumps in one,
+      # majors in another. Majors are kept separate because they are the ones that need
+      # reading, not because they need to arrive one at a time.
+      go:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      go-major:
+        patterns: ["*"]
+        update-types: ["major"]
+
+  # Actions are pinned by commit SHA in this repository, which is the right default and
+  # also means a pin goes stale silently: nothing fails when an action has a security
+  # release, because the old SHA keeps working. Dependabot is what notices.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]

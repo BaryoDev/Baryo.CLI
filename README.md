@@ -1480,6 +1480,84 @@ ssh_tunnel:
   # ssh_port: 22
 ```
 
+## Exporting history
+
+Baryo keeps more than the conversation you can see. When context is compacted, the
+messages it replaces are appended to `~/.baryo/sessions/<id>.archive.jsonl` rather than
+discarded, and `/sessions search` covers them — so the decisions and dead ends a summary
+drops are still on disk. `baryo export` writes that history out in a portable form:
+
+```sh
+baryo export --format baryo-jsonl                 # everything, to ~/.baryo/exports/
+baryo export --format baryo-jsonl --since 2026-09-01
+baryo export --format baryo-jsonl --session a1b2c3d4 --out ./history
+```
+
+The built-in `baryo-jsonl` format is one self-describing JSONL file: a manifest record, a
+record per session, then one event per message — archived messages first, then the ones
+still live in the conversation. Tool calls and their results are preserved and labelled,
+because that is precisely what a summary loses.
+
+On time, the format says only what it knows. Nothing in Baryo records when a message was
+sent, so no event carries an `occurred_at`. An archived message carries `archived_at` — the
+moment compaction wrote it away, an upper bound — and every event declares `time_fidelity`
+(`archived_upper_bound` or `unknown`) so a consumer maps it deliberately instead of
+assuming. Archives written before v0.14 have no timestamp at all, and the export reports
+those in a warning rather than inventing one.
+
+## Plugins
+
+A plugin is a directory with a `plugin.yaml` and an executable. Baryo runs it as a separate
+process and talks to it in JSON over stdin and stdout, so a plugin can be written in any
+language and does not have to be built against this binary.
+
+```
+~/.baryo/plugins/<name>/plugin.yaml     # yours, always loaded
+.baryo/plugins/<name>/plugin.yaml       # the project's, loaded only with --trust-project
+```
+
+```yaml
+name: ctx-history
+version: 0.1.0
+description: Export Baryo sessions to ctx-history-jsonl-v2.
+provides:
+  - kind: exporter
+    id: ctx-history-jsonl-v2
+    command: ./export.sh        # must be a file inside the plugin directory
+permissions:
+  sessions: read
+  network: none
+```
+
+```sh
+baryo plugins                        # what is installed
+baryo plugins inspect ctx-history    # what it can do, before you trust it
+baryo export --format ctx-history-jsonl-v2
+```
+
+Two rules worth knowing:
+
+- **A plugin can only run a file it ships.** An absolute path, a path climbing out of the
+  plugin directory, or a symlink pointing out of it is refused. Reviewing a plugin means
+  reviewing that one directory.
+- **A project's plugins need `--trust-project`.** They arrive with a checkout, from whoever
+  wrote the repository, so they get the same gate as a project's config, skills and hooks.
+  `baryo plugins` tells you they exist without loading them.
+
+`permissions` is declared and displayed, not yet enforced: a plugin currently runs with the
+same access as Baryo itself. Today `exporter` is the only implemented capability kind;
+`tool`, `hook`, `skill` and `provider` are reserved. The design is in
+[`design/specs/2026-09-13-baryo-plugin-architecture.md`](design/specs/2026-09-13-baryo-plugin-architecture.md).
+
+## Contributing
+
+Contributions arrive as pull requests from forks — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the fork workflow, and run
+`sh scripts/ci-local.sh` before pushing to get the same answer CI will give you.
+
+Security reports go through a [private advisory](https://github.com/BaryoDev/Baryo.CLI/security/advisories/new),
+not a public issue: [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT License](LICENSE)

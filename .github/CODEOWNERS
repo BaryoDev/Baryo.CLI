@@ -1,0 +1,38 @@
+# Every path here requires review from the listed owner before it can merge.
+# Enforced by branch protection: "Require review from Code Owners" on main.
+#
+# Contributions arrive from forks, so in practice this means nothing merges without the
+# maintainer's approval. arnelirobles holds a bypass allowance, so it does not block the
+# maintainer's own pull requests.
+
+# Default: everything.
+*                               @arnelirobles
+
+# The rest is redundant while the line above exists. It is kept so that if the default is
+# ever narrowed, the paths where a mistake is most expensive keep an explicit owner rather
+# than silently losing one.
+
+# CI, releases, and anything that runs with repository credentials or publishes artifacts.
+/.github/workflows/             @arnelirobles
+/scripts/                       @arnelirobles
+/.goreleaser.yaml               @arnelirobles
+/install.sh                     @arnelirobles
+/HomebrewFormula/               @arnelirobles
+/ScoopBucket/                   @arnelirobles
+
+# Attribution is a licence obligation, and the generator is build-tag sensitive.
+/NOTICE                         @arnelirobles
+/LICENSE                        @arnelirobles
+
+# The approval gate and the sandbox are the security boundary: a wrong change here runs
+# a destructive command the user never agreed to.
+/internal/tools/                @arnelirobles
+/internal/sandbox/              @arnelirobles
+
+# Project trust decides whether a cloned repository's own config, skills and hooks take
+# effect. A wrong change here executes a stranger's instructions.
+/internal/config/trust.go       @arnelirobles
+
+# Traces and sessions are written to disk and must never contain credentials.
+/internal/trace/                @arnelirobles
+/internal/session/              @arnelirobles
