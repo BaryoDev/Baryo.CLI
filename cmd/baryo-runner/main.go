@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,6 +49,11 @@ func main() {
 		if trimmed != "" {
 			arms = append(arms, trimmed)
 		}
+	}
+
+	if len(arms) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: -arms names no arms; use a list such as A,B,C")
+		os.Exit(2)
 	}
 
 	// Arm C is the ceiling the other arms are measured against, so its model is
@@ -101,22 +105,10 @@ func main() {
 }
 
 func runSummary(resultsPath string) {
-	data, err := os.ReadFile(resultsPath)
+	results, err := bench.LoadResults(resultsPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not read results file %s: %v\n", resultsPath, err)
-		return
-	}
-
-	var results []bench.Result
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		var r bench.Result
-		if err := json.Unmarshal([]byte(trimmed), &r); err == nil {
-			results = append(results, r)
-		}
+		fmt.Fprintf(os.Stderr, "Could not read results: %v\n", err)
+		os.Exit(1)
 	}
 
 	summary := bench.ComputeSummary(results)
