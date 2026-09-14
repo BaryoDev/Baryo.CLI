@@ -135,35 +135,56 @@ func NewRunner(cfg Config) (*Runner, error) {
 	return r, nil
 }
 
-// loadExistingResults reads existing results from ResultsFile to make runs idempotent.
-// Results with InfraFailure are excluded so they can be retried.
-func (r *Runner) loadExistingResults() error {
-	f, err := os.Open(r.cfg.ResultsFile)
-	if os.IsNotExist(err) {
-		return nil
-	}
+// ErrInfra marks a failure of the harness rather than of the model run, such as
+// a baryo binary that could not be started. Those results are retried, not scored.
+var ErrInfra = errors.New("infrastructure failure")
+
+// LoadResults reads a results file. A row that does not parse is an error naming
+// its line: skipping it would drop a run from the summary, or run it again and
+// append a duplicate.
+func LoadResults(path string) ([]Result, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
+	var results []Result
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		var res Result
 		if err := json.Unmarshal([]byte(line), &res); err != nil {
-			continue
+			return nil, fmt.Errorf("%s line %d: %w", path, lineNo, err)
 		}
+		results = append(results, res)
+	}
+	return results, scanner.Err()
+}
+
+// loadExistingResults reads existing results from ResultsFile to make runs idempotent.
+// Results with InfraFailure are excluded so they can be retried.
+func (r *Runner) loadExistingResults() error {
+	results, err := LoadResults(r.cfg.ResultsFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, res := range results {
 		if res.InfraFailure {
 			continue
 		}
-		key := fmt.Sprintf("%s:%s", res.TaskID, res.Arm)
-		r.completed[key] = true
+		r.completed[fmt.Sprintf("%s:%s", res.TaskID, res.Arm)] = true
 	}
-	return scanner.Err()
+	return nil
 }
 
 // LoadTasks reads tasks from a JSON or JSONL file.
@@ -320,6 +341,11 @@ func (r *Runner) runTaskArm(ctx context.Context, task Task, arm string) (Result,
 	res.RunExitCode = runExitCode
 	if runErr != nil {
 		res.RunError = runErr.Error()
+		if errors.Is(runErr, ErrInfra) {
+			res.InfraFailure = true
+			res.WallClockMS = time.Since(start).Milliseconds()
+			return res, runErr
+		}
 	}
 
 	// Parse token usage and wall clock from trace file if available
@@ -430,7 +456,7 @@ func (r *Runner) executeBaryo(ctx context.Context, worktree, prompt, model, trac
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode(), fmt.Errorf("baryo failed (exit %d): %s", exitErr.ExitCode(), strings.TrimSpace(string(output)))
 		}
-		return 1, fmt.Errorf("baryo execution error: %w", err)
+		return 1, fmt.Errorf("%w: baryo execution error: %v", ErrInfra, err)
 	}
 
 	return 0, nil
