@@ -1,0 +1,11 @@
+# Findings that are deliberate fixtures, not credentials.
+#
+# internal/trace redacts secret-shaped strings before writing a trace. Its test feeds
+# the redactor planted fakes and asserts they never reach the file, so the fake IS the
+# test — removing it would delete the only proof that redaction works.
+#
+# Entries are gitleaks fingerprints: one finding each, pinned to the commit and line
+# that introduced it. A real credential added anywhere, including elsewhere in this
+# same file, produces a different fingerprint and still fails the scan.
+8c3db8b02ca0cc3c4615bb3840659b5cc00c88bc:internal/trace/trace_test.go:curl-auth-header:93
+internal/trace/trace_test.go:curl-auth-header:93

@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose something Baryo should be able to do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: The situation you are in when you want this, not the feature itself. A proposal is much easier to judge, and to redirect, when the underlying problem is on the table.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Commands, flags, config, or UI as you imagine them. A rough sketch is fine.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shape
+    attributes:
+      label: Does this need to live in Baryo itself
+      description: Baryo is moving toward pluggable extension points — tools, hooks, skills, exporters. Something that can be a plugin ships sooner and is easier to maintain than something in the core.
+      options:
+        - It could be a plugin or a hook
+        - It needs to be in the core
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Existing flags, hooks, skills or other tools, and where they fell short.
+
+  - type: checkboxes
+    id: local
+    attributes:
+      label: Local-first
+      description: Baryo's promise is that a user's code can stay on their machine. A feature that requires a cloud service has to be optional and off by default.
+      options:
+        - label: This works with a local model, or is optional and off by default

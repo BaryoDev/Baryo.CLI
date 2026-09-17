@@ -86,6 +86,29 @@ func archivePath(dir, id string) string {
 	return filepath.Join(dir, id+".archive.jsonl")
 }
 
+// Dir returns the directory holding sessions, creating it if needed. Exported for
+// anything that has to hand the location to another process, such as a plugin exporter.
+func Dir() (string, error) { return sessionsDir() }
+
+// FilePath returns the session file for an id.
+func FilePath(id string) (string, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, id+".json"), nil
+}
+
+// ArchivePath returns the archive file for a session. The file may not exist: a session
+// that never compacted has nothing archived.
+func ArchivePath(id string) (string, error) {
+	dir, err := sessionsDir()
+	if err != nil {
+		return "", err
+	}
+	return archivePath(dir, id), nil
+}
+
 // TracePath returns the trajectory trace file for a session. It sits beside the
 // session so retention cleanup covers it.
 func TracePath(id string) (string, error) {
@@ -101,9 +124,38 @@ func tracePath(dir, id string) string {
 	return filepath.Join(dir, id+".trace.jsonl")
 }
 
+// maxArchiveLine caps one archive line. A tool result can be large, and the default
+// scanner limit of 64KB would silently stop reading at the first one that exceeds it.
+const maxArchiveLine = 4 * 1024 * 1024
+
+// ArchivedMessage is one archived message together with the metadata the archive adds:
+// when it was archived, and where it sits in the session's sequence.
+//
+// llm.ChatMessage carries neither, and anything reading history back needs both. An
+// exporter has to answer "when did this happen" — ctx's history format, for one,
+// requires a timestamp per event — and ordering cannot be recovered from file position
+// alone once a corrupt line is skipped.
+type ArchivedMessage struct {
+	At  time.Time       // when the message was archived, not when it was sent
+	Seq int             // position in this session's archive, from 0
+	Msg llm.ChatMessage // the message itself
+}
+
+// archiveRecord is the on-disk form of ArchivedMessage: one JSON object per line.
+type archiveRecord struct {
+	TS  time.Time       `json:"ts"`
+	Seq int             `json:"seq"`
+	Msg llm.ChatMessage `json:"msg"`
+}
+
 // Archive appends messages to the session's append-only archive file
-// (<id>.archive.jsonl, one JSON message per line). Compaction calls this
-// before discarding older messages so the full history survives on disk.
+// (<id>.archive.jsonl, one JSON record per line). Compaction calls this before
+// discarding older messages so the full history survives on disk.
+//
+// Each record is wrapped in an envelope carrying a timestamp and a sequence number.
+// Archives written before the envelope existed hold bare llm.ChatMessage objects, and
+// the readers below accept both shapes — a legacy line reports a zero time, which is
+// honest, where a guessed one would not be.
 func (s *Session) Archive(messages []llm.ChatMessage) error {
 	if len(messages) == 0 {
 		return nil
@@ -112,9 +164,14 @@ func (s *Session) Archive(messages []llm.ChatMessage) error {
 	if err != nil {
 		return err
 	}
+	seq, err := archiveCount(dir, s.ID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
 	var buf bytes.Buffer
-	for _, msg := range messages {
-		data, err := json.Marshal(msg)
+	for i, msg := range messages {
+		data, err := json.Marshal(archiveRecord{TS: now, Seq: seq + i, Msg: msg})
 		if err != nil {
 			return err
 		}
@@ -132,9 +189,61 @@ func (s *Session) Archive(messages []llm.ChatMessage) error {
 	return f.Close()
 }
 
-// LoadArchive reads all archived (compacted-away) messages for a session.
+// archiveCount returns how many records the archive already holds, which is the next
+// sequence number.
+//
+// Counted from the file rather than held on the Session, because a session can be
+// resumed in a new process and a sequence that silently restarts at zero is worse than
+// no sequence at all. Legacy lines have no stored seq and are still counted, so numbering
+// stays monotonic across the boundary.
+func archiveCount(dir, id string) (int, error) {
+	f, err := os.Open(archivePath(dir, id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+	n := 0
+	sc := newArchiveScanner(f)
+	for sc.Scan() {
+		if len(bytes.TrimSpace(sc.Bytes())) > 0 {
+			n++
+		}
+	}
+	return n, sc.Err()
+}
+
+// newArchiveScanner returns a scanner sized for archive lines.
+func newArchiveScanner(f *os.File) *bufio.Scanner {
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), maxArchiveLine)
+	return sc
+}
+
+// decodeArchiveLine reads either shape of archive line: the current envelope, or a bare
+// llm.ChatMessage from before the envelope existed.
+//
+// The two are told apart by where the role lands. An envelope decoded as a ChatMessage
+// has no Role, and a bare message decoded as an envelope has no Msg.Role, because
+// encoding/json ignores fields it was not given. Neither shape can be mistaken for the
+// other, so no version marker is needed in the file.
+func decodeArchiveLine(line []byte) (ArchivedMessage, bool) {
+	var rec archiveRecord
+	if err := json.Unmarshal(line, &rec); err == nil && rec.Msg.Role != "" {
+		return ArchivedMessage{At: rec.TS, Seq: rec.Seq, Msg: rec.Msg}, true
+	}
+	var msg llm.ChatMessage
+	if err := json.Unmarshal(line, &msg); err == nil && msg.Role != "" {
+		return ArchivedMessage{Msg: msg}, true
+	}
+	return ArchivedMessage{}, false
+}
+
+// LoadArchiveRecords reads a session's archive with its timestamps and sequence numbers.
 // Returns nil with no error if the session has no archive.
-func LoadArchive(id string) ([]llm.ChatMessage, error) {
+func LoadArchiveRecords(id string) ([]ArchivedMessage, error) {
 	dir, err := sessionsDir()
 	if err != nil {
 		return nil, err
@@ -147,17 +256,30 @@ func LoadArchive(id string) ([]llm.ChatMessage, error) {
 		return nil, err
 	}
 	defer f.Close()
-	var messages []llm.ChatMessage
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var records []ArchivedMessage
+	sc := newArchiveScanner(f)
 	for sc.Scan() {
-		var msg llm.ChatMessage
-		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+		rec, ok := decodeArchiveLine(sc.Bytes())
+		if !ok {
 			continue // skip corrupt lines rather than losing the rest
 		}
-		messages = append(messages, msg)
+		records = append(records, rec)
 	}
-	return messages, sc.Err()
+	return records, sc.Err()
+}
+
+// LoadArchive reads all archived (compacted-away) messages for a session.
+// Returns nil with no error if the session has no archive.
+func LoadArchive(id string) ([]llm.ChatMessage, error) {
+	records, err := LoadArchiveRecords(id)
+	if err != nil || len(records) == 0 {
+		return nil, err
+	}
+	messages := make([]llm.ChatMessage, 0, len(records))
+	for _, rec := range records {
+		messages = append(messages, rec.Msg)
+	}
+	return messages, nil
 }
 
 // archiveMatches reports whether any archived message content contains q
@@ -168,14 +290,13 @@ func archiveMatches(dir, id, q string) bool {
 		return false
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	sc := newArchiveScanner(f)
 	for sc.Scan() {
-		var msg llm.ChatMessage
-		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
+		rec, ok := decodeArchiveLine(sc.Bytes())
+		if !ok {
 			continue
 		}
-		if msg.Content != nil && strings.Contains(strings.ToLower(*msg.Content), q) {
+		if rec.Msg.Content != nil && strings.Contains(strings.ToLower(*rec.Msg.Content), q) {
 			return true
 		}
 	}

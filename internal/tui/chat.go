@@ -1166,6 +1166,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					// Keep only the search listing header (first ~500 chars) as context
 					content := *m.messages[idx].Content
 					if len(content) > 500 {
+						m.archiveAway([]llm.ChatMessage{m.messages[idx]}, "search compaction")
 						content = content[:500] + "\n... (full content summarized by assistant above)"
 					}
 					m.messages[idx] = llm.NewChatMessage("user", content)
@@ -1184,6 +1185,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if idx >= 0 && idx < len(m.messages) && m.messages[idx].Role == "user" && m.messages[idx].Content != nil {
 					content := *m.messages[idx].Content
 					if len(content) > 500 {
+						m.archiveAway([]llm.ChatMessage{m.messages[idx]}, "research compaction")
 						content = content[:500] + "\n... (full research context summarized by assistant above)"
 					}
 					m.messages[idx] = llm.NewChatMessage("user", content)
@@ -1213,6 +1215,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if idx >= 0 && idx < len(m.messages) && m.messages[idx].Role == "user" && m.messages[idx].Content != nil {
 					content := *m.messages[idx].Content
 					if len(content) > 500 {
+						m.archiveAway([]llm.ChatMessage{m.messages[idx]}, "strategy compaction")
 						content = content[:500] + "\n... (full strategy input summarized by assistant above)"
 					}
 					m.messages[idx] = llm.NewChatMessage("user", content)
@@ -1964,6 +1967,11 @@ func (m ChatModel) handleCommand(text string) (ChatModel, tea.Cmd) {
 		return m.handleUndo()
 
 	case "/clear":
+		// Archive before the session is swapped, so the records land on the session the
+		// messages belong to rather than the empty one replacing it. /clear means "start
+		// fresh", not "destroy what happened": the conversation stays searchable and the
+		// new session starts clean, which is the same bargain compaction already makes.
+		m.archiveAway(m.messages, "clear")
 		sess, _ := session.New(m.modelName, m.modelTag)
 		m.messages = nil
 		m.history = nil
@@ -3400,6 +3408,25 @@ func (m *ChatModel) saveSession() {
 	}
 	m.session.Messages = m.messages
 	_ = m.session.Save() // best-effort, don't interrupt chat on save error
+}
+
+// archiveAway preserves messages that are about to leave the conversation.
+//
+// Conversation compaction already does this, but it was the only path that did. The
+// post-summary compactions (search, research, strategy) each shrink a bulky raw-content
+// message in place, and /clear drops the whole list — in all four cases the original was
+// simply gone, which is exactly the evidence a later search or an exporter wants back.
+//
+// Best-effort on purpose: failing to archive is not a reason to refuse the compaction the
+// user is waiting on. why names the call site in the debug log, because an archive that
+// silently stops working is hard to notice from the outside.
+func (m *ChatModel) archiveAway(messages []llm.ChatMessage, why string) {
+	if m.session == nil || len(messages) == 0 {
+		return
+	}
+	if err := m.session.Archive(messages); err != nil {
+		logger.Debug("archive failed", "why", why, "error", err)
+	}
 }
 
 func (m ChatModel) handleInit() (ChatModel, tea.Cmd) {

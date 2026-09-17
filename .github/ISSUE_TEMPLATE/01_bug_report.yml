@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in Baryo does not work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here — use a
+        [private advisory](https://github.com/BaryoDev/Baryo.CLI/security/advisories/new) instead.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+      placeholder: |
+        I ran `baryo -p "..." --yolo` in a Go repository and ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows the problem. A repository it happens in helps a lot.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Baryo version
+      description: "`baryo --version`. If you built from source, the commit."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it
+      description: Released binaries are built with CGO_ENABLED=0, and the symbol extraction path differs between that and a source build with cgo. It changes which code your bug is in.
+      options:
+        - Released binary (install.sh, Homebrew, Scoop, or a GitHub release)
+        - Built from source
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15.1 arm64, Ubuntu 24.04 amd64, Windows 11 amd64
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model and endpoint
+      description: The model tag, and whether it is Docker Model Runner, another local endpoint, or a cloud provider.
+      placeholder: qwen2.5-coder:7b via Docker Model Runner
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `baryo doctor`
+      description: Paste it as-is. It reports endpoint reachability and whether this build can extract symbols.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output or logs
+      description: "`--debug` output if you have it. Please check it for API keys before pasting."
+      render: text

@@ -26,6 +26,8 @@ const (
 	ModeHelp
 	ModeDoctor
 	ModeCompletion
+	ModeExport
+	ModePlugins
 )
 
 // Config holds the parsed CLI flags and stdin data.
@@ -52,6 +54,14 @@ type Config struct {
 	Completion   string // completion subcommand shell type (zsh/bash/fish/powershell)
 	Worktree     bool   // --worktree flag
 	Sandbox      bool   // --sandbox flag (CLI override)
+	Export       bool   // export subcommand: write session history out
+	Plugins      bool   // plugins subcommand: list or inspect installed plugins
+	PluginsCmd   string // plugins subcommand argument ("", "list", "inspect")
+	PluginName   string // plugin to inspect
+	Format       string // --format flag: export format id
+	OutDir       string // --out flag: directory to export into
+	Since        string // --since flag: only sessions updated on or after this date
+	SessionID    string // --session flag: export one session
 	TrustProject bool   // --trust-project flag: apply this project's .baryo config
 	Timeout      string // --timeout flag: overall deadline for print mode (e.g. 5m)
 	TraceFile    string // --trace-file flag: write a trajectory trace here
@@ -104,6 +114,10 @@ func Parse() Config {
 	fs.StringVar(&cfg.TraceFile, "trace-file", "", "write a trajectory trace (tool calls, results, verification) to this path")
 	fs.StringVar(&cfg.Timeout, "timeout", "", "overall deadline for print mode (e.g. 90s, 5m)")
 	fs.BoolVar(&cfg.TrustProject, "trust-project", false, "apply this project's .baryo config and skills (asks interactively when omitted)")
+	fs.StringVar(&cfg.Format, "format", "", "export format id (use with the export subcommand)")
+	fs.StringVar(&cfg.OutDir, "out", "", "directory to export into (default ~/.baryo/exports/<format>)")
+	fs.StringVar(&cfg.Since, "since", "", "only export sessions updated on or after this date (YYYY-MM-DD)")
+	fs.StringVar(&cfg.SessionID, "session", "", "export only this session id")
 	fs.BoolVar(&cfg.ShowVer, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.ShowHelp, "help", false, "print usage and exit")
 
@@ -126,8 +140,26 @@ func Parse() Config {
 			} else {
 				args = append(args[:i], args[i+1:]...)
 			}
+		case "export":
+			cfg.Export = true
+			args = append(args[:i], args[i+1:]...)
+		case "plugins":
+			cfg.Plugins = true
+			// Consume the verb, and a plugin name after "inspect". Anything else is
+			// left in args so flag parsing reports it, rather than being ignored.
+			rest := args[i+1:]
+			consumed := 1
+			if len(rest) > 0 && (rest[0] == "list" || rest[0] == "inspect") {
+				cfg.PluginsCmd = rest[0]
+				consumed++
+				if cfg.PluginsCmd == "inspect" && len(rest) > 1 && !strings.HasPrefix(rest[1], "-") {
+					cfg.PluginName = rest[1]
+					consumed++
+				}
+			}
+			args = append(args[:i], args[i+consumed:]...)
 		}
-		if cfg.Doctor || cfg.Completion != "" {
+		if cfg.Doctor || cfg.Completion != "" || cfg.Export || cfg.Plugins {
 			break
 		}
 	}
@@ -183,6 +215,12 @@ func (c Config) Mode() Mode {
 	if c.Completion != "" {
 		return ModeCompletion
 	}
+	if c.Export {
+		return ModeExport
+	}
+	if c.Plugins {
+		return ModePlugins
+	}
 	if c.Prompt != "" || c.StdinData != "" || c.Strategy != "" {
 		return ModePrint
 	}
@@ -210,6 +248,8 @@ func PrintVersion() {
 func PrintHelp() {
 	fmt.Print(`Usage: baryo [flags]
        baryo doctor
+       baryo export --format <id>
+       baryo plugins [list|inspect <name>]
 
 A local AI chat CLI powered by Docker Model Runner.
 
@@ -239,6 +279,14 @@ Flags:
 Subcommands:
   doctor            Run full diagnostic check (Docker, Model Runner, models)
   completion <sh>   Generate shell completion script (zsh, bash, fish, powershell)
+  export            Write session history out in a portable format
+  plugins           List installed plugins, or inspect one before trusting it
+
+Export flags (use with the export subcommand):
+  --format <id>     Format to write. baryo-jsonl is built in; plugins add more
+  --out <dir>       Where to write (default ~/.baryo/exports/<format>)
+  --since <date>    Only sessions updated on or after this date (YYYY-MM-DD)
+  --session <id>    Export a single session
 
 TUI Commands:
   /clear            Start a fresh conversation
