@@ -57,18 +57,18 @@ jobs:
           - language: actions
             build-mode: none
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Kept even though the Go analysis is buildless: extraction still resolves modules
       # with the toolchain, and pinning it to go.mod keeps that resolution the same as every
       # other job here rather than whatever the runner image ships.
       - if: matrix.language == 'go'
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -88,6 +88,6 @@ jobs:
         run: go build ./...
 
       - name: Analyze
-        uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
         with:
           category: "/language:${{ matrix.language }}"
