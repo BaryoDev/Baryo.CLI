@@ -60,6 +60,13 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          # No cache here. go.mod pins `toolchain go1.26.6`, so setup-go unpacks that
+          # toolchain into the module cache and CodeQL's own extraction then unpacks it
+          # again over the top, which fails the whole job in Initialize CodeQL with
+          # "tar: ... Cannot open: File exists" before a single query runs. Every CodeQL
+          # run since 13 September died there. ci.yml keeps its cache; nothing extracts
+          # on top of it there.
+          cache: false
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
