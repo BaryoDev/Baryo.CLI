@@ -44,7 +44,13 @@ jobs:
           # depend on guessing a build. If it turns out to read fewer files than autobuild
           # did, `build-mode: manual` with an explicit `go build ./...` is the next step.
           - language: go
-            build-mode: none
+            # `none` until 13 September 2026, when CodeQL started rejecting it outright:
+            # "Go does not support the none build mode." Every run since has died in
+            # Initialize CodeQL, before a single query, so the scan has been off while
+            # showing a red check that reads like a finding. autobuild is still the wrong
+            # answer for the reason above, so this is the explicit build the note below
+            # already named as the next step.
+            build-mode: manual
           # Every workflow in .github/ is executable configuration, and one of them runs
           # with repository credentials. CodeQL's actions pack reads them for the usual
           # mistakes: an unpinned action, a script interpolating untrusted input.
@@ -70,6 +76,16 @@ jobs:
           # keep noise low on any repository, and this one's whole job is executing
           # untrusted instructions against a filesystem.
           queries: security-extended
+
+      # manual build mode means CodeQL observes this compile and extracts from it, so
+      # every file that actually builds is read. The cgo parser in internal/index sits
+      # behind a build tag; CGO_ENABLED=1 is the configuration the released binary uses,
+      # and it is the one worth analysing.
+      - name: Build for extraction
+        if: matrix.language == 'go'
+        env:
+          CGO_ENABLED: "1"
+        run: go build ./...
 
       - name: Analyze
         uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v3
