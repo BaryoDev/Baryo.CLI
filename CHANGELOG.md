@@ -16,7 +16,7 @@ Project config needs trust before it applies, MCP tools pass the permission gate
 - **A trace of what a task did.** The saved conversation kept the narration only: tool calls, their arguments and their results were run and thrown away. `internal/trace` appends them as JSON lines to `~/.baryo/sessions/<id>.trace.jsonl`, beside the session, with `task_start`, `tool_call`, `tool_result`, `diff`, `verify` and `task_end` records. Known provider keys and common token shapes are masked before writing. `trace: false` turns it off, and `--trace-file` names the file in print mode. (#22)
 - **`--timeout` gives print mode an overall deadline,** and `stream_idle_timeout` (default 5m) sets how long a silent stream is waited on. (#18)
 - **`baryo doctor` reports whether symbol extraction is available.** (#21)
-- **`install.sh` verifies the download against the release's `checksums.txt`** and takes an install directory. This catches a truncated or swapped archive. It is not a signature. (#14)
+- **`install.sh` verifies the download against the release's `checksums.txt`.** This catches a truncated or swapped archive. It is not a signature. (#14)
 - **`cmd/baryo-runner`, the three-arm benchmark runner for phase 1.** It runs each task with the local model alone, the local model with a recipe, and a cloud model, each in its own worktree, and reports whether the recipe arm beats the bare local arm by 25 points. Built from source, not in the release archives. (#48, by @teddyvj)
 
 - **`baryo export` writes session history out.** `--format baryo-jsonl` is built in: one self-describing JSONL file with a manifest record, a record per session, and one event per message — archived messages first, then the live conversation. Tool calls and their results are preserved and labelled, since those are exactly what a summary loses. `--since`, `--session` and `--out` scope it.
@@ -80,7 +80,7 @@ Project config needs trust before it applies, MCP tools pass the permission gate
 
 - **A cloned repository's config ran its code.** `./.baryo/config.yaml` was merged with no gate, and it can set `hooks` (run through `sh -c` on the first tool call), `mcp_servers` (started as processes), `ssh_tunnel`, `permission_mode` and `system_prompt`. An untrusted project's config is now ignored in full. Project `skills/` and `.baryo/skills` are `run_script` roots only when trusted. `BARYO.md` still loads, wrapped in a block that tells the model it is information and not authority, and it is skipped for an untrusted project in `auto` mode. (#16, closes #12)
 - **MCP tools skipped the permission gate.** Every executor sent MCP calls to the server before any permission check, so a third-party write or exec tool ran unprompted in `confirm` mode, and in the plan, ask, architect and review modes that call themselves read-only. (#16)
-- **An unrecognised `permission_mode` was treated as `auto`.** The value is now validated when config loads. (#16)
+- **An unrecognised `permission_mode` was treated as `auto`.** The value is checked when config loads, and an unknown one falls back to `confirm` with a warning. (#16)
 - **The permission gate answered "safe" for tool names it did not know.** Unknown names now count as destructive and are rejected before the gate. (#16)
 - **A symlink inside a skill directory let `run_script` run a file outside it.** Both the script path and the skill root are resolved before the check. (#18, closes #8)
 - **19 advisories in the Go standard library and `golang.org/x/text` are patched,** by moving the toolchain to 1.26.6 and `x/text` to 0.39.0. (#3)
