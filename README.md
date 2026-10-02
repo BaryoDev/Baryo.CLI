@@ -692,8 +692,9 @@ the directory:
 - **Interactively**, baryo asks once per directory and remembers the answer in
   `~/.baryo/trusted/`. Trust is keyed on the resolved path, so a symlinked
   checkout is not a second identity.
-- **Non-interactively** (`-p`, `doctor`), the project is untrusted unless you
-  pass `--trust-project`, which applies for that run only and records nothing.
+- **Non-interactively** (`-p`, `doctor`), nothing is asked. A directory you
+  already trusted stays trusted. Any other is untrusted unless you pass
+  `--trust-project`, which applies for that run only and records nothing.
 
 An untrusted project's config file is ignored in full rather than filtered key
 by key, and one line on stderr says so. `BARYO_*` environment variables are

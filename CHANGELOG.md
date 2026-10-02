@@ -8,7 +8,7 @@ Project config needs trust before it applies, MCP tools pass the permission gate
 
 ### Breaking
 
-- **A project's `.baryo/config.yaml` does nothing until the directory is trusted.** Interactive runs ask once and remember the answer under `~/.baryo/trusted/`. Anything non-interactive (`-p`, `doctor`) is untrusted unless it passes `--trust-project`, which applies to that run and records nothing. A script or CI job that relied on project config needs the flag. The reason is under Security. (#16)
+- **A project's `.baryo/config.yaml` does nothing until the directory is trusted.** Interactive runs ask once and remember the answer under `~/.baryo/trusted/`. A non-interactive run (`-p`, `doctor`) never asks: it uses the remembered answer if there is one, and otherwise ignores the project config unless it passes `--trust-project`, which applies to that run and records nothing. A script or CI job on a fresh checkout that relied on project config needs the flag. The reason is under Security. (#16)
 - **`permission_mode: confirm` now prompts for MCP tool calls.** They used to run with no prompt. A tool the server annotates with `readOnlyHint`, or a server marked `trust: read-only` in config, is not gated. (#16)
 
 ### Added
