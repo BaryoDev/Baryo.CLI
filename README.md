@@ -6,16 +6,12 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Project Status
 
-Current release: **v0.13.0**. Compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation.
-
-**Unreleased on `main`:** a project's own config and skills no longer apply until
+Current release: **v0.14.0**. A project's own config and skills no longer apply until
 you trust the directory, MCP tools pass the same permission gate as built-in
 destructive tools, a stalled provider no longer hangs forever, `run_script`
 resolves symlinks before checking its sandbox, the repo index no longer comes
-back empty in released binaries, ignore checks are batched (892ms to 14ms on a
-walk that runs every turn), the prompt prefix is stable so a local server can
-reuse its KV cache, tool calls and results are recorded to a trace, and the
-project is MIT licensed.
+back empty in released binaries, tool calls and results are recorded to a trace,
+and the project is MIT licensed.
 
 See [CHANGELOG.md](CHANGELOG.md) for released changes and [ROADMAP.md](ROADMAP.md)
 for what comes next.
