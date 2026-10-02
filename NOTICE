@@ -10,7 +10,7 @@ Third-party software
 This binary links the Go modules below. Regenerate this file with
 scripts/gen_notice.py after changing dependencies.
 
-  github.com/alecthomas/chroma/v2                                v2.14.0  (MIT)
+  github.com/alecthomas/chroma/v2                                v2.20.0  (MIT)
   github.com/atotto/clipboard                                    v0.1.4  (BSD-3-Clause)
   github.com/aws/aws-sdk-go-v2                                   v1.47.0  (Apache-2.0)
   github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream          v1.7.20  (Apache-2.0)
@@ -35,7 +35,7 @@ scripts/gen_notice.py after changing dependencies.
   github.com/charmbracelet/bubbles                               v1.0.0  (MIT)
   github.com/charmbracelet/bubbletea                             v1.3.10  (MIT)
   github.com/charmbracelet/colorprofile                          v0.4.1  (MIT)
-  github.com/charmbracelet/glamour                               v0.10.0  (MIT)
+  github.com/charmbracelet/glamour                               v1.0.0  (MIT)
   github.com/charmbracelet/lipgloss                              v1.1.1-0.20250404203927-76690c660834  (MIT)
   github.com/charmbracelet/x/ansi                                v0.11.6  (MIT)
   github.com/charmbracelet/x/cellbuf                             v0.0.15  (MIT)
@@ -44,7 +44,7 @@ scripts/gen_notice.py after changing dependencies.
   github.com/clipperhouse/displaywidth                           v0.9.0  (MIT)
   github.com/clipperhouse/stringish                              v0.1.1  (MIT)
   github.com/clipperhouse/uax29/v2                               v2.5.0  (MIT)
-  github.com/dlclark/regexp2                                     v1.11.0  (MIT)
+  github.com/dlclark/regexp2                                     v1.11.5  (MIT)
   github.com/erikgeiser/coninput                                 v0.0.0-20211004153227-1c3628e74d0f  (MIT)
   github.com/gorilla/css                                         v1.0.1  (BSD-3-Clause)
   github.com/lucasb-eyer/go-colorful                             v1.3.0  (MIT)
@@ -61,7 +61,7 @@ scripts/gen_notice.py after changing dependencies.
   github.com/smacker/go-tree-sitter                              v0.0.0-20240827094217-dd81d9e9be82  (MIT)
   github.com/xo/terminfo                                         v0.0.0-20220910002029-abceb7e1c41e  (MIT)
   github.com/yuin/goldmark                                       v1.7.17  (MIT)
-  github.com/yuin/goldmark-emoji                                 v1.0.5  (MIT)
+  github.com/yuin/goldmark-emoji                                 v1.0.6  (MIT)
   golang.org/x/net                                               v0.59.0  (BSD-3-Clause)
   golang.org/x/sys                                               v0.48.0  (BSD-3-Clause)
   golang.org/x/term                                              v0.46.0  (BSD-3-Clause)
@@ -617,7 +617,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ======================================================================
 MIT, covering:
-  github.com/alecthomas/chroma/v2 v2.14.0
+  github.com/alecthomas/chroma/v2 v2.20.0
 ======================================================================
 
 Copyright (C) 2017 Alec Thomas
@@ -778,7 +778,7 @@ SOFTWARE.
 
 ======================================================================
 MIT, covering:
-  github.com/charmbracelet/glamour v0.10.0
+  github.com/charmbracelet/glamour v1.0.0
 ======================================================================
 
 MIT License
@@ -917,7 +917,7 @@ SOFTWARE.
 
 ======================================================================
 MIT, covering:
-  github.com/dlclark/regexp2 v1.11.0
+  github.com/dlclark/regexp2 v1.11.5
 ======================================================================
 
 The MIT License (MIT)
@@ -1243,7 +1243,7 @@ SOFTWARE.
 
 ======================================================================
 MIT, covering:
-  github.com/yuin/goldmark-emoji v1.0.5
+  github.com/yuin/goldmark-emoji v1.0.6
 ======================================================================
 
 MIT License
