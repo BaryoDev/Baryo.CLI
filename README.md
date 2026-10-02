@@ -6,16 +6,12 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Project Status
 
-Current release: **v0.13.0**. Compaction no longer destroys history, and a failed compaction can no longer corrupt the conversation.
-
-**Unreleased on `main`:** a project's own config and skills no longer apply until
+Current release: **v0.14.0**. A project's own config and skills no longer apply until
 you trust the directory, MCP tools pass the same permission gate as built-in
 destructive tools, a stalled provider no longer hangs forever, `run_script`
 resolves symlinks before checking its sandbox, the repo index no longer comes
-back empty in released binaries, ignore checks are batched (892ms to 14ms on a
-walk that runs every turn), the prompt prefix is stable so a local server can
-reuse its KV cache, tool calls and results are recorded to a trace, and the
-project is MIT licensed.
+back empty in released binaries, tool calls and results are recorded to a trace,
+and the project is MIT licensed.
 
 See [CHANGELOG.md](CHANGELOG.md) for released changes and [ROADMAP.md](ROADMAP.md)
 for what comes next.
@@ -696,8 +692,9 @@ the directory:
 - **Interactively**, baryo asks once per directory and remembers the answer in
   `~/.baryo/trusted/`. Trust is keyed on the resolved path, so a symlinked
   checkout is not a second identity.
-- **Non-interactively** (`-p`, `doctor`), the project is untrusted unless you
-  pass `--trust-project`, which applies for that run only and records nothing.
+- **Non-interactively** (`-p`, `doctor`), nothing is asked. A directory you
+  already trusted stays trusted. Any other is untrusted unless you pass
+  `--trust-project`, which applies for that run only and records nothing.
 
 An untrusted project's config file is ignored in full rather than filtered key
 by key, and one line on stderr says so. `BARYO_*` environment variables are

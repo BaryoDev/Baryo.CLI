@@ -1,1 +1,0 @@
-- **The release config used properties goreleaser has deprecated.** `archives.format` and `format_overrides.format` are replaced by their plural forms. Nothing exercised the release config except a tag, which is the worst moment to discover it; `goreleaser check` now runs in CI.
