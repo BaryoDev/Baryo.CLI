@@ -113,7 +113,11 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 		}
 
 		// A symlink inside the tree must not lead outside the project.
-		if _, err := resolveWithinProject(cwd, absPath); err != nil {
+		realPath, err := resolveReadable(cwd, absPath)
+		if err != nil {
+			continue
+		}
+		if realPath != absPath && ignore.IsIgnored(ctx, realPath) {
 			continue
 		}
 		// Return paths relative to cwd.

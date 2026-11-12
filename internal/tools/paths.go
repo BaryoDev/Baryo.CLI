@@ -19,23 +19,39 @@ func resolveWithinProject(cwd, path string) (string, error) {
 		absPath = filepath.Join(cwd, absPath)
 	}
 	absPath = filepath.Clean(absPath)
+	abs, _, err := resolveReal(cwd, absPath)
+	return abs, err
+}
 
+// resolveReadable is resolveWithinProject for read tools. It returns the fully
+// resolved real path, which the caller must open, so a link swapped in after
+// the check cannot redirect the read.
+func resolveReadable(cwd, path string) (real string, err error) {
+	absPath := path
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(cwd, absPath)
+	}
+	_, real, err = resolveReal(cwd, filepath.Clean(absPath))
+	return real, err
+}
+
+func resolveReal(cwd, absPath string) (abs, real string, err error) {
 	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
-		return "", fmt.Errorf("path is outside the project directory")
+		return "", "", fmt.Errorf("path is outside the project directory")
 	}
 
 	resolved, err := resolveExistingPrefix(absPath)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve path: %v", err)
+		return "", "", fmt.Errorf("cannot resolve path: %v", err)
 	}
 	resolvedCwd, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		resolvedCwd = cwd
 	}
 	if !strings.HasPrefix(resolved, resolvedCwd+string(filepath.Separator)) && resolved != resolvedCwd {
-		return "", fmt.Errorf("path resolves outside the project directory")
+		return "", "", fmt.Errorf("path resolves outside the project directory")
 	}
-	return absPath, nil
+	return absPath, resolved, nil
 }
 
 // resolveExistingPrefix evaluates symlinks on the deepest existing ancestor of

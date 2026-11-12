@@ -111,3 +111,45 @@ func TestGlobDoesNotFollowSymlinksOutside(t *testing.T) {
 		t.Errorf("glob with a path through a symlink outside must be refused, got %q", res.Content)
 	}
 }
+
+// resolveReadable must hand back the real path, so the caller opens what was
+// checked rather than a name that can be re-pointed afterwards.
+func TestResolveReadableReturnsRealPath(t *testing.T) {
+	symlinkProject(t)
+	cwd, _ := os.Getwd()
+	if err := os.Symlink("real.txt", "alias.txt"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveReadable(cwd, "alias.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(cwd, "real.txt"))
+	if got != want {
+		t.Errorf("resolveReadable = %q, want the real path %q", got, want)
+	}
+}
+
+// A link inside the project to an ignored file such as .env must not be a way
+// around the ignore rules.
+func TestSymlinkToIgnoredFileIsIgnored(t *testing.T) {
+	symlinkProject(t)
+	if err := os.WriteFile(".env", []byte("API_TOKEN=TOPSECRET-ENV\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", "notes2.txt"); err != nil {
+		t.Fatal(err)
+	}
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes2.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-ENV") {
+		t.Errorf("read_file through a link to .env must be refused, got %q", res.Content)
+	}
+	res = executeGrep(context.Background(), argsJSON(t, map[string]any{"pattern": "TOPSECRET-ENV", "glob": "*.txt"}))
+	if strings.Contains(res.Content, "TOPSECRET-ENV") || strings.Contains(res.Content, "notes2.txt") {
+		t.Errorf("grep leaked .env through a link: %q", res.Content)
+	}
+	res = executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "*.txt"}))
+	if strings.Contains(res.Content, "notes2.txt") {
+		t.Errorf("glob listed a link to .env: %q", res.Content)
+	}
+}

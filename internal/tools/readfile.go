@@ -78,18 +78,25 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: err.Error(), IsError: true}
 	}
 
-	// Check .baryoignore + .gitignore.
-	if ignore.IsIgnored(ctx, absPath) {
+	// Open the resolved path, not the name that was checked.
+	realPath, err := resolveReadable(cwd, args.Path)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
+	}
+
+	// Check .baryoignore + .gitignore on the name and on where it really
+	// points, so a link to .env is not a way around the ignore rules.
+	if ignore.IsIgnored(ctx, absPath) || (realPath != absPath && ignore.IsIgnored(ctx, realPath)) {
 		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
 	}
 
 	// Refuse very large files before reading them into memory.
-	if fi, err := os.Stat(absPath); err == nil && fi.Size() > maxReadBytes {
+	if fi, err := os.Stat(realPath); err == nil && fi.Size() > maxReadBytes {
 		return Result{Content: fmt.Sprintf("file is too large to read (%d bytes, limit %d): %s", fi.Size(), maxReadBytes, args.Path), IsError: true}
 	}
 
 	// Read the file.
-	data, err := os.ReadFile(absPath)
+	data, err := os.ReadFile(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Result{Content: fmt.Sprintf("file not found: %s", args.Path), IsError: true}

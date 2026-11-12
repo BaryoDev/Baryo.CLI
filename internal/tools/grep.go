@@ -146,11 +146,15 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 		}
 
 		// A symlink inside the tree must not lead outside the project.
-		if _, err := resolveWithinProject(cwd, absPath); err != nil {
+		realPath, err := resolveReadable(cwd, absPath)
+		if err != nil {
+			continue
+		}
+		if realPath != absPath && ignore.IsIgnored(ctx, realPath) {
 			continue
 		}
 
-		fileMatches := searchFile(absPath, cwd, re, ctxLines, &b, &outputSize)
+		fileMatches := searchFile(realPath, absPath, cwd, re, ctxLines, &b, &outputSize)
 		if fileMatches > 0 {
 			totalMatches += fileMatches
 			filesWithMatches++
@@ -173,12 +177,12 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 
 // searchFile searches a single file for regex matches and writes results to b.
 // Returns the number of matches found.
-func searchFile(absPath, cwd string, re *regexp.Regexp, ctxLines int, b *strings.Builder, outputSize *int) int {
+func searchFile(readPath, absPath, cwd string, re *regexp.Regexp, ctxLines int, b *strings.Builder, outputSize *int) int {
 	// Read file and check for binary content.
-	if fi, err := os.Stat(absPath); err != nil || fi.Size() > maxReadBytes {
+	if fi, err := os.Stat(readPath); err != nil || fi.Size() > maxReadBytes {
 		return 0
 	}
-	data, err := os.ReadFile(absPath)
+	data, err := os.ReadFile(readPath)
 	if err != nil {
 		return 0
 	}
