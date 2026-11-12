@@ -85,7 +85,7 @@ func executeWriteFile(ctx context.Context, argsJSON string) Result {
 	}
 
 	// Write the file.
-	if err := fsutil.WriteFileAtomic(absPath, []byte(args.Content), 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(absPath, []byte(args.Content), existingMode(absPath)); err != nil {
 		return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 	}
 

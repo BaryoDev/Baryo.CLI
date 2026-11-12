@@ -558,10 +558,8 @@ func executeRemember(ctx context.Context, argsJSON string) (string, bool) {
 	logger.Debug("meta-tool remember", "fact", args.Fact)
 
 	// Default to project scope if .baryo/ dir exists, otherwise global.
-	global := true
-	if _, err := os.Stat(".baryo"); err == nil {
-		global = false
-	}
+	// Project scope only when the project is trusted.
+	global := config.DefaultMemoryScopeGlobal()
 
 	if err := config.AddMemory(args.Fact, global); err != nil {
 		return fmt.Sprintf("failed to save memory: %v", err), true

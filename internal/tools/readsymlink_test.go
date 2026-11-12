@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: MIT
+
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// symlinkProject builds a project with links that lead to a directory and a
+// file outside it, plus one real file inside.
+func symlinkProject(t *testing.T) {
+	t.Helper()
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{project, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("TOPSECRET-OUTSIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "real.txt"), []byte("TOPSECRET-INSIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(project, "link")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(project, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+}
+
+func argsJSON(t *testing.T, v map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestReadFileRefusesSymlinkOutsideProject(t *testing.T) {
+	symlinkProject(t)
+	for _, p := range []string{"link/secret.txt", "notes.txt"} {
+		res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": p}))
+		if !res.IsError || strings.Contains(res.Content, "TOPSECRET-OUTSIDE") {
+			t.Errorf("read_file %s must be refused, got %q", p, res.Content)
+		}
+	}
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "real.txt"}))
+	if res.IsError || !strings.Contains(res.Content, "TOPSECRET-INSIDE") {
+		t.Errorf("a real file must still read, got %q", res.Content)
+	}
+}
+
+func TestReadFileRefusesHugeFile(t *testing.T) {
+	symlinkProject(t)
+	f, err := os.Create("big.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxReadBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "big.txt"}))
+	if !res.IsError || !strings.Contains(res.Content, "too large") {
+		t.Errorf("expected a too large error, got %q", res.Content)
+	}
+}
+
+func TestGrepDoesNotFollowSymlinksOutside(t *testing.T) {
+	symlinkProject(t)
+	for _, a := range []map[string]any{
+		{"pattern": "TOPSECRET"},
+		{"pattern": "TOPSECRET", "path": "."},
+	} {
+		res := executeGrep(context.Background(), argsJSON(t, a))
+		if strings.Contains(res.Content, "OUTSIDE") {
+			t.Errorf("grep leaked outside content: %q", res.Content)
+		}
+		if !strings.Contains(res.Content, "real.txt") {
+			t.Errorf("grep should still find the real file: %q", res.Content)
+		}
+	}
+	res := executeGrep(context.Background(), argsJSON(t, map[string]any{"pattern": "TOPSECRET", "path": "link"}))
+	if !res.IsError {
+		t.Errorf("grep with a path through a symlink outside must be refused, got %q", res.Content)
+	}
+}
+
+func TestGlobDoesNotFollowSymlinksOutside(t *testing.T) {
+	symlinkProject(t)
+	res := executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "**/*.txt"}))
+	if strings.Contains(res.Content, "notes.txt") || strings.Contains(res.Content, "secret.txt") {
+		t.Errorf("glob listed a file outside the project: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "real.txt") {
+		t.Errorf("glob should still list the real file: %q", res.Content)
+	}
+	res = executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "*.txt", "path": "link"}))
+	if !res.IsError {
+		t.Errorf("glob with a path through a symlink outside must be refused, got %q", res.Content)
+	}
+}
+
+// resolveReadable must hand back the real path, so the caller opens what was
+// checked rather than a name that can be re-pointed afterwards.
+func TestResolveReadableReturnsRealPath(t *testing.T) {
+	symlinkProject(t)
+	cwd, _ := os.Getwd()
+	if err := os.Symlink("real.txt", "alias.txt"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveReadable(cwd, "alias.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(cwd, "real.txt"))
+	if got != want {
+		t.Errorf("resolveReadable = %q, want the real path %q", got, want)
+	}
+}
+
+// A link inside the project to an ignored file such as .env must not be a way
+// around the ignore rules.
+func TestSymlinkToIgnoredFileIsIgnored(t *testing.T) {
+	symlinkProject(t)
+	if err := os.WriteFile(".env", []byte("API_TOKEN=TOPSECRET-ENV\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", "notes2.txt"); err != nil {
+		t.Fatal(err)
+	}
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes2.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-ENV") {
+		t.Errorf("read_file through a link to .env must be refused, got %q", res.Content)
+	}
+	res = executeGrep(context.Background(), argsJSON(t, map[string]any{"pattern": "TOPSECRET-ENV", "glob": "*.txt"}))
+	if strings.Contains(res.Content, "TOPSECRET-ENV") || strings.Contains(res.Content, "notes2.txt") {
+		t.Errorf("grep leaked .env through a link: %q", res.Content)
+	}
+	res = executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "*.txt"}))
+	if strings.Contains(res.Content, "notes2.txt") {
+		t.Errorf("glob listed a link to .env: %q", res.Content)
+	}
+}
+
+// The project is reached through a symlinked parent (like /tmp on macOS), so
+// the resolved path is not under the cwd spelling. The ignore rules must still
+// apply to a link to .env inside it.
+func TestSymlinkToIgnoredFileIsIgnoredUnderSymlinkedCwd(t *testing.T) {
+	tmp := t.TempDir()
+	realDir := filepath.Join(tmp, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(tmp, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, ".env"), []byte("API_TOKEN=TOPSECRET-ENV\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "real.txt"), []byte("TOPSECRET-INSIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", filepath.Join(realDir, "notes2.txt")); err != nil {
+		t.Fatal(err)
+	}
+	// A rule that matches by path, not by name, so it only applies when the
+	// real path is mapped back under cwd.
+	if err := os.MkdirAll(filepath.Join(realDir, "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "vault", "key.txt"), []byte("TOPSECRET-VAULT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, ".baryoignore"), []byte("vault/key.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("vault/key.txt", filepath.Join(realDir, "notes3.txt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(linkDir)
+
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes3.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-VAULT") {
+		t.Errorf("read_file must refuse a link into an ignored dir under a symlinked cwd, got %q", res.Content)
+	}
+	res = executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes2.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-ENV") {
+		t.Errorf("read_file must refuse a link to .env under a symlinked cwd, got %q", res.Content)
+	}
+	res = executeGrep(context.Background(), argsJSON(t, map[string]any{"pattern": "TOPSECRET", "glob": "*.txt"}))
+	if strings.Contains(res.Content, "TOPSECRET-ENV") || strings.Contains(res.Content, "notes2.txt") ||
+		strings.Contains(res.Content, "TOPSECRET-VAULT") || strings.Contains(res.Content, "notes3.txt") {
+		t.Errorf("grep leaked an ignored file under a symlinked cwd: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "real.txt") {
+		t.Errorf("grep should still find real.txt: %q", res.Content)
+	}
+	res = executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "*.txt"}))
+	if strings.Contains(res.Content, "notes2.txt") || strings.Contains(res.Content, "notes3.txt") {
+		t.Errorf("glob listed a link to an ignored file under a symlinked cwd: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "real.txt") {
+		t.Errorf("glob should still list real.txt: %q", res.Content)
+	}
+}

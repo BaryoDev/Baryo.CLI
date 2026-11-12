@@ -686,7 +686,7 @@ A project's own `.baryo/config.yaml` can start processes through `hooks` and
 system prompt. So cloning a repository and running baryo in it would run that
 repository's code.
 
-Project configuration and project skills therefore do nothing until you trust
+Project configuration, project skills and project memories (`.baryo/memories.json`) therefore do nothing until you trust
 the directory:
 
 - **Interactively**, baryo asks once per directory and remembers the answer in
@@ -696,7 +696,7 @@ the directory:
   already trusted stays trusted. Any other is untrusted unless you pass
   `--trust-project`, which applies for that run only and records nothing.
 
-An untrusted project's config file is ignored in full rather than filtered key
+In an untrusted project `remember` and `/remember` save to your user memory, never to the project file. An untrusted project's config file is ignored in full rather than filtered key
 by key, and one line on stderr says so. `BARYO_*` environment variables are
 yours, so they always apply.
 

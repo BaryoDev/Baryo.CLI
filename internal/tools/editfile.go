@@ -94,7 +94,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 				if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 					return Result{Content: fmt.Sprintf("cannot create directory: %v", err), IsError: true}
 				}
-				if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), 0o644); err != nil {
+				if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), existingMode(absPath)); err != nil {
 					return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 				}
 				return Result{Content: fmt.Sprintf("Created %s (%d chars)", args.Path, len(args.NewString))}
@@ -106,7 +106,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 		if lineCount > maxWholeFileRewriteLines {
 			return Result{Content: fmt.Sprintf("file has %d lines (max %d for whole-file rewrite) — use old_string to target a specific section", lineCount, maxWholeFileRewriteLines), IsError: true}
 		}
-		if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), 0o644); err != nil {
+		if err := fsutil.WriteFileAtomic(absPath, []byte(args.NewString), existingMode(absPath)); err != nil {
 			return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 		}
 		return Result{Content: fmt.Sprintf("Rewrote %s (%d lines)", args.Path, lineCount)}
@@ -133,7 +133,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 	if count == 1 {
 		// Exact match found.
 		newContent := strings.Replace(content, args.OldString, args.NewString, 1)
-		if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
+		if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), existingMode(absPath)); err != nil {
 			return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 		}
 		return Result{Content: fmt.Sprintf("Edited %s: replaced %d chars with %d chars", args.Path, len(args.OldString), len(args.NewString))}
@@ -149,7 +149,7 @@ func executeEditFile(ctx context.Context, argsJSON string) Result {
 	}
 
 	newContent := strings.Replace(content, match, args.NewString, 1)
-	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), existingMode(absPath)); err != nil {
 		return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 	}
 	return Result{Content: fmt.Sprintf("Edited %s (fuzzy matched): replaced %d chars with %d chars", args.Path, len(match), len(args.NewString))}

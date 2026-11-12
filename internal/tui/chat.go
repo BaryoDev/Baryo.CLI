@@ -5069,10 +5069,8 @@ func (m ChatModel) handleRemember(fact string) (ChatModel, tea.Cmd) {
 	}
 
 	// Default to project scope if .baryo/ dir exists, otherwise global
-	global := true
-	if _, err := os.Stat(".baryo"); err == nil {
-		global = false
-	}
+	// Project scope only when the project is trusted.
+	global := config.DefaultMemoryScopeGlobal()
 
 	if err := config.AddMemory(fact, global); err != nil {
 		m.history = append(m.history, chatEntry{

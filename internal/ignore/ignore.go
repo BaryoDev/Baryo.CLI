@@ -4,7 +4,9 @@ package ignore
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,10 +127,17 @@ var gitCheckIgnore = func(ctx context.Context, workDir string, absPaths []string
 	cmd := exec.CommandContext(ctx, "git", "check-ignore", "--stdin", "-z")
 	cmd.Dir = workDir
 	cmd.Stdin = strings.NewReader(strings.Join(absPaths, "\x00"))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		// Exit 1 means none were ignored; anything else means git is
-		// unavailable or unhappy, and then nothing is excluded on its behalf.
+		// Exit 1 means none were ignored. No git or no repository means no git
+		// rules. Any other failure fails closed: every path is excluded.
+		if gitErrIgnores(err, stderr.String()) {
+			for _, p := range absPaths {
+				ignored[p] = true
+			}
+		}
 		return ignored
 	}
 	for _, p := range strings.Split(string(out), "\x00") {
@@ -259,7 +268,29 @@ func matchRules(rules []rule, absPath string) bool {
 func isGitIgnored(ctx context.Context, absPath string) bool {
 	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-q", absPath)
 	cmd.Dir = filepath.Dir(absPath)
-	err := cmd.Run()
-	// Exit code 0 = ignored, 1 = not ignored, other = git not available (allow)
-	return err == nil
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	return gitErrIgnores(cmd.Run(), stderr.String())
+}
+
+// gitErrIgnores turns the result of git check-ignore into "treat as ignored".
+// Exit 0 means ignored and exit 1 means not ignored. No git binary and a
+// directory that is not a repository mean there are no git rules to apply.
+// Any other failure (a cancelled context, a git error) fails closed, so a path
+// is not read because git could not answer.
+func gitErrIgnores(err error, stderr string) bool {
+	if err == nil {
+		return true
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if ee.ExitCode() == 1 || strings.Contains(stderr, "not a git repository") {
+			return false
+		}
+		return true
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return false
+	}
+	return true
 }
