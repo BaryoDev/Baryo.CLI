@@ -3,11 +3,15 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
@@ -20,13 +24,73 @@ const (
 
 // Package-level HTTP clients (reused across calls to avoid per-call overhead).
 var (
-	fetchClient  = &http.Client{Timeout: 10 * time.Second}
+	fetchClient  = newFetchClient(nil)
 	searchClient = &http.Client{Timeout: 15 * time.Second}
 )
 
+// blockedAddr reports why an address must not be fetched, or "" if it may be.
+// Fetched pages are untrusted input, so fetch_page must not become a way to
+// reach services on this machine or its network.
+func blockedAddr(a netip.Addr) string {
+	a = a.Unmap()
+	switch {
+	case a.IsLoopback():
+		return "loopback"
+	case a.IsUnspecified():
+		return "unspecified"
+	case a.IsPrivate():
+		return "private"
+	case a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast():
+		return "link-local"
+	case a.IsMulticast(), a.IsInterfaceLocalMulticast():
+		return "multicast"
+	case a.Is4() && a.As4()[0] == 0:
+		return "unspecified"
+	}
+	return ""
+}
+
+// newFetchClient builds the page-fetch client. The check runs in the dialer's
+// Control hook, which sees the address after DNS resolution and runs again for
+// every redirect hop, so a hostname that resolves to a private address or a
+// redirect to one is refused. allow, when set, lets a test exempt one
+// "host:port" it needs to reach. Proxies are not used, since a proxy would
+// hide the real destination from this check.
+func newFetchClient(allow func(hostport string) bool) *http.Client {
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			if allow != nil && allow(address) {
+				return nil
+			}
+			ap, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return fmt.Errorf("refusing to connect to %q: cannot parse address", address)
+			}
+			if why := blockedAddr(ap.Addr()); why != "" {
+				return fmt.Errorf("refusing to connect to %s address %s", why, ap.Addr())
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
+			}
+			return nil
+		},
+	}
+}
+
 // FetchContent downloads a URL and returns the extracted text content only.
 // Uses a shorter timeout suitable for batch fetching multiple pages.
-func FetchContent(rawURL string) (string, error) {
+func FetchContent(ctx context.Context, rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid URL: %w", err)
@@ -35,7 +99,7 @@ func FetchContent(rawURL string) (string, error) {
 		return "", fmt.Errorf("only http/https URLs are supported")
 	}
 
-	req, err := http.NewRequest("GET", rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
@@ -66,8 +130,8 @@ func FetchContent(rawURL string) (string, error) {
 
 // Fetch downloads a URL and returns its text content with HTML tags stripped.
 // The result includes a "Content from <url>:" prefix for display.
-func Fetch(rawURL string) (string, error) {
-	text, err := FetchContent(rawURL)
+func Fetch(ctx context.Context, rawURL string) (string, error) {
+	text, err := FetchContent(ctx, rawURL)
 	if err != nil {
 		return "", err
 	}

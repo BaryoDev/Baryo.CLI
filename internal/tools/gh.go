@@ -151,47 +151,96 @@ func validateGhCommand(args []string) error {
 	return nil
 }
 
-// validateGhApi ensures gh api calls are GET-only.
-// Blocks -X with non-GET methods, and -f/-F flags (which imply POST) unless -X GET is explicit.
+// ghApiValueFlags are the gh api flags that take a value, by long and short
+// name. ghApiBoolFlags take none. Any other flag is treated as a write (or as
+// unknown) and refused, so a new gh flag is blocked until it is reviewed.
+var (
+	ghApiValueFlags = map[string]string{
+		"--method": "method", "-X": "method",
+		"--jq": "plain", "-q": "plain",
+		"--template": "plain", "-t": "plain",
+		"--hostname": "plain", "--cache": "plain",
+		"--preview": "plain", "-p": "plain",
+		"--header": "header", "-H": "header",
+		"--field": "field", "-F": "typedfield",
+		"--raw-field": "field", "-f": "field",
+	}
+	ghApiBoolFlags = map[string]bool{
+		"--paginate": true, "--slurp": true, "--silent": true,
+		"--include": true, "-i": true, "--verbose": true,
+	}
+)
+
+// splitGhFlag returns the flag name and its inline value for the forms
+// "--name=value", "-Xvalue" and a bare "-X". hasValue is false for a bare flag.
+func splitGhFlag(arg string) (name, value string, hasValue bool) {
+	if strings.HasPrefix(arg, "--") {
+		if i := strings.Index(arg, "="); i >= 0 {
+			return arg[:i], arg[i+1:], true
+		}
+		return arg, "", false
+	}
+	if len(arg) > 2 {
+		return arg[:2], strings.TrimPrefix(arg[2:], "="), true
+	}
+	return arg, "", false
+}
+
+// validateGhApi ensures gh api calls are read-only. It allows an explicit list
+// of flags and refuses everything else. Field flags (which make gh send a
+// POST) are allowed only with an explicit GET method, where gh turns them into
+// query parameters. --input, graphql, and header method overrides are refused.
 func validateGhApi(args []string) error {
 	hasExplicitGet := false
-	hasMutationFlag := false
+	hasField := false
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if strings.EqualFold(strings.Trim(arg, "/"), "graphql") {
+				return fmt.Errorf("gh api graphql is not allowed; it is always a POST")
+			}
+			continue
+		}
 
-		// Check for -X / --method flag.
-		if arg == "-X" || arg == "--method" {
+		if ghApiBoolFlags[arg] {
+			continue
+		}
+
+		name, value, hasValue := splitGhFlag(arg)
+		kind, ok := ghApiValueFlags[name]
+		if !ok {
+			return fmt.Errorf("flag %q is not allowed for gh api (read-only flags only)", arg)
+		}
+		if !hasValue {
 			if i+1 >= len(args) {
-				return fmt.Errorf("missing value for %s flag", arg)
+				return fmt.Errorf("missing value for %s flag", name)
 			}
-			method := strings.ToUpper(args[i+1])
-			if method != "GET" {
-				return fmt.Errorf("only GET requests are allowed for gh api; got %s", method)
-			}
-			hasExplicitGet = true
-			i++ // skip the method value
-			continue
+			i++
+			value = args[i]
 		}
 
-		// Check for combined form like -XGET or -XPOST.
-		if strings.HasPrefix(arg, "-X") && len(arg) > 2 {
-			method := strings.ToUpper(arg[2:])
-			if method != "GET" {
-				return fmt.Errorf("only GET requests are allowed for gh api; got %s", method)
+		switch kind {
+		case "method":
+			if strings.ToUpper(value) != "GET" {
+				return fmt.Errorf("only GET requests are allowed for gh api; got %s", strings.ToUpper(value))
 			}
 			hasExplicitGet = true
-			continue
-		}
-
-		// Check for field flags that imply POST.
-		if arg == "-f" || arg == "-F" || arg == "--field" || arg == "--raw-field" {
-			hasMutationFlag = true
+		case "header":
+			if strings.Contains(strings.ToLower(value), "method-override") {
+				return fmt.Errorf("method override headers are not allowed for gh api")
+			}
+		case "typedfield":
+			if strings.Contains(value, "=@") {
+				return fmt.Errorf("-F values that read a file are not allowed for gh api")
+			}
+			hasField = true
+		case "field":
+			hasField = true
 		}
 	}
 
-	// If -f/-F is used without explicit -X GET, block it (implies POST).
-	if hasMutationFlag && !hasExplicitGet {
+	if hasField && !hasExplicitGet {
 		return fmt.Errorf("-f/-F flags imply POST; add -X GET if you intend a GET request")
 	}
 

@@ -129,10 +129,10 @@ func RunResearch(ctx context.Context, cfg ResearchConfig) (ResearchResult, error
 
 		fetched := 0
 		for i, r := range results {
-			if fetched >= maxDeepFetch || roundContent.Len() > contentTarget {
+			if fetched >= maxDeepFetch || roundContent.Len() > contentTarget || ctx.Err() != nil {
 				break
 			}
-			content, ferr := FetchContent(r.URL)
+			content, ferr := FetchContent(ctx, r.URL)
 			if ferr != nil || len(strings.TrimSpace(content)) < minPageContent {
 				continue
 			}
