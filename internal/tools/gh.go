@@ -159,10 +159,10 @@ var (
 		"--method": "method", "-X": "method",
 		"--jq": "plain", "-q": "plain",
 		"--template": "plain", "-t": "plain",
-		"--hostname": "plain", "--cache": "plain",
+		"--cache":   "plain",
 		"--preview": "plain", "-p": "plain",
 		"--header": "header", "-H": "header",
-		"--field": "field", "-F": "typedfield",
+		"--field": "typedfield", "-F": "typedfield",
 		"--raw-field": "field", "-f": "field",
 	}
 	ghApiBoolFlags = map[string]bool{
@@ -197,6 +197,9 @@ func validateGhApi(args []string) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if strings.HasPrefix(strings.ToLower(arg), "http://") || strings.HasPrefix(strings.ToLower(arg), "https://") {
+				return fmt.Errorf("full URL endpoints are not allowed for gh api")
+			}
 			if strings.EqualFold(strings.Trim(arg, "/"), "graphql") {
 				return fmt.Errorf("gh api graphql is not allowed; it is always a POST")
 			}
@@ -230,12 +233,12 @@ func validateGhApi(args []string) error {
 			if strings.Contains(strings.ToLower(value), "method-override") {
 				return fmt.Errorf("method override headers are not allowed for gh api")
 			}
-		case "typedfield":
-			if strings.Contains(value, "=@") {
-				return fmt.Errorf("-F values that read a file are not allowed for gh api")
+		case "typedfield", "field":
+			// gh reads a file or stdin for values starting with @ (typed
+			// fields), so refuse them in both forms.
+			if strings.HasPrefix(value, "@") || strings.Contains(value, "=@") {
+				return fmt.Errorf("field values that read a file or stdin are not allowed for gh api")
 			}
-			hasField = true
-		case "field":
 			hasField = true
 		}
 	}

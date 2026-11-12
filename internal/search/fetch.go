@@ -28,11 +28,54 @@ var (
 	searchClient = &http.Client{Timeout: 15 * time.Second}
 )
 
+// blockedPrefixes are ranges that are not global unicast in practice or that
+// can reach internal hosts. Anything not global unicast is refused as well.
+var blockedPrefixes = []struct {
+	prefix netip.Prefix
+	why    string
+}{
+	{netip.MustParsePrefix("100.64.0.0/10"), "carrier-grade NAT"},
+	{netip.MustParsePrefix("198.18.0.0/15"), "benchmark"},
+	{netip.MustParsePrefix("192.0.0.0/24"), "reserved"},
+	{netip.MustParsePrefix("240.0.0.0/4"), "reserved"},
+}
+
+// Prefixes that embed an IPv4 address; the embedded address is checked too.
+var (
+	nat64      = netip.MustParsePrefix("64:ff9b::/96")
+	nat64Local = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFour  = netip.MustParsePrefix("2002::/16")
+	v4Compat   = netip.MustParsePrefix("::/96")
+)
+
 // blockedAddr reports why an address must not be fetched, or "" if it may be.
-// Fetched pages are untrusted input, so fetch_page must not become a way to
-// reach services on this machine or its network.
+// It denies by default: only global unicast addresses pass. Fetched pages are
+// untrusted input, so fetch_page must not reach services on this machine or
+// its network.
 func blockedAddr(a netip.Addr) string {
 	a = a.Unmap()
+	if a.Is6() {
+		raw := a.As16()
+		var emb netip.Addr
+		switch {
+		case nat64.Contains(a) || v4Compat.Contains(a):
+			emb = netip.AddrFrom4([4]byte{raw[12], raw[13], raw[14], raw[15]})
+		case nat64Local.Contains(a):
+			// RFC 8215 local-use prefix has no fixed embedding; refuse it all.
+			return "NAT64"
+		case sixToFour.Contains(a):
+			emb = netip.AddrFrom4([4]byte{raw[2], raw[3], raw[4], raw[5]})
+		}
+		if emb.IsValid() {
+			if why := blockedAddr(emb); why != "" {
+				return why + " (embedded)"
+			}
+			if v4Compat.Contains(a) {
+				return "IPv4-compatible"
+			}
+			return ""
+		}
+	}
 	switch {
 	case a.IsLoopback():
 		return "loopback"
@@ -46,6 +89,14 @@ func blockedAddr(a netip.Addr) string {
 		return "multicast"
 	case a.Is4() && a.As4()[0] == 0:
 		return "unspecified"
+	}
+	for _, b := range blockedPrefixes {
+		if b.prefix.Contains(a) {
+			return b.why
+		}
+	}
+	if !a.IsGlobalUnicast() {
+		return "not global unicast"
 	}
 	return ""
 }
