@@ -266,6 +266,16 @@ func DestructiveMetaToolDefinitions() []llm.ToolDefinition {
 	}
 }
 
+// isDestructiveMetaTool reports whether name is one of the destructive meta-tools.
+func isDestructiveMetaTool(name string) bool {
+	for _, d := range DestructiveMetaToolDefinitions() {
+		if d.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // IsMetaTool returns true if the tool name is a meta-tool handled by the executor.
 func IsMetaTool(name string) bool {
 	return metaToolRegistry[name]
@@ -341,8 +351,10 @@ func headlessDestructiveGate(mode, name string, fn func() (string, bool)) (strin
 }
 
 // makeMetaToolExecutor wraps a standard tool executor to intercept meta-tool
-// calls. All other tool names pass through to the inner executor.
-func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor) llm.ToolExecutor {
+// calls. All other tool names pass through to the inner executor. In a
+// read-only mode the destructive meta-tools are refused even though their
+// definitions are not offered, because a model can still emit the name.
+func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) llm.ToolExecutor {
 	ep := m.endpoint
 	modelTag := m.modelTag
 	provider := m.searchProvider
@@ -352,6 +364,9 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor) llm.ToolExecuto
 	ch := m.confirmCh
 
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
+		if readOnly && isDestructiveMetaTool(name) {
+			return fmt.Sprintf("[read-only mode] %s is not available, only read-only tools are allowed", name), true
+		}
 		switch name {
 		case "web_search":
 			return executeWebSearch(ctx, provider, apiKey, contextLimit, argsJSON)
@@ -400,11 +415,15 @@ func executeDestructive(ctx context.Context, mode string, ch chan confirmRequest
 	case "confirm":
 		prompt := formatConfirmPrompt(name, argsJSON)
 		respCh := make(chan bool, 1)
-		ch <- confirmRequest{
+		select {
+		case ch <- confirmRequest{
 			Name:   name,
 			Args:   argsJSON,
 			Prompt: prompt,
 			RespCh: respCh,
+		}:
+		case <-ctx.Done():
+			return "cancelled", true
 		}
 		select {
 		case approved := <-respCh:
@@ -432,7 +451,7 @@ func executeWebSearch(ctx context.Context, provider, apiKey string, contextLimit
 
 	logger.Debug("meta-tool web_search", "query", args.Query)
 
-	results, err := search.DeepQuery(provider, apiKey, args.Query)
+	results, err := search.DeepQuery(ctx, provider, apiKey, args.Query)
 	if err != nil {
 		return fmt.Sprintf("search error: %v", err), true
 	}
@@ -534,7 +553,7 @@ func executeFetchPage(ctx context.Context, contextLimit int, argsJSON string) (s
 
 	logger.Debug("meta-tool fetch_page", "url", args.URL)
 
-	content, err := search.FetchContent(args.URL)
+	content, err := search.FetchContent(ctx, args.URL)
 	if err != nil {
 		return fmt.Sprintf("fetch error: %v", err), true
 	}

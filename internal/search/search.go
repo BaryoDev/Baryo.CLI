@@ -3,6 +3,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -59,7 +60,7 @@ func Query(provider, apiKey, query string) (string, error) {
 
 // DeepQuery searches and then auto-fetches top result pages for actual content.
 // It stops fetching once enough content has been accumulated.
-func DeepQuery(provider, apiKey, query string) (string, error) {
+func DeepQuery(ctx context.Context, provider, apiKey, query string) (string, error) {
 	results, err := QueryResults(provider, apiKey, query)
 	if err != nil {
 		return "", err
@@ -73,10 +74,10 @@ func DeepQuery(provider, apiKey, query string) (string, error) {
 
 	fetched := 0
 	for i, r := range results {
-		if fetched >= maxDeepFetch || b.Len() > contentTarget {
+		if fetched >= maxDeepFetch || b.Len() > contentTarget || ctx.Err() != nil {
 			break
 		}
-		content, err := FetchContent(r.URL)
+		content, err := FetchContent(ctx, r.URL)
 		if err != nil || len(strings.TrimSpace(content)) < minPageContent {
 			continue
 		}

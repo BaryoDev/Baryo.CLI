@@ -3186,7 +3186,7 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 		if modeCfg.Tools != ToolsReadOnly {
 			toolDefs = append(toolDefs, DestructiveMetaToolDefinitions()...)
 		}
-		executor = m.makeMetaToolExecutor(executor)
+		executor = m.makeMetaToolExecutor(executor, modeCfg.Tools == ToolsReadOnly)
 	}
 
 	chatParams := m.applyModelHints(hasTools, hasSkill)
@@ -3702,7 +3702,7 @@ func (m ChatModel) handleSearch(query string) (ChatModel, tea.Cmd) {
 	provider := m.searchProvider
 	apiKey := m.searchAPIKey
 	return m, func() tea.Msg {
-		results, err := search.DeepQuery(provider, apiKey, query)
+		results, err := search.DeepQuery(context.Background(), provider, apiKey, query)
 		return SearchResultMsg{Query: query, Results: results, Err: err}
 	}
 }
@@ -3847,7 +3847,7 @@ func (m ChatModel) startStrategySearch(queries []string) (ChatModel, tea.Cmd) {
 		var results []string
 		for i, q := range queries {
 			progressCh <- fmt.Sprintf("Researching knowledge gaps (%d/%d): %s...", i+1, len(queries), q)
-			result, err := search.DeepQuery(provider, apiKey, q)
+			result, err := search.DeepQuery(context.Background(), provider, apiKey, q)
 			if err != nil {
 				close(progressCh)
 				doneCh <- StrategySearchDoneMsg{Err: fmt.Errorf("search %q: %w", q, err)}
@@ -4101,7 +4101,7 @@ func (m ChatModel) handleFetch(rawURL string) (ChatModel, tea.Cmd) {
 	m.updateViewport()
 
 	return m, func() tea.Msg {
-		content, err := search.Fetch(rawURL)
+		content, err := search.Fetch(context.Background(), rawURL)
 		return FetchResultMsg{URL: rawURL, Content: content, Err: err}
 	}
 }
