@@ -67,15 +67,11 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 
 	searchRoot := cwd
 	if args.Path != "" {
-		searchRoot = args.Path
-		if !filepath.IsAbs(searchRoot) {
-			searchRoot = filepath.Join(cwd, searchRoot)
+		root, err := resolveWithinProject(cwd, args.Path)
+		if err != nil {
+			return Result{Content: err.Error(), IsError: true}
 		}
-		searchRoot = filepath.Clean(searchRoot)
-
-		if !strings.HasPrefix(searchRoot, cwd+string(filepath.Separator)) && searchRoot != cwd {
-			return Result{Content: "path is outside the project directory", IsError: true}
-		}
+		searchRoot = root
 	}
 
 	// Verify search root exists.
@@ -113,6 +109,11 @@ func executeGlob(ctx context.Context, argsJSON string) Result {
 		}
 
 		if ignored[absPath] {
+			continue
+		}
+
+		// A symlink inside the tree must not lead outside the project.
+		if _, err := resolveWithinProject(cwd, absPath); err != nil {
 			continue
 		}
 		// Return paths relative to cwd.

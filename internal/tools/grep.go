@@ -103,15 +103,11 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 
 	searchRoot := cwd
 	if args.Path != "" {
-		searchRoot = args.Path
-		if !filepath.IsAbs(searchRoot) {
-			searchRoot = filepath.Join(cwd, searchRoot)
+		root, err := resolveWithinProject(cwd, args.Path)
+		if err != nil {
+			return Result{Content: err.Error(), IsError: true}
 		}
-		searchRoot = filepath.Clean(searchRoot)
-
-		if !strings.HasPrefix(searchRoot, cwd+string(filepath.Separator)) && searchRoot != cwd {
-			return Result{Content: "path is outside the project directory", IsError: true}
-		}
+		searchRoot = root
 	}
 
 	info, err := os.Stat(searchRoot)
@@ -149,6 +145,11 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 			continue
 		}
 
+		// A symlink inside the tree must not lead outside the project.
+		if _, err := resolveWithinProject(cwd, absPath); err != nil {
+			continue
+		}
+
 		fileMatches := searchFile(absPath, cwd, re, ctxLines, &b, &outputSize)
 		if fileMatches > 0 {
 			totalMatches += fileMatches
@@ -174,6 +175,9 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 // Returns the number of matches found.
 func searchFile(absPath, cwd string, re *regexp.Regexp, ctxLines int, b *strings.Builder, outputSize *int) int {
 	// Read file and check for binary content.
+	if fi, err := os.Stat(absPath); err != nil || fi.Size() > maxReadBytes {
+		return 0
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return 0

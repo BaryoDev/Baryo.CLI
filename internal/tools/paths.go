@@ -60,3 +60,13 @@ func resolveExistingPrefix(p string) (string, error) {
 		cur = parent
 	}
 }
+
+// existingMode returns the permission bits of the file at path so a rewrite
+// keeps them (an executable script stays executable, a 0600 file stays 0600).
+// A path that does not exist yet gets 0644.
+func existingMode(path string) os.FileMode {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Mode().Perm()
+	}
+	return 0o644
+}

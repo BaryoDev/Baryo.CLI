@@ -8,13 +8,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 const maxFileSize = 100 * 1024 // 100 KB
+
+// maxReadBytes is the largest file read_file and grep will load into memory.
+const maxReadBytes = 10 * 1024 * 1024
 
 func init() {
 	Register("read_file", Tool{
@@ -69,20 +71,21 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 		return Result{Content: fmt.Sprintf("cannot determine working directory: %v", err), IsError: true}
 	}
 
-	absPath := args.Path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(cwd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
-
-	// Ensure the path is within the working directory.
-	if !strings.HasPrefix(absPath, cwd+string(filepath.Separator)) && absPath != cwd {
-		return Result{Content: "path is outside the project directory", IsError: true}
+	// Ensure the path is within the working directory, including after
+	// symlink resolution.
+	absPath, err := resolveWithinProject(cwd, args.Path)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
 	}
 
 	// Check .baryoignore + .gitignore.
 	if ignore.IsIgnored(ctx, absPath) {
 		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
+	}
+
+	// Refuse very large files before reading them into memory.
+	if fi, err := os.Stat(absPath); err == nil && fi.Size() > maxReadBytes {
+		return Result{Content: fmt.Sprintf("file is too large to read (%d bytes, limit %d): %s", fi.Size(), maxReadBytes, args.Path), IsError: true}
 	}
 
 	// Read the file.

@@ -73,10 +73,31 @@ func saveMemoryFile(path string, memories []Memory) error {
 	return fsutil.WriteFileAtomic(path, data, 0o600)
 }
 
+// loadProjectMemories reads the project memory file only when the project is
+// trusted. A repository's own memories would otherwise be prompt text from
+// whoever wrote the repository.
+func loadProjectMemories() []Memory {
+	if !ProjectTrusted() {
+		return nil
+	}
+	return loadMemoryFile(projectMemoryPath(), "project")
+}
+
+// DefaultMemoryScopeGlobal reports whether a new memory should go to the user
+// file. Project scope is used only when .baryo exists and the project is trusted.
+func DefaultMemoryScopeGlobal() bool {
+	if !ProjectTrusted() {
+		return true
+	}
+	_, err := os.Stat(".baryo")
+	return err != nil
+}
+
 // LoadMemories reads both global and project memory files and returns
-// all memories with project memories first.
+// all memories with project memories first. Project memories are skipped
+// unless the project is trusted.
 func LoadMemories() []Memory {
-	project := loadMemoryFile(projectMemoryPath(), "project")
+	project := loadProjectMemories()
 	global := loadMemoryFile(globalMemoryPath(), "global")
 	return append(project, global...)
 }
@@ -87,6 +108,9 @@ func LoadMemories() []Memory {
 func AddMemory(fact string, global bool) error {
 	path := projectMemoryPath()
 	source := "project"
+	if !global && !ProjectTrusted() {
+		return errProjectUntrusted
+	}
 	if global {
 		path = globalMemoryPath()
 		source = "global"
@@ -118,6 +142,9 @@ func RemoveMemory(substring string) (string, error) {
 		{projectMemoryPath(), "project"},
 		{globalMemoryPath(), "global"},
 	} {
+		if scope.source == "project" && !ProjectTrusted() {
+			continue
+		}
 		memories := loadMemoryFile(scope.path, scope.source)
 		for i, mem := range memories {
 			if strings.Contains(strings.ToLower(mem.Fact), lower) {
@@ -135,7 +162,7 @@ func RemoveMemory(substring string) (string, error) {
 
 // ListMemories returns memories separated by scope.
 func ListMemories() (global []Memory, project []Memory) {
-	project = loadMemoryFile(projectMemoryPath(), "project")
+	project = loadProjectMemories()
 	global = loadMemoryFile(globalMemoryPath(), "global")
 	if project == nil {
 		project = []Memory{}
@@ -170,4 +197,5 @@ func (e memoryError) Error() string { return string(e) }
 const (
 	errMemoryLimitReached memoryError = "memory limit reached (max 50 per scope)"
 	errMemoryNotFound     memoryError = "no matching memory found"
+	errProjectUntrusted   memoryError = "project memory needs a trusted project (use --trust-project or save to your user memory)"
 )

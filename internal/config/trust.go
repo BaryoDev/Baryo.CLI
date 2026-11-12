@@ -30,11 +30,12 @@ func SetProjectTrusted(trusted bool) { projectTrusted = trusted }
 func ProjectTrusted() bool { return projectTrusted }
 
 // ProjectConfigPresent reports whether dir carries project-level Baryo config
-// or skills, which is what makes a trust decision necessary.
+// skills or memories, which is what makes a trust decision necessary.
 func ProjectConfigPresent(dir string) bool {
 	for _, p := range []string{
 		filepath.Join(dir, ".baryo", "config.yaml"),
 		filepath.Join(dir, ".baryo", "skills"),
+		filepath.Join(dir, ".baryo", "memories.json"),
 		filepath.Join(dir, "skills"),
 	} {
 		if _, err := os.Stat(p); err == nil {

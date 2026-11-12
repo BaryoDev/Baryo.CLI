@@ -491,7 +491,7 @@ func resolveProjectTrust(flags cli.Config) bool {
 		return false
 	}
 	if flags.Mode() != cli.ModeInteractive || !stdinIsTerminal() {
-		fmt.Fprintln(os.Stderr, "baryo: this project ships .baryo config or skills, ignoring them (pass --trust-project to apply)")
+		fmt.Fprintln(os.Stderr, "baryo: this project ships .baryo config, skills or memories, ignoring them (pass --trust-project to apply)")
 		return false
 	}
 	return promptProjectTrust()
@@ -500,9 +500,9 @@ func resolveProjectTrust(flags cli.Config) bool {
 // promptProjectTrust asks once, before the TUI starts, and remembers the answer
 // for this directory.
 func promptProjectTrust() bool {
-	fmt.Println("This project ships its own Baryo configuration or skills.")
+	fmt.Println("This project ships its own Baryo configuration, skills or memories.")
 	fmt.Println("Trusting it lets the project change Baryo's settings, start processes")
-	fmt.Println("through hooks and MCP servers, and load its own skills.")
+	fmt.Println("through hooks and MCP servers, and load its own skills and memories.")
 	fmt.Print("Trust this project? [y/N] ")
 
 	reader := bufio.NewReader(os.Stdin)

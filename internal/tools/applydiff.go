@@ -114,7 +114,7 @@ func executeApplyDiff(ctx context.Context, argsJSON string) Result {
 	}
 
 	newContent := strings.Join(result, "\n")
-	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), 0o644); err != nil {
+	if err := fsutil.WriteFileAtomic(absPath, []byte(newContent), existingMode(absPath)); err != nil {
 		return Result{Content: fmt.Sprintf("cannot write file: %v", err), IsError: true}
 	}
 
