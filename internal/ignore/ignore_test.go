@@ -124,3 +124,25 @@ func TestFilterEmptyInput(t *testing.T) {
 		t.Error("git should not be spawned for an empty batch")
 	}
 }
+
+func TestGitErrIgnoresFailsClosed(t *testing.T) {
+	if !gitErrIgnores(nil, "") {
+		t.Error("nil error means git said ignored")
+	}
+	if !gitErrIgnores(context.Canceled, "") {
+		t.Error("a cancelled run must fail closed")
+	}
+	if gitErrIgnores(exec.ErrNotFound, "") {
+		t.Error("no git binary means no git rules")
+	}
+	run := func(args ...string) error { return exec.Command("sh", "-c", args[0]).Run() }
+	if gitErrIgnores(run("exit 1"), "") {
+		t.Error("exit 1 means not ignored")
+	}
+	if !gitErrIgnores(run("exit 128"), "fatal: bad config") {
+		t.Error("exit 128 with another git error must fail closed")
+	}
+	if gitErrIgnores(run("exit 128"), "fatal: not a git repository") {
+		t.Error("a non-repository has no git rules")
+	}
+}

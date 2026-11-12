@@ -86,7 +86,7 @@ func executeReadFile(ctx context.Context, argsJSON string) Result {
 
 	// Check .baryoignore + .gitignore on the name and on where it really
 	// points, so a link to .env is not a way around the ignore rules.
-	if ignore.IsIgnored(ctx, absPath) || (realPath != absPath && ignore.IsIgnored(ctx, realPath)) {
+	if ignore.IsIgnored(ctx, absPath) || realPathIgnored(ctx, cwd, absPath, realPath) {
 		return Result{Content: fmt.Sprintf("file is ignored: %s", args.Path), IsError: true}
 	}
 

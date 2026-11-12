@@ -150,7 +150,7 @@ func executeGrep(ctx context.Context, argsJSON string) Result {
 		if err != nil {
 			continue
 		}
-		if realPath != absPath && ignore.IsIgnored(ctx, realPath) {
+		if realPathIgnored(ctx, cwd, absPath, realPath) {
 			continue
 		}
 

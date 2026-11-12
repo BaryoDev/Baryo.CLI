@@ -153,3 +153,66 @@ func TestSymlinkToIgnoredFileIsIgnored(t *testing.T) {
 		t.Errorf("glob listed a link to .env: %q", res.Content)
 	}
 }
+
+// The project is reached through a symlinked parent (like /tmp on macOS), so
+// the resolved path is not under the cwd spelling. The ignore rules must still
+// apply to a link to .env inside it.
+func TestSymlinkToIgnoredFileIsIgnoredUnderSymlinkedCwd(t *testing.T) {
+	tmp := t.TempDir()
+	realDir := filepath.Join(tmp, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(tmp, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, ".env"), []byte("API_TOKEN=TOPSECRET-ENV\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "real.txt"), []byte("TOPSECRET-INSIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", filepath.Join(realDir, "notes2.txt")); err != nil {
+		t.Fatal(err)
+	}
+	// A rule that matches by path, not by name, so it only applies when the
+	// real path is mapped back under cwd.
+	if err := os.MkdirAll(filepath.Join(realDir, "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "vault", "key.txt"), []byte("TOPSECRET-VAULT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, ".baryoignore"), []byte("vault/key.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("vault/key.txt", filepath.Join(realDir, "notes3.txt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(linkDir)
+
+	res := executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes3.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-VAULT") {
+		t.Errorf("read_file must refuse a link into an ignored dir under a symlinked cwd, got %q", res.Content)
+	}
+	res = executeReadFile(context.Background(), argsJSON(t, map[string]any{"path": "notes2.txt"}))
+	if !res.IsError || strings.Contains(res.Content, "TOPSECRET-ENV") {
+		t.Errorf("read_file must refuse a link to .env under a symlinked cwd, got %q", res.Content)
+	}
+	res = executeGrep(context.Background(), argsJSON(t, map[string]any{"pattern": "TOPSECRET", "glob": "*.txt"}))
+	if strings.Contains(res.Content, "TOPSECRET-ENV") || strings.Contains(res.Content, "notes2.txt") ||
+		strings.Contains(res.Content, "TOPSECRET-VAULT") || strings.Contains(res.Content, "notes3.txt") {
+		t.Errorf("grep leaked an ignored file under a symlinked cwd: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "real.txt") {
+		t.Errorf("grep should still find real.txt: %q", res.Content)
+	}
+	res = executeGlob(context.Background(), argsJSON(t, map[string]any{"pattern": "*.txt"}))
+	if strings.Contains(res.Content, "notes2.txt") || strings.Contains(res.Content, "notes3.txt") {
+		t.Errorf("glob listed a link to an ignored file under a symlinked cwd: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "real.txt") {
+		t.Errorf("glob should still list real.txt: %q", res.Content)
+	}
+}

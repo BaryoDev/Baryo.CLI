@@ -3,10 +3,13 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/arnelirobles/baryo-cli/internal/ignore"
 )
 
 // resolveWithinProject resolves path against cwd and verifies it stays inside
@@ -85,4 +88,25 @@ func existingMode(path string) os.FileMode {
 		return fi.Mode().Perm()
 	}
 	return 0o644
+}
+
+// realPathIgnored applies the ignore rules to where a path really points. The
+// ignore package works on paths under cwd, so the real path is mapped back into
+// cwd's own spelling first (cwd may itself sit behind a symlink). A real path
+// that cannot be mapped inside the project counts as ignored. lexical is the
+// name that was already checked, which is not checked twice.
+func realPathIgnored(ctx context.Context, cwd, lexical, realPath string) bool {
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		resolvedCwd = cwd
+	}
+	rel, err := filepath.Rel(resolvedCwd, realPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	mapped := filepath.Join(cwd, rel)
+	if mapped == lexical {
+		return false
+	}
+	return ignore.IsIgnored(ctx, mapped)
 }
