@@ -62,10 +62,10 @@ scripts/gen_notice.py after changing dependencies.
   github.com/xo/terminfo                                         v0.0.0-20220910002029-abceb7e1c41e  (MIT)
   github.com/yuin/goldmark                                       v1.7.17  (MIT)
   github.com/yuin/goldmark-emoji                                 v1.0.6  (MIT)
-  golang.org/x/net                                               v0.59.0  (BSD-3-Clause)
-  golang.org/x/sys                                               v0.48.0  (BSD-3-Clause)
-  golang.org/x/term                                              v0.46.0  (BSD-3-Clause)
-  golang.org/x/text                                              v0.42.0  (BSD-3-Clause)
+  golang.org/x/net                                               v0.62.0  (BSD-3-Clause)
+  golang.org/x/sys                                               v0.49.0  (BSD-3-Clause)
+  golang.org/x/term                                              v0.47.0  (BSD-3-Clause)
+  golang.org/x/text                                              v0.43.0  (BSD-3-Clause)
   gopkg.in/yaml.v3                                               v3.0.1  (MIT)
 
 Modules with no licence file in the module cache:
@@ -581,10 +581,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ======================================================================
 BSD-3-Clause, covering:
-  golang.org/x/net v0.59.0
-  golang.org/x/sys v0.48.0
-  golang.org/x/term v0.46.0
-  golang.org/x/text v0.42.0
+  golang.org/x/net v0.62.0
+  golang.org/x/sys v0.49.0
+  golang.org/x/term v0.47.0
+  golang.org/x/text v0.43.0
 ======================================================================
 
 Copyright 2009 The Go Authors.
