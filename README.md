@@ -257,6 +257,8 @@ The model receives meta-tools as tool definitions and calls them directly when n
 
 Safe tools work in all modes (including read-only). Destructive tools are only available in non-read-only modes and respect the permission system (`--yolo`, confirm, suggest).
 
+Page fetches (`fetch_page`, `web_search`, `deep_research`, `/fetch`) only connect to public addresses. Loopback, private, link-local (including cloud metadata at 169.254.169.254), carrier-grade NAT and other non-public addresses are refused, after DNS resolution and on every redirect. Fetches do not use `HTTP_PROXY` or `HTTPS_PROXY`: a proxy would hide the real destination from that check, so the check could not be enforced through one.
+
 ```
 You: What are the latest Go features?
 → model calls web_search("latest Go features") → answers with citations
