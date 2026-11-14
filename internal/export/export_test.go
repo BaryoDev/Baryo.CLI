@@ -77,7 +77,7 @@ func TestBuiltinExportsArchivedThenLiveMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, refs, err := Gather(time.Time{}, "")
+	dir, refs, _, err := Gather(time.Time{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestBuiltinPreservesToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, refs, err := Gather(time.Time{}, "")
+	dir, refs, _, err := Gather(time.Time{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestBuiltinWarnsAboutUndatedArchives(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, refs, err := Gather(time.Time{}, "")
+	dir, refs, _, err := Gather(time.Time{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,14 +283,14 @@ func TestGatherFiltersBySinceAndSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, refs, err := Gather(time.Time{}, ""); err != nil {
+	if _, refs, _, err := Gather(time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	} else if len(refs) != 2 {
 		t.Errorf("unfiltered Gather returned %d sessions, want 2", len(refs))
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -7)
-	_, refs, err := Gather(cutoff, "")
+	_, refs, _, err := Gather(cutoff, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestGatherFiltersBySinceAndSession(t *testing.T) {
 		t.Errorf("--since returned %+v, want only the recent session", refs)
 	}
 
-	_, refs, err = Gather(time.Time{}, old.ID)
+	_, refs, _, err = Gather(time.Time{}, old.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestBuiltinOverwritesPreviousExport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, refs, err := Gather(time.Time{}, "")
+	dir, refs, _, err := Gather(time.Time{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,8 +343,10 @@ func TestBuiltinOverwritesPreviousExport(t *testing.T) {
 	}
 }
 
-// Exporters read <id>.json themselves, so Gather must fold the journal into it first.
-func TestGatherFoldsJournalIntoSessionFile(t *testing.T) {
+// Exporters read the session file themselves, so the file handed to them must hold the
+// journaled turns. It must not be the live file: Gather runs beside a chat that may be
+// saving, so the session directory has to come out of it byte for byte unchanged.
+func TestGatherHandsExportersMergedCopyAndLeavesSessionDirAlone(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s, err := session.New("m", "m:latest")
 	if err != nil {
@@ -358,8 +360,13 @@ func TestGatherFoldsJournalIntoSessionFile(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := dirContents(t, dir)
 
-	_, refs, err := Gather(time.Time{}, s.ID)
+	_, refs, cleanup, err := Gather(time.Time{}, s.ID)
 	if err != nil || len(refs) != 1 {
 		t.Fatalf("Gather = %+v, %v", refs, err)
 	}
@@ -374,4 +381,32 @@ func TestGatherFoldsJournalIntoSessionFile(t *testing.T) {
 	if len(snap.Messages) != 2 {
 		t.Fatalf("session file handed to exporters holds %d messages, want 2", len(snap.Messages))
 	}
+	if filepath.Dir(refs[0].MessagesPath) == dir {
+		t.Fatal("exporters were pointed at the live session file")
+	}
+	if after := dirContents(t, dir); after != before {
+		t.Fatalf("Gather changed the session directory:\nbefore %s\nafter  %s", before, after)
+	}
+	cleanup()
+	if _, err := os.Stat(refs[0].MessagesPath); !os.IsNotExist(err) {
+		t.Fatalf("cleanup left the temp copy behind: %v", err)
+	}
+}
+
+// dirContents returns every file in dir with its bytes, as one comparable string.
+func dirContents(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString(e.Name() + "\x00" + string(data) + "\x00")
+	}
+	return b.String()
 }

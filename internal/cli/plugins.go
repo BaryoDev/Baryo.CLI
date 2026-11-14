@@ -108,7 +108,8 @@ func RunExport(cfg Config, trusted bool) int {
 		return 2
 	}
 
-	sessionsDir, refs, err := export.Gather(since, cfg.SessionID)
+	sessionsDir, refs, cleanup, err := export.Gather(since, cfg.SessionID)
+	defer cleanup()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "baryo export: %v\n", err)
 		return 1

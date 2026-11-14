@@ -299,26 +299,28 @@ func TestJournalCarriesTitleAndSearchSeesJournaledMessages(t *testing.T) {
 	}
 }
 
-func TestCompactFoldsJournalAndCleanOldRemovesIt(t *testing.T) {
+func TestCleanOldRemovesJournal(t *testing.T) {
 	home := setTestHome(t)
 	dir := filepath.Join(home, ".baryo", "sessions")
+	old := time.Now().Add(-48 * time.Hour)
+	nowFunc = func() time.Time { return old }
+	t.Cleanup(func() { nowFunc = time.Now })
 	s, _ := New("m", "m:1")
 	addTurn(s, 0)
 	_ = s.Save()
 	addTurn(s, 1)
 	_ = s.Save()
-
-	if err := Compact(s.ID); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(journalPath(dir, s.ID)); err != nil {
+		t.Fatalf("expected a journal: %v", err)
 	}
+
+	// Age the snapshot too; Save stamps it with the real time.
 	var snap Session
 	data, _ := os.ReadFile(filepath.Join(dir, s.ID+".json"))
-	if err := json.Unmarshal(data, &snap); err != nil || len(snap.Messages) != 4 {
-		t.Fatalf("snapshot has %d messages, %v; want 4", len(snap.Messages), err)
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
 	}
-
-	// Age the session, and check retention removes the snapshot and the journal.
-	snap.UpdatedAt = time.Now().Add(-48 * time.Hour)
+	snap.UpdatedAt = old
 	data, _ = json.Marshal(snap)
 	if err := os.WriteFile(filepath.Join(dir, s.ID+".json"), data, 0o600); err != nil {
 		t.Fatal(err)
@@ -328,31 +330,6 @@ func TestCompactFoldsJournalAndCleanOldRemovesIt(t *testing.T) {
 	}
 	if _, err := os.Stat(journalPath(dir, s.ID)); !os.IsNotExist(err) {
 		t.Fatalf("CleanOld left the journal behind: %v", err)
-	}
-}
-
-// A second process (baryo export) folds the journal into the snapshot while the first
-// is still saving. Nothing the first process saves afterwards may be lost.
-func TestCompactBesideLiveSessionLosesNothing(t *testing.T) {
-	setTestHome(t)
-	s, _ := New("m", "m:1")
-	add := func(n int) {
-		for len(s.Messages) < n {
-			s.Messages = append(s.Messages, llm.NewChatMessage("user", "m"+strings.Repeat("x", len(s.Messages))))
-		}
-		if err := s.Save(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	add(4)
-	add(6)
-	if err := Compact(s.ID); err != nil {
-		t.Fatal(err)
-	}
-	add(8)
-	got, err := Load(s.ID)
-	if err != nil || len(got.Messages) != 8 {
-		t.Fatalf("loaded %d messages, %v; want 8", len(got.Messages), err)
 	}
 }
 
