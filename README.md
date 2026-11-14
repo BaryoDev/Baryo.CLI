@@ -6,12 +6,10 @@ Baryo provides both an interactive terminal UI and a scriptable print mode for p
 
 ## Project Status
 
-Current release: **v0.14.0**. A project's own config and skills no longer apply until
-you trust the directory, MCP tools pass the same permission gate as built-in
-destructive tools, a stalled provider no longer hangs forever, `run_script`
-resolves symlinks before checking its sandbox, the repo index no longer comes
-back empty in released binaries, tool calls and results are recorded to a trace,
-and the project is MIT licensed.
+Current release: **v0.15.0**. A project's memories now need trust like its config
+and skills, page fetches only reach public addresses, `gh api` calls from the model
+use a flag allowlist, read tools resolve symlinks before opening a file, and
+sessions are saved as small appends instead of a rewrite each turn.
 
 See [CHANGELOG.md](CHANGELOG.md) for released changes and [ROADMAP.md](ROADMAP.md)
 for what comes next.

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## v0.15.0 (2026-11-14)
+
+Untrusted projects lose their memories, page fetches stop reaching private addresses, and sessions are saved as small appends. Upgrade if you run Baryo in repositories you did not write.
+
+### Breaking
+
+- **A project's `.baryo/memories.json` is ignored until the directory is trusted.** Memories are prompt text, so a cloned repository could write them. In an untrusted project `remember` and `/remember` save to your user memory, and `forget` only touches user memories. Trust works as it does for project config: answer the prompt, or pass `--trust-project`. (#65)
+- **Page fetches only connect to public addresses.** `fetch_page`, `web_search`, `deep_research` and `/fetch` refuse loopback, private, link-local (including the cloud metadata address 169.254.169.254), carrier-grade NAT and other non-public addresses, after DNS resolution and on every redirect. They also stop using `HTTP_PROXY` and `HTTPS_PROXY`, because a proxy hides the real destination from that check. Fetching a page on localhost or an internal host no longer works. (#66)
+- **`gh api` calls from the model use a flag allowlist.** Any flag not on the list is refused, as are full URL endpoints, `graphql`, `--input`, field values that read a file (`@file`), and method override headers. Field flags still work with an explicit `-X GET`. (#66)
+
+### Changed
+
+- **Sessions are saved as small appends.** A turn used to rewrite the whole session file.
+  It now appends to `<id>.journal.jsonl`, which is folded into `<id>.json` when it grows as
+  large as the file, so bytes written per turn no longer grow with the conversation. New
+  `session_save_interval` setting (default 0, every turn) holds saves for that long to cut
+  writes further on SD and eMMC storage. Existing session files load unchanged. A session
+  saved by this version and opened by an older one shows only the turns in the snapshot. (#68)
+- **Destructive meta-tools are refused in read-only and plan mode.** Their definitions were already not offered, but a model could still emit the name and it ran. A confirmation prompt that is waiting also gives way when the request is cancelled. (#66)
+- **File writes keep the existing file mode.** An executable script stays executable and a 0600 file stays 0600. (#65)
+- **Dependencies.** glamour 0.10 to 1.0 (the same markdown at width 40 renders the same visible text), the AWS SDK modules, gotreesitter 0.57 and doublestar 4.10.4. The minimum Go version for building from source is now 1.26.0. NOTICE is regenerated. (#52, #54, #63, #64)
+
+### Fixed
+
+- **Read tools followed symlinks to places outside the project, or to ignored files.** `read_file`, `grep` and `glob` now open the resolved path, so a link swapped in after the check cannot redirect the read, and apply the ignore rules to where the link really points. (#65)
+
+### Security
+
+- **Raised the Go toolchain and `golang.org/x/net`** to clear the govulncheck findings. (#63)
+- Project memories, page fetches and `gh api` are covered under Breaking. (#65, #66)
+
 ## v0.14.0 (2026-10-02)
 
 Project config needs trust before it applies, MCP tools pass the permission gate, and released binaries get their repo map back. Upgrade if you run Baryo in repositories you did not write.
