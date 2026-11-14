@@ -4,31 +4,20 @@ package rag
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/arnelirobles/baryo-cli/internal/llm"
+	"github.com/arnelirobles/baryo-cli/internal/session"
 )
 
 const (
 	maxSessions    = 20
 	minExchangeLen = 20 // skip very short Q&A pairs
 )
-
-// sessionFile is a minimal representation for loading session JSON.
-type sessionFile struct {
-	ID        string           `json:"id"`
-	Messages  []sessionMessage `json:"messages"`
-	CWD       string           `json:"cwd"`
-	UpdatedAt time.Time        `json:"updated_at"`
-}
-
-type sessionMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
 
 // SessionStore indexes past conversations for RAG retrieval.
 type SessionStore struct {
@@ -57,7 +46,7 @@ func (ss *SessionStore) Build(ctx context.Context) error {
 
 	// Load all session metadata for sorting.
 	type sessionMeta struct {
-		path      string
+		id        string
 		cwd       string
 		updatedAt time.Time
 	}
@@ -66,16 +55,13 @@ func (ss *SessionStore) Build(ctx context.Context) error {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		// session.Load replays the journal, which <id>.json alone does not hold.
+		sf, err := session.Load(strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
 			continue
 		}
-		var sf sessionFile
-		if err := json.Unmarshal(data, &sf); err != nil {
-			continue
-		}
 		metas = append(metas, sessionMeta{
-			path:      filepath.Join(dir, e.Name()),
+			id:        sf.ID,
 			cwd:       sf.CWD,
 			updatedAt: sf.UpdatedAt,
 		})
@@ -100,7 +86,7 @@ func (ss *SessionStore) Build(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		ss.loadSession(m.path)
+		ss.loadSession(m.id)
 	}
 	return nil
 }
@@ -110,14 +96,16 @@ func (ss *SessionStore) Chunks() []Chunk {
 	return ss.chunks
 }
 
-func (ss *SessionStore) loadSession(path string) {
-	data, err := os.ReadFile(path)
+func (ss *SessionStore) loadSession(id string) {
+	sf, err := session.Load(id)
 	if err != nil {
 		return
 	}
-	var sf sessionFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		return
+	text := func(m llm.ChatMessage) string {
+		if m.Content == nil {
+			return ""
+		}
+		return *m.Content
 	}
 
 	// Extract user→assistant pairs, skipping tool/system messages.
@@ -127,7 +115,7 @@ func (ss *SessionStore) loadSession(path string) {
 			continue
 		}
 		// Find the next assistant message.
-		var assistant *sessionMessage
+		var assistant *llm.ChatMessage
 		for j := i + 1; j < len(sf.Messages); j++ {
 			if sf.Messages[j].Role == "assistant" {
 				assistant = &sf.Messages[j]
@@ -141,8 +129,8 @@ func (ss *SessionStore) loadSession(path string) {
 			continue
 		}
 
-		userText := strings.TrimSpace(user.Content)
-		assistText := strings.TrimSpace(assistant.Content)
+		userText := strings.TrimSpace(text(user))
+		assistText := strings.TrimSpace(text(*assistant))
 		if len(userText)+len(assistText) < minExchangeLen {
 			continue
 		}

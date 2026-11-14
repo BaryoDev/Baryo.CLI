@@ -352,9 +352,12 @@ func readSession(dir, id string) (*Session, error) {
 	return &s, nil
 }
 
-// Compact folds a session's journal into its snapshot file, for readers that open
-// <id>.json directly. It does nothing when there is no journal. Run it only on a session
-// no other process is saving.
+// Compact writes a session's merged state into its snapshot file, for readers that open
+// <id>.json directly. It does nothing when there is no journal.
+//
+// It keeps the generation and leaves the journal alone. Another process may be appending
+// to that journal, and a new generation would make its later records stale. Replay skips
+// records the snapshot already holds, so the leftover journal is harmless.
 func Compact(id string) error {
 	dir, err := sessionsDir()
 	if err != nil {
@@ -367,18 +370,9 @@ func Compact(id string) error {
 	if err != nil {
 		return err
 	}
-	gen, err := randomID()
-	if err != nil {
-		return err
-	}
-	s.Gen = gen
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeCanonical(filepath.Join(dir, id+".json"), data, 0o600); err != nil {
-		return err
-	}
-	os.Remove(journalPath(dir, id))
-	return nil
+	return writeCanonical(filepath.Join(dir, id+".json"), data, 0o600)
 }

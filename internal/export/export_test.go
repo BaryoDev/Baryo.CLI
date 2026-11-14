@@ -342,3 +342,36 @@ func TestBuiltinOverwritesPreviousExport(t *testing.T) {
 		t.Errorf("re-export left %d events in the file, want 1", got)
 	}
 }
+
+// Exporters read <id>.json themselves, so Gather must fold the journal into it first.
+func TestGatherFoldsJournalIntoSessionFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := session.New("m", "m:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Messages = []llm.ChatMessage{llm.NewChatMessage("user", "one")}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	s.Messages = append(s.Messages, llm.NewChatMessage("assistant", "two journaled"))
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, refs, err := Gather(time.Time{}, s.ID)
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("Gather = %+v, %v", refs, err)
+	}
+	data, err := os.ReadFile(refs[0].MessagesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap struct{ Messages []llm.ChatMessage }
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Messages) != 2 {
+		t.Fatalf("session file handed to exporters holds %d messages, want 2", len(snap.Messages))
+	}
+}

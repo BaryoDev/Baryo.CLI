@@ -4,8 +4,10 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,8 +41,9 @@ func addTurn(s *Session, i int) {
 
 func TestSaveBytesPerTurnDoNotGrowWithConversation(t *testing.T) {
 	setTestHome(t)
+	origFloor := minCompactBytes
 	minCompactBytes = 1 << 30 // keep this test on the append path
-	t.Cleanup(func() { minCompactBytes = 64 * 1024 })
+	t.Cleanup(func() { minCompactBytes = origFloor })
 	total := countWrites(t)
 
 	s, _ := New("m", "m:1")
@@ -73,8 +76,9 @@ func TestSaveBytesPerTurnDoNotGrowWithConversation(t *testing.T) {
 
 func TestSaveCompactsJournalAndAmortizes(t *testing.T) {
 	home := setTestHome(t)
+	origFloor := minCompactBytes
 	minCompactBytes = 8 * 1024
-	t.Cleanup(func() { minCompactBytes = 64 * 1024 })
+	t.Cleanup(func() { minCompactBytes = origFloor })
 	total := countWrites(t)
 
 	s, _ := New("m", "m:1")
@@ -167,7 +171,11 @@ func TestLoadSkipsStaleJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A crash between writing the snapshot and removing the journal leaves the old one.
-	if err := os.WriteFile(journalPath(dir, s.ID), stale, 0o600); err != nil {
+	// Its records are of the old generation, and one of them sits exactly at the end of
+	// the new snapshot, where only the generation check keeps it out.
+	oldGen := strings.Split(string(stale), `"gen":"`)[1][:16]
+	atEnd := `{"gen":"` + oldGen + `","ts":"2030-01-01T00:00:00Z","seq":4,"msg":{"role":"user","content":"from the old generation"}}` + "\n"
+	if err := os.WriteFile(journalPath(dir, s.ID), append(stale, atEnd...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(s.ID)
@@ -303,22 +311,16 @@ func TestCompactFoldsJournalAndCleanOldRemovesIt(t *testing.T) {
 	if err := Compact(s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(journalPath(dir, s.ID)); !os.IsNotExist(err) {
-		t.Fatalf("journal should be gone after Compact: %v", err)
-	}
 	var snap Session
 	data, _ := os.ReadFile(filepath.Join(dir, s.ID+".json"))
 	if err := json.Unmarshal(data, &snap); err != nil || len(snap.Messages) != 4 {
 		t.Fatalf("snapshot has %d messages, %v; want 4", len(snap.Messages), err)
 	}
 
-	// Age the session, leave a journal beside it, and check retention removes both.
+	// Age the session, and check retention removes the snapshot and the journal.
 	snap.UpdatedAt = time.Now().Add(-48 * time.Hour)
 	data, _ = json.Marshal(snap)
 	if err := os.WriteFile(filepath.Join(dir, s.ID+".json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(journalPath(dir, s.ID), []byte("x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := CleanOld(1); err != nil || n != 1 {
@@ -326,5 +328,165 @@ func TestCompactFoldsJournalAndCleanOldRemovesIt(t *testing.T) {
 	}
 	if _, err := os.Stat(journalPath(dir, s.ID)); !os.IsNotExist(err) {
 		t.Fatalf("CleanOld left the journal behind: %v", err)
+	}
+}
+
+// A second process (baryo export) folds the journal into the snapshot while the first
+// is still saving. Nothing the first process saves afterwards may be lost.
+func TestCompactBesideLiveSessionLosesNothing(t *testing.T) {
+	setTestHome(t)
+	s, _ := New("m", "m:1")
+	add := func(n int) {
+		for len(s.Messages) < n {
+			s.Messages = append(s.Messages, llm.NewChatMessage("user", "m"+strings.Repeat("x", len(s.Messages))))
+		}
+		if err := s.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(4)
+	add(6)
+	if err := Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	add(8)
+	got, err := Load(s.ID)
+	if err != nil || len(got.Messages) != 8 {
+		t.Fatalf("loaded %d messages, %v; want 8", len(got.Messages), err)
+	}
+}
+
+func writeJournal(t *testing.T, dir string, s *Session, lines ...string) {
+	t.Helper()
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(`{"gen":"` + s.Gen + `","ts":"2031-01-01T00:00:00Z",` + l + "}\n")
+	}
+	if err := os.WriteFile(journalPath(dir, s.ID), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func msgLine(seq int, text string) string {
+	return `"seq":` + strconv.Itoa(seq) + `,"msg":{"role":"user","content":"` + text + `"}`
+}
+
+func TestReplayStopsAtSequenceGap(t *testing.T) {
+	home := setTestHome(t)
+	dir := filepath.Join(home, ".baryo", "sessions")
+	s, _ := New("m", "m:1")
+	addTurn(s, 0)
+	_ = s.Save()
+	// seq 2 fits, seq 4 leaves a gap, seq 3 after the gap must not be placed.
+	writeJournal(t, dir, s, msgLine(2, "two"), msgLine(4, "four"), msgLine(3, "three"))
+	got, err := Load(s.ID)
+	if err != nil || len(got.Messages) != 3 {
+		t.Fatalf("loaded %d messages, %v; want 3", len(got.Messages), err)
+	}
+}
+
+func TestReplaySkipsRecordsTheSnapshotHolds(t *testing.T) {
+	home := setTestHome(t)
+	dir := filepath.Join(home, ".baryo", "sessions")
+	s, _ := New("m", "m:1")
+	addTurn(s, 0)
+	_ = s.Save()
+	writeJournal(t, dir, s, msgLine(0, "duplicate"), msgLine(2, "two"))
+	got, err := Load(s.ID)
+	if err != nil || len(got.Messages) != 3 {
+		t.Fatalf("loaded %d messages, %v; want 3", len(got.Messages), err)
+	}
+	if strings.Contains(*got.Messages[0].Content, "duplicate") {
+		t.Fatal("a journal record replaced a message the snapshot already held")
+	}
+}
+
+func TestJournalTimestampSetsUpdatedAt(t *testing.T) {
+	setTestHome(t)
+	s, _ := New("m", "m:1")
+	addTurn(s, 0)
+	_ = s.Save()
+	future := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	nowFunc = func() time.Time { return future }
+	t.Cleanup(func() { nowFunc = time.Now })
+	addTurn(s, 1)
+	_ = s.Save()
+	got, err := Load(s.ID)
+	if err != nil || !got.UpdatedAt.Equal(future) {
+		t.Fatalf("UpdatedAt = %v, %v; want the journal timestamp %v", got.UpdatedAt, err, future)
+	}
+}
+
+// A failed append may leave a torn line behind. The next save must start over with a
+// snapshot, not append after it, or the failed turn's messages are lost for good.
+func TestFailedAppendForcesSnapshotOnNextSave(t *testing.T) {
+	setTestHome(t)
+	origFloor := minCompactBytes
+	minCompactBytes = 1 << 30
+	t.Cleanup(func() { minCompactBytes = origFloor })
+	s, _ := New("m", "m:1")
+	addTurn(s, 0)
+	_ = s.Save()
+
+	orig := appendJournal
+	appendJournal = func(string, []byte) error { return errors.New("disk full") }
+	addTurn(s, 1)
+	if err := s.Save(); err == nil {
+		t.Fatal("expected the failed append to be reported")
+	}
+	appendJournal = orig
+
+	addTurn(s, 2)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(s.ID)
+	if err != nil || len(got.Messages) != 6 {
+		t.Fatalf("loaded %d messages, %v; want 6", len(got.Messages), err)
+	}
+}
+
+// The journal is folded into the snapshot once it is as big as the snapshot, and not
+// before the floor.
+func TestJournalCompactionTriggerAndFloor(t *testing.T) {
+	home := setTestHome(t)
+	dir := filepath.Join(home, ".baryo", "sessions")
+	snapshots := 0
+	orig := writeCanonical
+	writeCanonical = func(p string, d []byte, m os.FileMode) error { snapshots++; return orig(p, d, m) }
+	t.Cleanup(func() { writeCanonical = orig })
+
+	// Default floor: 40 turns is about 22 KB of journal, under 64 KiB, so one snapshot.
+	s, _ := New("m", "m:1")
+	for i := 0; i < 40; i++ {
+		addTurn(s, i)
+		if err := s.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshots != 1 {
+		t.Fatalf("wrote %d snapshots under the floor, want 1", snapshots)
+	}
+
+	// Small floor: the journal must stay near the snapshot size and snapshots must recur.
+	if minCompactBytes != 64*1024 {
+		t.Fatalf("default compaction floor = %d, want 65536", minCompactBytes)
+	}
+	minCompactBytes = 4 * 1024
+	t.Cleanup(func() { minCompactBytes = 64 * 1024 })
+	s2, _ := New("m", "m:1")
+	for i := 0; i < 100; i++ {
+		addTurn(s2, i)
+		if err := s2.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snapshots < 4 {
+		t.Fatalf("only %d snapshots written, the journal was never folded in", snapshots)
+	}
+	snap, _ := os.Stat(filepath.Join(dir, s2.ID+".json"))
+	jr, err := os.Stat(journalPath(dir, s2.ID))
+	if err == nil && jr.Size() > snap.Size()+2000 {
+		t.Fatalf("journal is %d bytes beside a %d byte snapshot", jr.Size(), snap.Size())
 	}
 }

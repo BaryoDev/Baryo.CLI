@@ -293,3 +293,12 @@ func TestSessionSaveIntervalReadFromFile(t *testing.T) {
 		t.Fatalf("interval read from file = %v, want 45s", got)
 	}
 }
+
+func TestSessionSaveIntervalEnvOverride(t *testing.T) {
+	t.Setenv("BARYO_SESSION_SAVE_INTERVAL", "2m")
+	cfg := Config{SessionSaveInterval: "30s"}
+	applyEnv(&cfg)
+	if got := cfg.SessionSaveIntervalDuration(); got != 2*time.Minute {
+		t.Fatalf("interval with env set = %v, want 2m", got)
+	}
+}
