@@ -43,23 +43,37 @@ const BuiltinSchema = "baryo-history-jsonl-v1"
 // since filters on a session's last update; a zero time takes everything. onlyID limits the
 // export to one session. Sessions are ordered oldest first, because an importer appending
 // to an index wants history in the order it happened.
-func Gather(since time.Time, onlyID string) (string, []plugin.SessionRef, error) {
+//
+// Exporters read <id>.json themselves, but a live session keeps its newest turns in a
+// journal beside it. Gather therefore writes each session's merged state to a private
+// temp directory and points MessagesPath there, so nothing is ever written into the
+// session directory, where a running chat could be saving at the same moment. The
+// returned cleanup removes that directory once the export is done.
+func Gather(since time.Time, onlyID string) (string, []plugin.SessionRef, func(), error) {
+	noop := func() {}
 	dir, err := session.Dir()
 	if err != nil {
-		return "", nil, err
+		return "", nil, noop, err
 	}
+	tmp, err := os.MkdirTemp("", "baryo-export-")
+	if err != nil {
+		return "", nil, noop, err
+	}
+	cleanup := func() { os.RemoveAll(tmp) }
 
 	var summaries []session.Summary
 	if onlyID != "" {
 		s, err := session.Load(onlyID)
 		if err != nil {
-			return "", nil, err
+			cleanup()
+			return "", nil, noop, err
 		}
 		summaries = []session.Summary{{ID: s.ID, UpdatedAt: s.UpdatedAt}}
 	} else {
 		summaries, err = session.List()
 		if err != nil {
-			return "", nil, err
+			cleanup()
+			return "", nil, noop, err
 		}
 	}
 
@@ -81,9 +95,15 @@ func Gather(since time.Time, onlyID string) (string, []plugin.SessionRef, error)
 			CreatedAt: rfc3339(s.CreatedAt),
 			UpdatedAt: rfc3339(s.UpdatedAt),
 		}
-		if p, err := session.FilePath(s.ID); err == nil {
-			ref.MessagesPath = p
+		snap, err := json.MarshalIndent(s, "", "  ")
+		if err != nil {
+			continue
 		}
+		snapPath := filepath.Join(tmp, s.ID+".json")
+		if err := os.WriteFile(snapPath, snap, 0o600); err != nil {
+			continue
+		}
+		ref.MessagesPath = snapPath
 		// Archive and trace are optional: a session that never compacted has no archive,
 		// and one run without --trace-file has no trace. Only existing paths are sent, so
 		// an exporter does not have to distinguish "absent" from "unreadable".
@@ -97,7 +117,7 @@ func Gather(since time.Time, onlyID string) (string, []plugin.SessionRef, error)
 	}
 
 	sort.Slice(refs, func(i, j int) bool { return refs[i].UpdatedAt < refs[j].UpdatedAt })
-	return dir, refs, nil
+	return dir, refs, cleanup, nil
 }
 
 // Builtin writes the native JSONL export and returns what it wrote.

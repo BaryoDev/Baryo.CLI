@@ -51,6 +51,7 @@ type Config struct {
 	AutoMode             []AutoModeEntry    `yaml:"auto_mode"`              // ordered models for auto-routing
 	Notifications        *bool              `yaml:"notifications"`          // desktop notifications on completion (default false)
 	SessionRetentionDays int                `yaml:"session_retention_days"` // auto-delete sessions older than N days (0 = keep all)
+	SessionSaveInterval  string             `yaml:"session_save_interval"`  // shortest time between session writes to disk (default 0, every turn)
 	StreamIdleTimeout    string             `yaml:"stream_idle_timeout"`    // abandon a stream after this long with no data (default 5m)
 	Trace                *bool              `yaml:"trace"`                  // record tool calls and results per session (default true)
 	Sandbox              *bool              `yaml:"sandbox"`                // run code in Docker sandbox (default false)
@@ -128,6 +129,21 @@ func (c *Config) StreamIdleTimeoutDuration() time.Duration {
 	d, err := time.ParseDuration(c.StreamIdleTimeout)
 	if err != nil || d <= 0 {
 		return fallback
+	}
+	return d
+}
+
+// SessionSaveIntervalDuration returns the shortest time between writes of the session to
+// disk. Unset, unparseable and negative values mean zero: save every turn. A longer
+// interval trades how much of the last turns a hard kill can lose for fewer writes, which
+// is the point on SD and eMMC storage.
+func (c *Config) SessionSaveIntervalDuration() time.Duration {
+	if c.SessionSaveInterval == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.SessionSaveInterval)
+	if err != nil || d < 0 {
+		return 0
 	}
 	return d
 }
@@ -417,6 +433,9 @@ func loadFile(path string, cfg *Config) {
 	if file.StreamIdleTimeout != "" {
 		cfg.StreamIdleTimeout = file.StreamIdleTimeout
 	}
+	if file.SessionSaveInterval != "" {
+		cfg.SessionSaveInterval = file.SessionSaveInterval
+	}
 	if file.SessionRetentionDays > 0 {
 		cfg.SessionRetentionDays = file.SessionRetentionDays
 	}
@@ -510,6 +529,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BARYO_NOTIFICATIONS"); v != "" {
 		b := v == "true" || v == "1" || v == "yes"
 		cfg.Notifications = &b
+	}
+	if v := os.Getenv("BARYO_SESSION_SAVE_INTERVAL"); v != "" {
+		cfg.SessionSaveInterval = v
 	}
 	if v := os.Getenv("BARYO_SESSION_RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

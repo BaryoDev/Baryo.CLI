@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arnelirobles/baryo-cli/internal/fsutil"
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 )
 
@@ -30,6 +29,12 @@ type Session struct {
 	Tags      []string          `json:"tags,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
+
+	// Gen names this snapshot. The journal beside it only applies to the snapshot whose
+	// Gen it carries. Empty in files written before the journal existed.
+	Gen string `json:"journal_gen,omitempty"`
+
+	st *saveState // what Save remembers between calls; see journal.go
 }
 
 // sessionsDir returns ~/.baryo/sessions/, creating it if needed.
@@ -63,7 +68,10 @@ func New(modelName, modelTag string) (*Session, error) {
 	}, nil
 }
 
-// Save writes the session to disk as JSON.
+// Save records the session on disk. Normally that is a small append to the session's
+// journal; a full snapshot is written the first time, when the journal has grown as large
+// as the snapshot, and when an earlier message changed. With a save interval set (see
+// SetSaveInterval) a Save inside the window is held until the window ends or Flush runs.
 // Generates a title from the first user message if Title is empty.
 func (s *Session) Save() error {
 	dir, err := sessionsDir()
@@ -74,11 +82,7 @@ func (s *Session) Save() error {
 	if s.Title == "" && len(s.Messages) > 0 {
 		s.GenerateTitle()
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	return fsutil.WriteFileAtomic(filepath.Join(dir, s.ID+".json"), data, 0o600)
+	return s.state(dir).save(s)
 }
 
 // archivePath returns the session's archive file path within dir.
@@ -336,15 +340,14 @@ func Load(id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(dir, id+".json")); err != nil {
 		return nil, fmt.Errorf("session %q not found", id)
 	}
-	var s Session
-	if err := json.Unmarshal(data, &s); err != nil {
+	s, err := readSession(dir, id)
+	if err != nil {
 		return nil, fmt.Errorf("corrupt session %q: %w", id, err)
 	}
-	return &s, nil
+	return s, nil
 }
 
 // Summary is a lightweight view of a session for listing.
@@ -374,14 +377,11 @@ func List() ([]Summary, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		sp, err := readSession(dir, strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
 			continue
 		}
-		var s Session
-		if err := json.Unmarshal(data, &s); err != nil {
-			continue
-		}
+		s := *sp
 		summaries = append(summaries, Summary{
 			ID:        s.ID,
 			ModelName: s.ModelName,
@@ -430,14 +430,11 @@ func Search(query string) ([]Summary, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		sp, err := readSession(dir, strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
 			continue
 		}
-		var s Session
-		if err := json.Unmarshal(data, &s); err != nil {
-			continue
-		}
+		s := *sp
 		// Check title, then live messages, then archived (compacted-away) messages.
 		matched := s.Title != "" && strings.Contains(strings.ToLower(s.Title), q)
 		if !matched {
@@ -485,18 +482,16 @@ func CleanOld(days int) (int, error) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+		sp, err := readSession(dir, strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
 			continue
 		}
-		var s Session
-		if err := json.Unmarshal(data, &s); err != nil {
-			continue
-		}
+		s := *sp
 		if s.UpdatedAt.Before(cutoff) {
 			if err := os.Remove(path); err == nil {
 				deleted++
 				os.Remove(archivePath(dir, s.ID)) // best-effort; may not exist
+				os.Remove(journalPath(dir, s.ID)) // best-effort; may not exist
 				os.Remove(tracePath(dir, s.ID))   // best-effort; may not exist
 			}
 		}
