@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -258,5 +260,36 @@ func TestStreamIdleTimeoutDuration(t *testing.T) {
 		if got := cfg.StreamIdleTimeoutDuration(); got != c.want {
 			t.Errorf("StreamIdleTimeout %q -> %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSessionSaveIntervalDuration(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{in: "", want: 0},
+		{in: "30s", want: 30 * time.Second},
+		{in: "5m", want: 5 * time.Minute},
+		{in: "nonsense", want: 0},
+		{in: "-1m", want: 0},
+	}
+	for _, c := range cases {
+		cfg := Config{SessionSaveInterval: c.in}
+		if got := cfg.SessionSaveIntervalDuration(); got != c.want {
+			t.Errorf("SessionSaveInterval %q -> %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSessionSaveIntervalReadFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("session_save_interval: 45s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	loadFile(path, &cfg)
+	if got := cfg.SessionSaveIntervalDuration(); got != 45*time.Second {
+		t.Fatalf("interval read from file = %v, want 45s", got)
 	}
 }

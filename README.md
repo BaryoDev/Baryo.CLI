@@ -200,7 +200,15 @@ Sessions are automatically titled from the first user message. Configure automat
 ```yaml
 # ~/.baryo/config.yaml
 session_retention_days: 30   # delete sessions older than 30 days (0 = keep all)
+session_save_interval: 0     # shortest time between session writes, e.g. 30s (0 = every turn)
 ```
+
+A turn is saved as a small append to `~/.baryo/sessions/<id>.journal.jsonl`, not a rewrite of
+the whole conversation. The journal is folded into `<id>.json` once it grows as large as the
+file, and when an earlier message changes. A cut-off append never damages history: the torn
+last line is ignored on load. On SD or eMMC storage, set `session_save_interval` (or
+`BARYO_SESSION_SAVE_INTERVAL`) to hold saves in memory for that long. A hard kill then loses at
+most that window. Baryo writes held saves on exit, on Ctrl+C and on SIGHUP.
 
 ### Trajectory traces
 

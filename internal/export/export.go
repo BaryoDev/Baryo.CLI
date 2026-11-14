@@ -81,6 +81,10 @@ func Gather(since time.Time, onlyID string) (string, []plugin.SessionRef, error)
 			CreatedAt: rfc3339(s.CreatedAt),
 			UpdatedAt: rfc3339(s.UpdatedAt),
 		}
+		// Exporters read the session file themselves, so fold any journal into it first.
+		if err := session.Compact(s.ID); err != nil {
+			continue
+		}
 		if p, err := session.FilePath(s.ID); err == nil {
 			ref.MessagesPath = p
 		}

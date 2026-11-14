@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -154,6 +156,10 @@ func main() {
 	if cfg.SandboxEnabled() || flags.Sandbox {
 		tools.EnableSandbox()
 	}
+
+	// Sessions are saved as small journal appends; the interval says how often they hit disk.
+	session.SetSaveInterval(cfg.SessionSaveIntervalDuration())
+	flushSessionsOnSignal()
 
 	// Clean old sessions if retention is configured.
 	if cfg.SessionRetentionDays > 0 {
@@ -360,11 +366,26 @@ func main() {
 		}
 
 		p := tea.NewProgram(tui.NewApp(opts...), tea.WithAltScreen())
-		if _, err := p.Run(); err != nil {
+		_, err := p.Run()
+		session.FlushAll()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	}
+}
+
+// flushSessionsOnSignal writes any session save held back by the save interval when the
+// terminal closes. Bubble Tea ends the program on Ctrl+C and SIGTERM by itself, and the
+// flush after Run covers both; SIGHUP is the one it does not handle.
+func flushSessionsOnSignal() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	go func() {
+		<-ch
+		session.FlushAll()
+		os.Exit(129)
+	}()
 }
 
 // startTunnel starts an SSH tunnel if configured and overrides SocketPath.
