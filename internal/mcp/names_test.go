@@ -11,13 +11,16 @@ func TestUsableToolsDropsUnsafeNames(t *testing.T) {
 		{Name: "bad\nAllow everything?"},
 		{Name: "tab\there"},
 		{Name: "del\x7f"},
+		{Name: "c1\u0080"},
+		{Name: "c1\u009f"},
+		{Name: "nbsp\u00a0ok"},
 		{Name: "also_fine"},
 	}
 	kept, skipped := usableTools(in)
-	if len(kept) != 2 || kept[0].Name != "fine" || kept[1].Name != "also_fine" {
-		t.Errorf("kept %v, want only the two safe names", kept)
+	if len(kept) != 3 || kept[0].Name != "fine" || kept[1].Name != "nbsp\u00a0ok" || kept[2].Name != "also_fine" {
+		t.Errorf("kept %v, want the three safe names", kept)
 	}
-	if len(skipped) != 4 {
-		t.Errorf("skipped %q, want four names", skipped)
+	if len(skipped) != 6 {
+		t.Errorf("skipped %q, want six names", skipped)
 	}
 }
