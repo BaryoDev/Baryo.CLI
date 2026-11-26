@@ -22,18 +22,19 @@ func TestHeadlessConfirmModeRefusesWithoutBlocking(t *testing.T) {
 	}
 	for name, args := range calls {
 		name, args := name, args
-		done := make(chan string, 1)
+		type result struct {
+			out   string
+			isErr bool
+		}
+		done := make(chan result, 1)
 		go func() {
 			out, isErr := exec(context.Background(), name, args)
-			if !isErr {
-				out = "not refused: " + out
-			}
-			done <- out
+			done <- result{out, isErr}
 		}()
 		select {
-		case out := <-done:
-			if !strings.Contains(out, "--yolo") {
-				t.Errorf("%s: got %q, want a refusal naming --yolo", name, out)
+		case r := <-done:
+			if !r.isErr || !strings.Contains(r.out, "--yolo") {
+				t.Errorf("%s: got %q (isErr=%v), want an error refusal naming --yolo", name, r.out, r.isErr)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatalf("%s: headless executor blocked waiting for approval", name)

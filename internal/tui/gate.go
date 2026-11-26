@@ -211,13 +211,6 @@ func gate(ctx context.Context, p Policy, kind ToolKind, name, argsJSON string) (
 	return "", false
 }
 
-// confirmGate applies the permission mode to a call that needs approval in the
-// TUI. It returns a message and true when the call must not proceed.
-func confirmGate(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string) (string, bool) {
-	p := Policy{Mode: mode, CanPrompt: true, Words: interactiveWords, confirm: ch}
-	return gate(ctx, p, KindDestructive, name, argsJSON)
-}
-
 // classify maps a tool name to its kind.
 func classify(p Policy, name string) (kind ToolKind, known bool) {
 	if p.MCP != nil && p.MCP.IsMCPTool(name) {
@@ -265,6 +258,12 @@ func Execute(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON 
 	return runGated(ctx, p, rec, kind, name, argsJSON, body, after)
 }
 
+// executeReadMeta runs a read-only meta-tool through the same hooks and
+// recorder. It needs no approval.
+func executeReadMeta(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON string, fn func() (string, bool)) (string, bool) {
+	return runGated(ctx, p, rec, KindReadOnly, name, argsJSON, fn, nil)
+}
+
 // executeMeta runs a destructive meta-tool through the same hooks, gate and
 // recorder as Execute. Meta-tools have no auto-fix.
 func executeMeta(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON string, fn func() (string, bool)) (string, bool) {
@@ -285,8 +284,15 @@ func runGated(ctx context.Context, p Policy, rec *trace.Recorder, kind ToolKind,
 		}
 	}
 
+	if ctx.Err() != nil {
+		return "cancelled", true
+	}
+
 	if msg, blocked := gate(ctx, p, kind, name, argsJSON); blocked {
 		return msg, true
+	}
+	if ctx.Err() != nil {
+		return "cancelled", true
 	}
 
 	rec.ToolCall(name, argsJSON)

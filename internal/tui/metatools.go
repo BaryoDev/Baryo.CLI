@@ -307,15 +307,25 @@ func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolO
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		switch name {
 		case "web_search":
-			return executeWebSearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeWebSearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.ContextLimit, argsJSON)
+			})
 		case "deep_research":
-			return executeDeepResearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.Endpoint, opts.ModelTag, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeDeepResearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.Endpoint, opts.ModelTag, opts.ContextLimit, argsJSON)
+			})
 		case "fetch_page":
-			return executeFetchPage(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeFetchPage(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "remember":
-			return executeRemember(ctx, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeRemember(ctx, argsJSON)
+			})
 		case "review_code":
-			return executeReviewCode(ctx, opts.ContextLimit)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReviewCode(ctx, opts.ContextLimit)
+			})
 		case "commit_changes":
 			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
@@ -329,11 +339,17 @@ func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolO
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
-			return executeReviewPR(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReviewPR(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "read_issue":
-			return executeReadIssue(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReadIssue(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "pr_status":
-			return executePRStatus(ctx, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executePRStatus(ctx, argsJSON)
+			})
 		case "create_branch":
 			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)
@@ -356,6 +372,11 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	contextLimit := m.contextLimit
 	ip := m.interactivePolicy()
 	rec := m.recorder
+	// Plan mode has no hooks and no recorder, as for native tools.
+	rp, rrec := ip, rec
+	if readOnly {
+		rp, rrec = m.readOnlyPolicy(), nil
+	}
 
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		if readOnly && isDestructiveMetaTool(name) {
@@ -363,15 +384,25 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 		}
 		switch name {
 		case "web_search":
-			return executeWebSearch(ctx, provider, apiKey, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeWebSearch(ctx, provider, apiKey, contextLimit, argsJSON)
+			})
 		case "deep_research":
-			return executeDeepResearch(ctx, provider, apiKey, ep, modelTag, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeDeepResearch(ctx, provider, apiKey, ep, modelTag, contextLimit, argsJSON)
+			})
 		case "fetch_page":
-			return executeFetchPage(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeFetchPage(ctx, contextLimit, argsJSON)
+			})
 		case "remember":
-			return executeRemember(ctx, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeRemember(ctx, argsJSON)
+			})
 		case "review_code":
-			return executeReviewCode(ctx, contextLimit)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReviewCode(ctx, contextLimit)
+			})
 		case "commit_changes":
 			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
@@ -385,11 +416,17 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
-			return executeReviewPR(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReviewPR(ctx, contextLimit, argsJSON)
+			})
 		case "read_issue":
-			return executeReadIssue(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReadIssue(ctx, contextLimit, argsJSON)
+			})
 		case "pr_status":
-			return executePRStatus(ctx, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executePRStatus(ctx, argsJSON)
+			})
 		case "create_branch":
 			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)

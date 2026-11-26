@@ -148,10 +148,11 @@ func TestPolicyGateMatrix(t *testing.T) {
 func hookPolicy(t *testing.T, mode string, runHooks bool) (Policy, string) {
 	t.Helper()
 	marker := filepath.Join(t.TempDir(), "hook-ran")
+	t.Setenv("BARYO_TEST_MARKER", marker)
 	return Policy{
 		Mode:     mode,
 		Words:    interactiveWords,
-		Hooks:    config.HooksConfig{PreTool: "touch " + marker + "; exit 1"},
+		Hooks:    config.HooksConfig{PreTool: `touch "$BARYO_TEST_MARKER"; exit 1`},
 		RunHooks: runHooks,
 	}, marker
 }
@@ -424,8 +425,12 @@ func TestHeadlessMetaToolsRefuseWithoutApproval(t *testing.T) {
 			var out string
 			var isErr bool
 			within(t, func() { out, isErr = exec(context.Background(), name, "{}") })
-			if !isErr || out == "" {
-				t.Errorf("mode %q %s: got %q (isErr=%v), want a refusal", mode, name, out, isErr)
+			want := "--yolo"
+			if mode == "" {
+				want = "unknown permission mode"
+			}
+			if !isErr || !strings.Contains(out, want) {
+				t.Errorf("mode %q %s: got %q (isErr=%v), want a refusal containing %q", mode, name, out, isErr, want)
 			}
 		}
 	}
@@ -465,6 +470,44 @@ func TestMetaToolsRunHooksAndRecord(t *testing.T) {
 	// A refused call is not recorded.
 	p.Mode = "suggest"
 	executeMeta(context.Background(), p, rec, "create_pr", "{}", fn)
+	got := traceLines(t, rec, path)
+	if len(got) != 2 || !strings.Contains(got[0], `"tool_call"`) || !strings.Contains(got[1], `"tool_result"`) {
+		t.Errorf("got %v, want one tool_call and one tool_result", got)
+	}
+}
+
+// A call cancelled while the pre hook runs never starts its body.
+func TestExecuteCancelledAfterHookDoesNotRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	p := Policy{Mode: "auto", Words: interactiveWords, RunHooks: true,
+		Hooks: config.HooksConfig{PreTool: "sleep 0.3"}}
+	ran := false
+	out, isErr := executeMeta(ctx, p, nil, "commit_changes", "{}", func() (string, bool) {
+		ran = true
+		return "done", false
+	})
+	if ran || !isErr || out != "cancelled" {
+		t.Errorf("got %q (isErr=%v, ran=%v), want cancelled and no run", out, isErr, ran)
+	}
+}
+
+// Read-only meta-tools run the hooks and are recorded, with no approval.
+func TestReadMetaToolsRunHooksAndRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "read.jsonl")
+	rec, err := trace.New(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Policy{Mode: "suggest", Words: interactiveWords, RunHooks: true,
+		Hooks: config.HooksConfig{PostTool: "echo posted"}}
+	out, isErr := executeReadMeta(context.Background(), p, rec, "web_search", "{}", func() (string, bool) {
+		return "found", false
+	})
+	if isErr || !strings.Contains(out, "found") || !strings.Contains(out, "posted") {
+		t.Errorf("got %q (isErr=%v), want the body and the post hook", out, isErr)
+	}
 	got := traceLines(t, rec, path)
 	if len(got) != 2 || !strings.Contains(got[0], `"tool_call"`) || !strings.Contains(got[1], `"tool_result"`) {
 		t.Errorf("got %v, want one tool_call and one tool_result", got)
