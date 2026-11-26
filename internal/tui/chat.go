@@ -3305,7 +3305,7 @@ func formatConfirmPrompt(name, argsJSON string) string {
 		}
 		return "Allow running tests?"
 	}
-	return fmt.Sprintf("Allow %s?", name)
+	return fmt.Sprintf("Allow %q?", name)
 }
 
 func (m *ChatModel) parseParams(input string) error {

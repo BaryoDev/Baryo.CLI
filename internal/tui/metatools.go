@@ -14,6 +14,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/search"
+	"github.com/arnelirobles/baryo-cli/internal/trace"
 )
 
 // Meta-tool definitions for capable models (contextLimit >= 32K).
@@ -295,12 +296,14 @@ type HeadlessMetaToolOpts struct {
 	SearchAPIKey   string
 	ContextLimit   int
 	PermissionMode string
+	Recorder       *trace.Recorder // nil records nothing
 }
 
 // MakeHeadlessMetaToolExecutor wraps a standard tool executor to intercept
 // meta-tool calls in headless (print) mode. Destructive tools are gated by
 // PermissionMode: only "auto" allows execution; all other modes block.
 func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolOpts) llm.ToolExecutor {
+	hp := HeadlessPolicy(opts.PermissionMode, nil)
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		switch name {
 		case "web_search":
@@ -314,15 +317,15 @@ func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolO
 		case "review_code":
 			return executeReviewCode(ctx, opts.ContextLimit)
 		case "commit_changes":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
 			})
 		case "create_pr":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCreatePR(ctx, argsJSON)
 			})
 		case "run_tests":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
@@ -332,22 +335,13 @@ func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolO
 		case "pr_status":
 			return executePRStatus(ctx, argsJSON)
 		case "create_branch":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)
 			})
 		default:
 			return inner(ctx, name, argsJSON)
 		}
 	}
-}
-
-// headlessDestructiveGate blocks destructive tools unless PermissionMode is "auto".
-// Headless mode has no confirmation dialog, so non-auto modes simply block.
-func headlessDestructiveGate(mode, name string, fn func() (string, bool)) (string, bool) {
-	if msg, blocked := gate(context.Background(), HeadlessPolicy(mode, nil), KindMeta, name, ""); blocked {
-		return msg, true
-	}
-	return fn()
 }
 
 // makeMetaToolExecutor wraps a standard tool executor to intercept meta-tool
@@ -360,8 +354,8 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	provider := m.searchProvider
 	apiKey := m.searchAPIKey
 	contextLimit := m.contextLimit
-	mode := m.permissionMode
-	ch := m.confirmCh
+	ip := m.interactivePolicy()
+	rec := m.recorder
 
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		if readOnly && isDestructiveMetaTool(name) {
@@ -379,15 +373,15 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 		case "review_code":
 			return executeReviewCode(ctx, contextLimit)
 		case "commit_changes":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
 			})
 		case "create_pr":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCreatePR(ctx, argsJSON)
 			})
 		case "run_tests":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
@@ -397,7 +391,7 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 		case "pr_status":
 			return executePRStatus(ctx, argsJSON)
 		case "create_branch":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)
 			})
 		default:
@@ -409,10 +403,7 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 // executeDestructive gates a destructive meta-tool with the shared gate.
 func executeDestructive(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string, fn func() (string, bool)) (string, bool) {
 	p := Policy{Mode: mode, CanPrompt: true, Words: interactiveWords, confirm: ch}
-	if msg, blocked := gate(ctx, p, KindMeta, name, argsJSON); blocked {
-		return msg, true
-	}
-	return fn()
+	return executeMeta(ctx, p, nil, name, argsJSON, fn)
 }
 
 // executeWebSearch runs search.DeepQuery and truncates the result to fit context.

@@ -17,14 +17,15 @@ const validModes = "auto, confirm, suggest"
 // unknownModeMessage is the refusal for a mode the gate does not know. An
 // unknown or empty mode must never run a call that needs approval.
 func unknownModeMessage(mode, name string) string {
-	return fmt.Sprintf("[blocked] %s not run, unknown permission mode %q (valid modes: %s)", name, mode, validModes)
+	return fmt.Sprintf("[blocked] %q not run, unknown permission mode %q (valid modes: %s)", name, mode, validModes)
 }
 
 // ToolKind is what the gate needs to know about a call.
 type ToolKind int
 
 const (
-	KindReadOnly    ToolKind = iota // native tool that does not write
+	KindUnknown     ToolKind = iota // zero value, always refused
+	KindReadOnly                    // native tool that does not write
 	KindDestructive                 // native tool that writes
 	KindMCPReadOnly                 // MCP tool known to be read-only
 	KindMCPUnmarked                 // MCP tool not known to be read-only
@@ -49,7 +50,8 @@ type Decision struct {
 // Words holds the refusal wording of one policy. Each field is a format string
 // that takes the tool name.
 type Words struct {
-	Suggest     string // suggest mode, when a prompt is possible
+	Suggest     string // suggest mode
+	SuggestMCP  string // suggest mode, MCP tool (falls back to Suggest)
 	NoPrompt    string // approval needed but no prompt is possible
 	NoPromptMCP string // same, for an MCP tool
 	ReadOnly    string // destructive call in a read-only policy
@@ -81,27 +83,30 @@ type Policy struct {
 }
 
 var interactiveWords = Words{
-	Suggest: "[suggest mode] Would run %s, approve with --yolo or permission_mode: auto",
+	Suggest: "[suggest mode] Would run %q, approve with --yolo or permission_mode: auto",
 }
 
 var planWords = Words{
-	ReadOnly:    "[read-only mode] %s is not available, only read-only tools are allowed",
-	MCPOff:      "[read-only mode] %s is not available, MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)",
-	MCPUnmarked: "[read-only mode] %s is not available, it is not marked read-only by its server (set trust: read-only on that server to allow)",
+	ReadOnly:    "[read-only mode] %q is not available, only read-only tools are allowed",
+	MCPOff:      "[read-only mode] %q is not available, MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)",
+	MCPUnmarked: "[read-only mode] %q is not available, it is not marked read-only by its server (set trust: read-only on that server to allow)",
 }
 
 var subagentWords = Words{
-	ReadOnly:    "[subagent] %s blocked, subagents have read-only access",
-	MCPOff:      "[subagent] MCP tool %s not available in read-only mode",
-	MCPUnmarked: "[subagent] MCP tool %s is not marked read-only by its server",
+	ReadOnly:    "[subagent] %q blocked, subagents have read-only access",
+	MCPOff:      "[subagent] MCP tool %q not available in read-only mode",
+	MCPUnmarked: "[subagent] MCP tool %q is not marked read-only by its server",
 }
 
 const headlessNoPrompt = "tool %q requires --yolo flag for headless execution"
 
+const headlessNoPromptMCP = "MCP tool %q is not marked read-only and requires --yolo flag for headless execution"
+
 var headlessWords = Words{
 	Suggest:     headlessNoPrompt,
 	NoPrompt:    headlessNoPrompt,
-	NoPromptMCP: "MCP tool %q is not marked read-only and requires --yolo flag for headless execution",
+	NoPromptMCP: headlessNoPromptMCP,
+	SuggestMCP:  headlessNoPromptMCP,
 }
 
 // HeadlessPolicy is the policy for print mode: no prompt, no hooks.
@@ -112,6 +117,11 @@ func HeadlessPolicy(mode string, mcp MCPRouter) Policy {
 // decide is the whole permission switch. It is pure: it never prompts or runs
 // anything.
 func decide(p Policy, kind ToolKind, name string) Decision {
+	switch kind {
+	case KindReadOnly, KindDestructive, KindMCPReadOnly, KindMCPUnmarked, KindMeta:
+	default:
+		return refuse("[blocked] %q not run, unknown tool kind", name)
+	}
 	if p.ReadOnly {
 		switch kind {
 		case KindReadOnly:
@@ -131,15 +141,16 @@ func decide(p Policy, kind ToolKind, name string) Decision {
 	if kind == KindReadOnly || kind == KindMCPReadOnly {
 		return Decision{}
 	}
-	noPrompt := p.Words.NoPrompt
-	if kind == KindMCPUnmarked && p.Words.NoPromptMCP != "" {
-		noPrompt = p.Words.NoPromptMCP
-	}
+	noPrompt := noPromptFormat(p, kind)
 	switch p.Mode {
 	case "auto":
 		return Decision{}
 	case "suggest":
-		return refuse(p.Words.Suggest, name)
+		format := p.Words.Suggest
+		if kind == KindMCPUnmarked && p.Words.SuggestMCP != "" {
+			format = p.Words.SuggestMCP
+		}
+		return refuse(format, name)
 	case "confirm":
 		if !p.CanPrompt {
 			return refuse(noPrompt, name)
@@ -149,9 +160,18 @@ func decide(p Policy, kind ToolKind, name string) Decision {
 	return Decision{Action: Refuse, Msg: unknownModeMessage(p.Mode, name)}
 }
 
+// noPromptFormat is the wording for a call that needs approval when no prompt
+// is possible.
+func noPromptFormat(p Policy, kind ToolKind) string {
+	if kind == KindMCPUnmarked && p.Words.NoPromptMCP != "" {
+		return p.Words.NoPromptMCP
+	}
+	return p.Words.NoPrompt
+}
+
 func refuse(format, name string) Decision {
 	if format == "" {
-		format = "[blocked] %s needs approval and no prompt is possible here"
+		format = "[blocked] %q needs approval and no prompt is possible here"
 	}
 	return Decision{Action: Refuse, Msg: fmt.Sprintf(format, name)}
 }
@@ -164,6 +184,10 @@ func gate(ctx context.Context, p Policy, kind ToolKind, name, argsJSON string) (
 	case Refuse:
 		return d.Msg, true
 	case Prompt:
+		if p.confirm == nil {
+			// Nobody can be asked, so waiting would only hang.
+			return refuse(noPromptFormat(p, kind), name).Msg, true
+		}
 		respCh := make(chan bool, 1)
 		select {
 		case p.confirm <- confirmRequest{
@@ -178,7 +202,7 @@ func gate(ctx context.Context, p Policy, kind ToolKind, name, argsJSON string) (
 		select {
 		case approved := <-respCh:
 			if !approved {
-				return fmt.Sprintf("[denied] %s was not approved", name), true
+				return fmt.Sprintf("[denied] %q was not approved", name), true
 			}
 		case <-ctx.Done():
 			return "cancelled", true
@@ -218,14 +242,42 @@ func classify(p Policy, name string) (kind ToolKind, known bool) {
 func Execute(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON string) (string, bool) {
 	kind, known := classify(p, name)
 	if !known {
-		return fmt.Sprintf("unknown tool: %s", name), true
+		return fmt.Sprintf("unknown tool: %q", name), true
 	}
-	isMCP := kind == KindMCPReadOnly || kind == KindMCPUnmarked
+	body := func() (string, bool) {
+		if kind == KindMCPReadOnly || kind == KindMCPUnmarked {
+			return p.MCP.Execute(ctx, name, argsJSON)
+		}
+		r := tools.Execute(ctx, name, argsJSON)
+		return r.Content, r.IsError
+	}
+	var after func(string, bool) string
+	if kind != KindMCPReadOnly && kind != KindMCPUnmarked && p.AutoFix != nil {
+		after = func(content string, isErr bool) string {
+			if !isErr && isCodeModifyingTool(name) {
+				if checkOutput := runAutoCheck(ctx, *p.AutoFix); checkOutput != "" {
+					content += "\n\n" + checkOutput
+				}
+			}
+			return content
+		}
+	}
+	return runGated(ctx, p, rec, kind, name, argsJSON, body, after)
+}
 
+// executeMeta runs a destructive meta-tool through the same hooks, gate and
+// recorder as Execute. Meta-tools have no auto-fix.
+func executeMeta(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON string, fn func() (string, bool)) (string, bool) {
+	return runGated(ctx, p, rec, KindMeta, name, argsJSON, fn, nil)
+}
+
+// runGated is the shared path: pre hook, gate, record, body, optional
+// after step, post hook. after sees the recorded result and may extend it.
+func runGated(ctx context.Context, p Policy, rec *trace.Recorder, kind ToolKind, name, argsJSON string, body func() (string, bool), after func(string, bool) string) (string, bool) {
 	if p.RunHooks && p.Hooks.PreTool != "" {
 		hr := runHook(p.Hooks, HookPreTool, HookContext{ToolName: name})
 		if hr.Blocked {
-			msg := fmt.Sprintf("[hook blocked] %s was cancelled by pre_tool hook", name)
+			msg := fmt.Sprintf("[hook blocked] %q was cancelled by pre_tool hook", name)
 			if hr.Output != "" {
 				msg += ": " + hr.Output
 			}
@@ -238,20 +290,10 @@ func Execute(ctx context.Context, p Policy, rec *trace.Recorder, name, argsJSON 
 	}
 
 	rec.ToolCall(name, argsJSON)
-	var content string
-	var isErr bool
-	if isMCP {
-		content, isErr = p.MCP.Execute(ctx, name, argsJSON)
-		rec.ToolResult(name, content, isErr)
-	} else {
-		r := tools.Execute(ctx, name, argsJSON)
-		content, isErr = r.Content, r.IsError
-		rec.ToolResult(name, content, isErr)
-		if !isErr && p.AutoFix != nil && isCodeModifyingTool(name) {
-			if checkOutput := runAutoCheck(ctx, *p.AutoFix); checkOutput != "" {
-				content += "\n\n" + checkOutput
-			}
-		}
+	content, isErr := body()
+	rec.ToolResult(name, content, isErr)
+	if after != nil {
+		content = after(content, isErr)
 	}
 	if p.RunHooks && p.Hooks.PostTool != "" {
 		hr := runHook(p.Hooks, HookPostTool, HookContext{ToolName: name, Output: content})

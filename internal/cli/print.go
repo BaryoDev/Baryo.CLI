@@ -142,6 +142,7 @@ func runPrintText(opts PrintOptions) int {
 		SearchAPIKey:   opts.SearchAPIKey,
 		ContextLimit:   contextLimit,
 		PermissionMode: opts.PermissionMode,
+		Recorder:       rec,
 	})
 
 	maxRounds := opts.MaxTurns
@@ -293,6 +294,7 @@ func runPrintJSON(opts PrintOptions) int {
 		SearchAPIKey:   opts.SearchAPIKey,
 		ContextLimit:   contextLimit,
 		PermissionMode: opts.PermissionMode,
+		Recorder:       rec,
 	})
 
 	maxRounds := opts.MaxTurns
