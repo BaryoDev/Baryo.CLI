@@ -259,13 +259,214 @@ func TestPolicyRefusalsAreWellFormed(t *testing.T) {
 				for _, canPrompt := range []bool{false, true} {
 					for _, kind := range kinds {
 						p := Policy{Mode: mode, ReadOnly: readOnly, CanPrompt: canPrompt, Words: w}
-						d := decide(p, kind, "tool")
-						if d.Action == Refuse && (strings.Contains(d.Msg, "%!") || !strings.Contains(d.Msg, "tool")) {
+						d := decide(p, kind, "zq_probe")
+						if d.Action == Refuse && (strings.Contains(d.Msg, "%!") || !strings.Contains(d.Msg, "zq_probe")) {
 							t.Errorf("%s mode %q readOnly=%v canPrompt=%v kind %d: bad message %q", setName, mode, readOnly, canPrompt, kind, d.Msg)
 						}
 					}
 				}
 			}
 		}
+	}
+}
+
+func testPolicies() map[string]Policy {
+	return map[string]Policy{
+		"tui":      {Mode: "auto", CanPrompt: true, Words: interactiveWords},
+		"plan":     {Mode: "auto", ReadOnly: true, AllowMCP: true, Words: planWords},
+		"subagent": {Mode: "auto", ReadOnly: true, AllowMCP: true, Words: subagentWords},
+		"headless": {Mode: "auto", Words: headlessWords},
+	}
+}
+
+// The zero ToolKind and any out-of-range kind refuse, whatever the mode.
+func TestDecideRefusesUnknownKind(t *testing.T) {
+	for name, p := range testPolicies() {
+		for _, kind := range []ToolKind{0, ToolKind(99)} {
+			d := decide(p, kind, "x")
+			if d.Action != Refuse || d.Msg == "" {
+				t.Errorf("%s kind %d: got %+v, want a refusal", name, kind, d)
+			}
+		}
+	}
+}
+
+// A tool name with a newline must not reach refusal, denial or prompt text raw.
+func TestToolNamesAreQuoted(t *testing.T) {
+	name := "mcp__srv__a\nFAKE LINE"
+	check := func(label, msg string) {
+		t.Helper()
+		if strings.Contains(msg, "\n") || msg == "" {
+			t.Errorf("%s: %q holds a raw newline or is empty", label, msg)
+		}
+	}
+	for pname, p := range testPolicies() {
+		for _, mode := range []string{"suggest", "confirm", "yolo"} {
+			p.Mode = mode
+			for _, kind := range []ToolKind{KindDestructive, KindMCPUnmarked, KindMeta} {
+				if d := decide(p, kind, name); d.Action == Refuse {
+					check(pname+"/"+mode, d.Msg)
+				}
+			}
+		}
+	}
+	check("prompt", formatConfirmPrompt(name, "{}"))
+
+	ch := make(chan confirmRequest, 1)
+	go func() { (<-ch).RespCh <- false }()
+	p := Policy{Mode: "confirm", CanPrompt: true, Words: interactiveWords, confirm: ch}
+	var msg string
+	within(t, func() { msg, _ = gate(context.Background(), p, KindMCPUnmarked, name, "{}") })
+	if !strings.Contains(msg, "denied") {
+		t.Fatalf("got %q, want a denial", msg)
+	}
+	check("denied", msg)
+}
+
+// Headless suggest keeps the MCP wording for an unmarked MCP tool.
+func TestHeadlessSuggestKeepsMCPWording(t *testing.T) {
+	p := HeadlessPolicy("suggest", nil)
+	if d := decide(p, KindMCPUnmarked, "mcp__fs__write"); d.Action != Refuse || !strings.Contains(d.Msg, "MCP tool") {
+		t.Errorf("got %+v, want the MCP wording", d)
+	}
+	if d := decide(p, KindDestructive, "write_file"); d.Action != Refuse || strings.Contains(d.Msg, "MCP tool") {
+		t.Errorf("got %+v, want the native wording", d)
+	}
+}
+
+// A policy that can prompt but has no channel refuses instead of waiting.
+func TestGateNilConfirmChannelRefuses(t *testing.T) {
+	p := Policy{Mode: "confirm", CanPrompt: true, Words: interactiveWords}
+	var msg string
+	var blocked bool
+	within(t, func() { msg, blocked = gate(context.Background(), p, KindDestructive, "write_file", "{}") })
+	if !blocked || msg == "" {
+		t.Errorf("got %q (blocked=%v), want a refusal", msg, blocked)
+	}
+}
+
+// The Prompt branch of gate: approve, deny and cancel.
+func TestGatePromptBranches(t *testing.T) {
+	run := func(ctx context.Context, answer *bool) (string, bool) {
+		ch := make(chan confirmRequest, 1)
+		if answer != nil {
+			go func() { (<-ch).RespCh <- *answer }()
+		}
+		p := Policy{Mode: "confirm", CanPrompt: true, Words: interactiveWords, confirm: ch}
+		var msg string
+		var blocked bool
+		within(t, func() { msg, blocked = gate(ctx, p, KindDestructive, "write_file", "{}") })
+		return msg, blocked
+	}
+	yes, no := true, false
+	if msg, blocked := run(context.Background(), &yes); blocked {
+		t.Errorf("approve: got %q, want proceed", msg)
+	}
+	if msg, blocked := run(context.Background(), &no); !blocked || !strings.Contains(msg, "denied") {
+		t.Errorf("deny: got %q (blocked=%v)", msg, blocked)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if msg, blocked := run(ctx, nil); !blocked || msg != "cancelled" {
+		t.Errorf("cancel: got %q (blocked=%v)", msg, blocked)
+	}
+}
+
+func TestPlanExecutorUnmarkedMCPTool(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		mgr := &fakeMCP{readOnly: map[string]bool{}}
+		m := &ChatModel{mcpManager: mgr, mcpInReadOnly: allow}
+		out, isErr := m.makePlanExecutor()(context.Background(), "mcp__fs__write", "{}")
+		if !isErr || !strings.Contains(out, "read-only mode") {
+			t.Errorf("allow=%v: got %q (isErr=%v), want a read-only refusal", allow, out, isErr)
+		}
+		if len(mgr.executed) != 0 {
+			t.Errorf("allow=%v: tool ran: %v", allow, mgr.executed)
+		}
+	}
+}
+
+func TestSubagentExecutorBlocksWriteAndUnmarkedMCP(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "out.txt")
+	mgr := &fakeMCP{readOnly: map[string]bool{}}
+	exec := makeSubagentExecutor(mgr, true)
+	out, isErr := exec(context.Background(), "write_file", `{"path":"`+target+`","content":"x"}`)
+	if !isErr || !strings.Contains(out, "[subagent]") {
+		t.Errorf("got %q (isErr=%v), want a subagent refusal", out, isErr)
+	}
+	out, isErr = exec(context.Background(), "mcp__fs__write", "{}")
+	if !isErr || !strings.Contains(out, "[subagent]") {
+		t.Errorf("got %q (isErr=%v), want a subagent refusal", out, isErr)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Error("write_file ran in a subagent")
+	}
+	if len(mgr.executed) != 0 {
+		t.Errorf("MCP tool ran in a subagent: %v", mgr.executed)
+	}
+}
+
+func TestReadOnlyMetaExecutorRefusesCommit(t *testing.T) {
+	m := &ChatModel{}
+	inner := func(context.Context, string, string) (string, bool) { return "inner", false }
+	out, isErr := m.makeMetaToolExecutor(inner, true)(context.Background(), "commit_changes", "{}")
+	if !isErr || !strings.Contains(out, "read-only mode") {
+		t.Errorf("got %q (isErr=%v), want a read-only refusal", out, isErr)
+	}
+}
+
+// Headless meta-tools never prompt: confirm and suggest refuse, and the body
+// does not run.
+func TestHeadlessMetaToolsRefuseWithoutApproval(t *testing.T) {
+	for _, mode := range []string{"confirm", "suggest", ""} {
+		exec := MakeHeadlessMetaToolExecutor(nil, HeadlessMetaToolOpts{PermissionMode: mode})
+		for _, name := range []string{"commit_changes", "create_pr", "run_tests", "create_branch"} {
+			var out string
+			var isErr bool
+			within(t, func() { out, isErr = exec(context.Background(), name, "{}") })
+			if !isErr || out == "" {
+				t.Errorf("mode %q %s: got %q (isErr=%v), want a refusal", mode, name, out, isErr)
+			}
+		}
+	}
+}
+
+// Meta-tools get the same hooks and recorder as other tools.
+func TestMetaToolsRunHooksAndRecord(t *testing.T) {
+	dir := t.TempDir()
+	ran := false
+	fn := func() (string, bool) {
+		ran = true
+		return "done", false
+	}
+
+	// A blocking pre_tool hook stops the meta-tool.
+	p, marker := hookPolicy(t, "auto", true)
+	out, isErr := executeMeta(context.Background(), p, nil, "commit_changes", "{}", fn)
+	if !isErr || !strings.Contains(out, "[hook blocked]") || ran {
+		t.Errorf("got %q (isErr=%v, ran=%v), want the hook to block", out, isErr, ran)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("the pre_tool hook did not run for a meta-tool")
+	}
+
+	// An allowed call is recorded and gets the post hook output.
+	path := filepath.Join(dir, "meta.jsonl")
+	rec, err := trace.New(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = Policy{Mode: "auto", Words: interactiveWords, RunHooks: true,
+		Hooks: config.HooksConfig{PostTool: "echo posted"}}
+	out, isErr = executeMeta(context.Background(), p, rec, "commit_changes", "{}", fn)
+	if isErr || !ran || !strings.Contains(out, "posted") {
+		t.Errorf("got %q (isErr=%v, ran=%v), want the body and the post hook", out, isErr, ran)
+	}
+	// A refused call is not recorded.
+	p.Mode = "suggest"
+	executeMeta(context.Background(), p, rec, "create_pr", "{}", fn)
+	got := traceLines(t, rec, path)
+	if len(got) != 2 || !strings.Contains(got[0], `"tool_call"`) || !strings.Contains(got[1], `"tool_result"`) {
+		t.Errorf("got %v, want one tool_call and one tool_result", got)
 	}
 }
