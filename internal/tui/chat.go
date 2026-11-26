@@ -3200,106 +3200,50 @@ func (m *ChatModel) startToolStream(text string, hasTools, hasSkill bool) (ChatM
 	return *m, tea.Batch(cmds...)
 }
 
+// interactivePolicy is the policy for the TUI: prompts, hooks and auto-fix on.
+func (m *ChatModel) interactivePolicy() Policy {
+	afCfg := m.autoFixCfg
+	p := Policy{
+		Mode:      m.permissionMode,
+		CanPrompt: true,
+		Hooks:     m.hooksConfig,
+		RunHooks:  true,
+		AutoFix:   &afCfg,
+		Words:     interactiveWords,
+		confirm:   m.confirmCh,
+	}
+	if m.mcpManager != nil {
+		p.MCP = m.mcpManager
+	}
+	return p
+}
+
+// readOnlyPolicy is the policy for plan mode: read-only tools only.
+func (m *ChatModel) readOnlyPolicy() Policy {
+	p := Policy{ReadOnly: true, AllowMCP: m.mcpInReadOnly, Words: planWords}
+	if m.mcpManager != nil {
+		p.MCP = m.mcpManager
+	}
+	return p
+}
+
 // makeExecutor returns a tool executor function that respects the permission mode.
 // For destructive tools in "confirm" mode, it sends a confirmRequest on the channel
 // and blocks until the TUI sends back a response.
 func (m *ChatModel) makeExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
-	mode := m.permissionMode
-	ch := m.confirmCh
-	mgr := m.mcpManager
-	afCfg := m.autoFixCfg
-	hooks := m.hooksConfig
+	p := m.interactivePolicy()
 	rec := m.recorder
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		// Unknown names cannot run, so reject them before hooks fire or the
-		// gate asks the user to approve something that does not exist.
-		isMCP := mgr != nil && mgr.IsMCPTool(name)
-		if !isMCP && !tools.Exists(name) {
-			return fmt.Sprintf("unknown tool: %s", name), true
-		}
-
-		// Pre-tool hook: runs before execution. Non-zero exit cancels the tool.
-		if hooks.PreTool != "" {
-			hr := runHook(hooks, HookPreTool, HookContext{ToolName: name})
-			if hr.Blocked {
-				msg := fmt.Sprintf("[hook blocked] %s was cancelled by pre_tool hook", name)
-				if hr.Output != "" {
-					msg += ": " + hr.Output
-				}
-				return msg, true
-			}
-		}
-
-		// Route MCP tools to the MCP manager. Anything not known to be
-		// read-only passes the same gate as a native destructive tool.
-		if isMCP {
-			if !mgr.IsReadOnlyTool(name) {
-				if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
-					return msg, true
-				}
-			}
-			rec.ToolCall(name, argsJSON)
-			content, isErr := mgr.Execute(ctx, name, argsJSON)
-			rec.ToolResult(name, content, isErr)
-			// Post-tool hook
-			if hooks.PostTool != "" {
-				hr := runHook(hooks, HookPostTool, HookContext{ToolName: name, Output: content})
-				if hr.Output != "" {
-					content += "\n\n[post_tool hook]\n" + hr.Output
-				}
-			}
-			return content, isErr
-		}
-		if tools.IsDestructive(name) {
-			if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
-				return msg, true
-			}
-		}
-		rec.ToolCall(name, argsJSON)
-		r := tools.Execute(ctx, name, argsJSON)
-		rec.ToolResult(name, r.Content, r.IsError)
-		// Auto-fix: run linter/tests after successful code-modifying tool calls.
-		if !r.IsError && isCodeModifyingTool(name) {
-			if checkOutput := runAutoCheck(ctx, afCfg); checkOutput != "" {
-				r.Content += "\n\n" + checkOutput
-			}
-		}
-		// Post-tool hook
-		if hooks.PostTool != "" {
-			hr := runHook(hooks, HookPostTool, HookContext{ToolName: name, Output: r.Content})
-			if hr.Output != "" {
-				r.Content += "\n\n[post_tool hook]\n" + hr.Output
-			}
-		}
-		return r.Content, r.IsError
+		return Execute(ctx, p, rec, name, argsJSON)
 	}
 }
 
 // makePlanExecutor returns a tool executor for read-only modes that blocks all
 // destructive tools and only allows read-only operations.
 func (m *ChatModel) makePlanExecutor() func(ctx context.Context, name, argsJSON string) (string, bool) {
-	mgr := m.mcpManager
-	allowMCP := m.mcpInReadOnly
+	p := m.readOnlyPolicy()
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		if (mgr == nil || !mgr.IsMCPTool(name)) && !tools.Exists(name) {
-			return fmt.Sprintf("unknown tool: %s", name), true
-		}
-		// Route MCP tools to the MCP manager. Read-only modes allow only tools
-		// known to be read-only, so the mode label means what it says.
-		if mgr != nil && mgr.IsMCPTool(name) {
-			if !allowMCP {
-				return fmt.Sprintf("[read-only mode] %s is not available, MCP tools are disabled in read-only modes (set mcp_in_read_only: true to allow)", name), true
-			}
-			if !mgr.IsReadOnlyTool(name) {
-				return fmt.Sprintf("[read-only mode] %s is not available, it is not marked read-only by its server (set trust: read-only on that server to allow)", name), true
-			}
-			return mgr.Execute(ctx, name, argsJSON)
-		}
-		if tools.IsDestructive(name) {
-			return fmt.Sprintf("[read-only mode] %s is not available, only read-only tools are allowed", name), true
-		}
-		r := tools.Execute(ctx, name, argsJSON)
-		return r.Content, r.IsError
+		return Execute(ctx, p, nil, name, argsJSON)
 	}
 }
 

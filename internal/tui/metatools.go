@@ -344,8 +344,8 @@ func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolO
 // headlessDestructiveGate blocks destructive tools unless PermissionMode is "auto".
 // Headless mode has no confirmation dialog, so non-auto modes simply block.
 func headlessDestructiveGate(mode, name string, fn func() (string, bool)) (string, bool) {
-	if mode != "auto" {
-		return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
+	if msg, blocked := gate(context.Background(), HeadlessPolicy(mode, nil), KindMeta, name, ""); blocked {
+		return msg, true
 	}
 	return fn()
 }
@@ -365,7 +365,7 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		if readOnly && isDestructiveMetaTool(name) {
-			return fmt.Sprintf("[read-only mode] %s is not available, only read-only tools are allowed", name), true
+			return gate(ctx, Policy{ReadOnly: true, Words: planWords}, KindMeta, name, argsJSON)
 		}
 		switch name {
 		case "web_search":
@@ -406,10 +406,10 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	}
 }
 
-// executeDestructive gates a destructive meta-tool behind the same gate as
-// native destructive tools, so an unknown mode refuses here too.
+// executeDestructive gates a destructive meta-tool with the shared gate.
 func executeDestructive(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string, fn func() (string, bool)) (string, bool) {
-	if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
+	p := Policy{Mode: mode, CanPrompt: true, Words: interactiveWords, confirm: ch}
+	if msg, blocked := gate(ctx, p, KindMeta, name, argsJSON); blocked {
 		return msg, true
 	}
 	return fn()
