@@ -7,6 +7,15 @@ import (
 	"fmt"
 )
 
+// validModes lists the permission modes the gate understands.
+const validModes = "auto, confirm, suggest"
+
+// unknownModeMessage is the refusal for a mode the gate does not know. An
+// unknown or empty mode must never run a call that needs approval.
+func unknownModeMessage(mode, name string) string {
+	return fmt.Sprintf("[blocked] %s not run, unknown permission mode %q (valid modes: %s)", name, mode, validModes)
+}
+
 // confirmGate applies the permission mode to a call that needs approval.
 // It returns a message and true when the call must not proceed.
 //
@@ -14,6 +23,8 @@ import (
 // be read-only, so the two cannot drift apart.
 func confirmGate(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string) (string, bool) {
 	switch mode {
+	case "auto":
+		return "", false
 	case "suggest":
 		return fmt.Sprintf("[suggest mode] Would run %s, approve with --yolo or permission_mode: auto", name), true
 	case "confirm":
@@ -36,7 +47,8 @@ func confirmGate(ctx context.Context, mode string, ch chan confirmRequest, name,
 		case <-ctx.Done():
 			return "cancelled", true
 		}
+	default:
+		return unknownModeMessage(mode, name), true
 	}
-	// "auto" proceeds.
 	return "", false
 }

@@ -134,7 +134,9 @@ func WithSearchConfig(provider, apiKey string) AppOption {
 	}
 }
 
-// WithPermissionMode sets the permission mode for destructive tool calls.
+// WithPermissionMode sets the permission mode for destructive tool calls. An
+// unknown mode is kept as given and the gate refuses every call that needs
+// approval, with a message naming the mode.
 func WithPermissionMode(mode string) AppOption {
 	return func(a *AppModel) {
 		a.permissionMode = mode

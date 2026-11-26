@@ -406,33 +406,11 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	}
 }
 
-// executeDestructive gates a destructive meta-tool behind the permission system.
-// In "suggest" mode it blocks; in "confirm" mode it asks the user; in "auto" it proceeds.
+// executeDestructive gates a destructive meta-tool behind the same gate as
+// native destructive tools, so an unknown mode refuses here too.
 func executeDestructive(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string, fn func() (string, bool)) (string, bool) {
-	switch mode {
-	case "suggest":
-		return fmt.Sprintf("[suggest mode] Would run %s — approve with --yolo or permission_mode: auto", name), true
-	case "confirm":
-		prompt := formatConfirmPrompt(name, argsJSON)
-		respCh := make(chan bool, 1)
-		select {
-		case ch <- confirmRequest{
-			Name:   name,
-			Args:   argsJSON,
-			Prompt: prompt,
-			RespCh: respCh,
-		}:
-		case <-ctx.Done():
-			return "cancelled", true
-		}
-		select {
-		case approved := <-respCh:
-			if !approved {
-				return fmt.Sprintf("[denied] %s was not approved", name), true
-			}
-		case <-ctx.Done():
-			return "cancelled", true
-		}
+	if msg, blocked := confirmGate(ctx, mode, ch, name, argsJSON); blocked {
+		return msg, true
 	}
 	return fn()
 }
