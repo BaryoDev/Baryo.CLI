@@ -209,7 +209,8 @@ func traceLines(t *testing.T, rec *trace.Recorder, path string) []string {
 // one tool_result.
 func TestExecuteRecordsAllowedCallsOnly(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "in.txt")
+	t.Chdir(dir)
+	file := "in.txt"
 	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +221,7 @@ func TestExecuteRecordsAllowedCallsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := Policy{Mode: "suggest", Words: interactiveWords}
-	if _, isErr := Execute(context.Background(), p, rec, "write_file", `{"path":"`+filepath.Join(dir, "out.txt")+`","content":"y"}`); !isErr {
+	if _, isErr := Execute(context.Background(), p, rec, "write_file", `{"path":"`+"out.txt"+`","content":"y"}`); !isErr {
 		t.Fatal("want a refusal")
 	}
 	if _, isErr := Execute(context.Background(), p, rec, "tool_that_does_not_exist", "{}"); !isErr {
@@ -241,5 +242,30 @@ func TestExecuteRecordsAllowedCallsOnly(t *testing.T) {
 	got := traceLines(t, rec, path)
 	if len(got) != 2 || !strings.Contains(got[0], `"tool_call"`) || !strings.Contains(got[1], `"tool_result"`) {
 		t.Errorf("got %v, want one tool_call then one tool_result", got)
+	}
+}
+
+// No refusal message may be built from an empty format, for any word set,
+// mode or kind, including a policy with zero-value Words.
+func TestPolicyRefusalsAreWellFormed(t *testing.T) {
+	sets := map[string]Words{
+		"zero": {}, "interactive": interactiveWords, "plan": planWords,
+		"subagent": subagentWords, "headless": headlessWords,
+	}
+	kinds := []ToolKind{KindReadOnly, KindDestructive, KindMCPReadOnly, KindMCPUnmarked, KindMeta}
+	for setName, w := range sets {
+		for _, mode := range []string{"auto", "confirm", "suggest", "", "yolo"} {
+			for _, readOnly := range []bool{false, true} {
+				for _, canPrompt := range []bool{false, true} {
+					for _, kind := range kinds {
+						p := Policy{Mode: mode, ReadOnly: readOnly, CanPrompt: canPrompt, Words: w}
+						d := decide(p, kind, "tool")
+						if d.Action == Refuse && (strings.Contains(d.Msg, "%!") || !strings.Contains(d.Msg, "tool")) {
+							t.Errorf("%s mode %q readOnly=%v canPrompt=%v kind %d: bad message %q", setName, mode, readOnly, canPrompt, kind, d.Msg)
+						}
+					}
+				}
+			}
+		}
 	}
 }

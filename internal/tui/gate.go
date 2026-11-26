@@ -139,9 +139,6 @@ func decide(p Policy, kind ToolKind, name string) Decision {
 	case "auto":
 		return Decision{}
 	case "suggest":
-		if !p.CanPrompt {
-			return refuse(noPrompt, name)
-		}
 		return refuse(p.Words.Suggest, name)
 	case "confirm":
 		if !p.CanPrompt {
@@ -153,6 +150,9 @@ func decide(p Policy, kind ToolKind, name string) Decision {
 }
 
 func refuse(format, name string) Decision {
+	if format == "" {
+		format = "[blocked] %s needs approval and no prompt is possible here"
+	}
 	return Decision{Action: Refuse, Msg: fmt.Sprintf(format, name)}
 }
 
