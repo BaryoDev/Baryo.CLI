@@ -30,6 +30,7 @@ type Client struct {
 	stdin   io.WriteCloser
 	stdout  io.Reader
 	tools   []MCPToolDef
+	skipped []string // names dropped for an empty name or a control character
 	nextID  atomic.Int64
 	pending sync.Map // map[int]chan JSONRPCResponse
 	mu      sync.Mutex
@@ -107,9 +108,34 @@ func NewClient(ctx context.Context, name, command string, args, env []string) (*
 		c.Close()
 		return nil, fmt.Errorf("parse tools/list: %w", err)
 	}
-	c.tools = toolList.Tools
+	c.tools, c.skipped = usableTools(toolList.Tools)
 
 	return c, nil
+}
+
+// usableTools drops tools whose name is empty or holds a control character.
+// Such a name could forge lines in refusal text and approval prompts.
+func usableTools(in []MCPToolDef) (kept []MCPToolDef, skipped []string) {
+	for _, t := range in {
+		if validToolName(t.Name) {
+			kept = append(kept, t)
+		} else {
+			skipped = append(skipped, t.Name)
+		}
+	}
+	return kept, skipped
+}
+
+func validToolName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // Tools returns the tools available on this server.
