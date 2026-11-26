@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -15,6 +16,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
+
+// toInt32 converts n to int32, reporting false when n does not fit.
+func toInt32(n int) (int32, bool) {
+	if n < math.MinInt32 || n > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(n), true
+}
 
 // streamChatBedrock sends a chat request to the AWS Bedrock ConverseStream API
 // and streams events. Same return signature as streamChatRaw.
@@ -52,7 +61,11 @@ func streamChatBedrock(ctx context.Context, ep Endpoint, model string, messages 
 		var infCfg types.InferenceConfiguration
 		hasInfCfg := false
 		if params.MaxTokens != nil {
-			v := int32(*params.MaxTokens)
+			v, ok := toInt32(*params.MaxTokens)
+			if !ok {
+				ch <- StreamEvent{Error: fmt.Sprintf("max_tokens %d is out of range", *params.MaxTokens)}
+				return
+			}
 			infCfg.MaxTokens = &v
 			hasInfCfg = true
 		}
