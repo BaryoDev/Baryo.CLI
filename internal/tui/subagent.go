@@ -110,29 +110,12 @@ func RunSubagent(ctx context.Context, cfg SubagentConfig, progressCh chan<- Suba
 
 // makeSubagentExecutor returns a read-only tool executor for subagents.
 func makeSubagentExecutor(mgr MCPManager, allowMCP bool) llm.ToolExecutor {
+	p := Policy{ReadOnly: true, AllowMCP: allowMCP, Words: subagentWords}
+	if mgr != nil {
+		p.MCP = mgr
+	}
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		if (mgr == nil || !mgr.IsMCPTool(name)) && !tools.Exists(name) {
-			return fmt.Sprintf("unknown tool: %s", name), true
-		}
-		// Route MCP tools if allowed. Subagents are read-only, so only tools
-		// known to be read-only are routed.
-		if mgr != nil && mgr.IsMCPTool(name) {
-			if !allowMCP {
-				return fmt.Sprintf("[subagent] MCP tool %s not available in read-only mode", name), true
-			}
-			if !mgr.IsReadOnlyTool(name) {
-				return fmt.Sprintf("[subagent] MCP tool %s is not marked read-only by its server", name), true
-			}
-			return mgr.Execute(ctx, name, argsJSON)
-		}
-
-		// Block destructive tools
-		if tools.IsDestructive(name) {
-			return fmt.Sprintf("[subagent] %s blocked — subagents have read-only access", name), true
-		}
-
-		r := tools.Execute(ctx, name, argsJSON)
-		return r.Content, r.IsError
+		return Execute(ctx, p, nil, name, argsJSON)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/arnelirobles/baryo-cli/internal/llm"
 	"github.com/arnelirobles/baryo-cli/internal/logger"
 	"github.com/arnelirobles/baryo-cli/internal/search"
+	"github.com/arnelirobles/baryo-cli/internal/trace"
 )
 
 // Meta-tool definitions for capable models (contextLimit >= 32K).
@@ -295,59 +296,68 @@ type HeadlessMetaToolOpts struct {
 	SearchAPIKey   string
 	ContextLimit   int
 	PermissionMode string
+	Recorder       *trace.Recorder // nil records nothing
 }
 
 // MakeHeadlessMetaToolExecutor wraps a standard tool executor to intercept
 // meta-tool calls in headless (print) mode. Destructive tools are gated by
 // PermissionMode: only "auto" allows execution; all other modes block.
 func MakeHeadlessMetaToolExecutor(inner llm.ToolExecutor, opts HeadlessMetaToolOpts) llm.ToolExecutor {
+	hp := HeadlessPolicy(opts.PermissionMode, nil)
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		switch name {
 		case "web_search":
-			return executeWebSearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeWebSearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.ContextLimit, argsJSON)
+			})
 		case "deep_research":
-			return executeDeepResearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.Endpoint, opts.ModelTag, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeDeepResearch(ctx, opts.SearchProvider, opts.SearchAPIKey, opts.Endpoint, opts.ModelTag, opts.ContextLimit, argsJSON)
+			})
 		case "fetch_page":
-			return executeFetchPage(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeFetchPage(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "remember":
-			return executeRemember(ctx, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeRemember(ctx, argsJSON)
+			})
 		case "review_code":
-			return executeReviewCode(ctx, opts.ContextLimit)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReviewCode(ctx, opts.ContextLimit)
+			})
 		case "commit_changes":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
 			})
 		case "create_pr":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCreatePR(ctx, argsJSON)
 			})
 		case "run_tests":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
-			return executeReviewPR(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReviewPR(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "read_issue":
-			return executeReadIssue(ctx, opts.ContextLimit, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executeReadIssue(ctx, opts.ContextLimit, argsJSON)
+			})
 		case "pr_status":
-			return executePRStatus(ctx, argsJSON)
+			return executeReadMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
+				return executePRStatus(ctx, argsJSON)
+			})
 		case "create_branch":
-			return headlessDestructiveGate(opts.PermissionMode, name, func() (string, bool) {
+			return executeMeta(ctx, hp, opts.Recorder, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)
 			})
 		default:
 			return inner(ctx, name, argsJSON)
 		}
 	}
-}
-
-// headlessDestructiveGate blocks destructive tools unless PermissionMode is "auto".
-// Headless mode has no confirmation dialog, so non-auto modes simply block.
-func headlessDestructiveGate(mode, name string, fn func() (string, bool)) (string, bool) {
-	if mode != "auto" {
-		return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
-	}
-	return fn()
 }
 
 // makeMetaToolExecutor wraps a standard tool executor to intercept meta-tool
@@ -360,44 +370,65 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	provider := m.searchProvider
 	apiKey := m.searchAPIKey
 	contextLimit := m.contextLimit
-	mode := m.permissionMode
-	ch := m.confirmCh
+	ip := m.interactivePolicy()
+	rec := m.recorder
+	// Plan mode has no hooks and no recorder, as for native tools.
+	rp, rrec := ip, rec
+	if readOnly {
+		rp, rrec = m.readOnlyPolicy(), nil
+	}
 
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
 		if readOnly && isDestructiveMetaTool(name) {
-			return fmt.Sprintf("[read-only mode] %s is not available, only read-only tools are allowed", name), true
+			return gate(ctx, Policy{ReadOnly: true, Words: planWords}, KindMeta, name, argsJSON)
 		}
 		switch name {
 		case "web_search":
-			return executeWebSearch(ctx, provider, apiKey, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeWebSearch(ctx, provider, apiKey, contextLimit, argsJSON)
+			})
 		case "deep_research":
-			return executeDeepResearch(ctx, provider, apiKey, ep, modelTag, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeDeepResearch(ctx, provider, apiKey, ep, modelTag, contextLimit, argsJSON)
+			})
 		case "fetch_page":
-			return executeFetchPage(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeFetchPage(ctx, contextLimit, argsJSON)
+			})
 		case "remember":
-			return executeRemember(ctx, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeRemember(ctx, argsJSON)
+			})
 		case "review_code":
-			return executeReviewCode(ctx, contextLimit)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReviewCode(ctx, contextLimit)
+			})
 		case "commit_changes":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCommitChanges(ctx, argsJSON)
 			})
 		case "create_pr":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCreatePR(ctx, argsJSON)
 			})
 		case "run_tests":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeRunTests(ctx, argsJSON)
 			})
 		case "review_pr":
-			return executeReviewPR(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReviewPR(ctx, contextLimit, argsJSON)
+			})
 		case "read_issue":
-			return executeReadIssue(ctx, contextLimit, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executeReadIssue(ctx, contextLimit, argsJSON)
+			})
 		case "pr_status":
-			return executePRStatus(ctx, argsJSON)
+			return executeReadMeta(ctx, rp, rrec, name, argsJSON, func() (string, bool) {
+				return executePRStatus(ctx, argsJSON)
+			})
 		case "create_branch":
-			return executeDestructive(ctx, mode, ch, name, argsJSON, func() (string, bool) {
+			return executeMeta(ctx, ip, rec, name, argsJSON, func() (string, bool) {
 				return executeCreateBranch(ctx, argsJSON)
 			})
 		default:
@@ -406,35 +437,10 @@ func (m *ChatModel) makeMetaToolExecutor(inner llm.ToolExecutor, readOnly bool) 
 	}
 }
 
-// executeDestructive gates a destructive meta-tool behind the permission system.
-// In "suggest" mode it blocks; in "confirm" mode it asks the user; in "auto" it proceeds.
+// executeDestructive gates a destructive meta-tool with the shared gate.
 func executeDestructive(ctx context.Context, mode string, ch chan confirmRequest, name, argsJSON string, fn func() (string, bool)) (string, bool) {
-	switch mode {
-	case "suggest":
-		return fmt.Sprintf("[suggest mode] Would run %s — approve with --yolo or permission_mode: auto", name), true
-	case "confirm":
-		prompt := formatConfirmPrompt(name, argsJSON)
-		respCh := make(chan bool, 1)
-		select {
-		case ch <- confirmRequest{
-			Name:   name,
-			Args:   argsJSON,
-			Prompt: prompt,
-			RespCh: respCh,
-		}:
-		case <-ctx.Done():
-			return "cancelled", true
-		}
-		select {
-		case approved := <-respCh:
-			if !approved {
-				return fmt.Sprintf("[denied] %s was not approved", name), true
-			}
-		case <-ctx.Done():
-			return "cancelled", true
-		}
-	}
-	return fn()
+	p := Policy{Mode: mode, CanPrompt: true, Words: interactiveWords, confirm: ch}
+	return executeMeta(ctx, p, nil, name, argsJSON, fn)
 }
 
 // executeWebSearch runs search.DeepQuery and truncates the result to fit context.

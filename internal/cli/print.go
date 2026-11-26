@@ -142,6 +142,7 @@ func runPrintText(opts PrintOptions) int {
 		SearchAPIKey:   opts.SearchAPIKey,
 		ContextLimit:   contextLimit,
 		PermissionMode: opts.PermissionMode,
+		Recorder:       rec,
 	})
 
 	maxRounds := opts.MaxTurns
@@ -293,6 +294,7 @@ func runPrintJSON(opts PrintOptions) int {
 		SearchAPIKey:   opts.SearchAPIKey,
 		ContextLimit:   contextLimit,
 		PermissionMode: opts.PermissionMode,
+		Recorder:       rec,
 	})
 
 	maxRounds := opts.MaxTurns
@@ -417,32 +419,13 @@ func endTask(rec *trace.Recorder, usage *llm.UsageStats, start time.Time) {
 // In "auto" mode, all tools are executed. In other modes, destructive tools
 // are blocked with an error message.
 func makeHeadlessExecutor(permissionMode string, mcpMgr MCPToolProvider, rec *trace.Recorder) llm.ToolExecutor {
+	var router tui.MCPRouter
+	if mcpMgr != nil {
+		router = mcpMgr
+	}
+	p := tui.HeadlessPolicy(permissionMode, router)
 	return func(ctx context.Context, name, argsJSON string) (string, bool) {
-		isMCP := mcpMgr != nil && mcpMgr.IsMCPTool(name)
-		if !isMCP && !tools.Exists(name) {
-			return fmt.Sprintf("unknown tool: %s", name), true
-		}
-		// MCP tools not known to be read-only are gated like native
-		// destructive tools: headless needs --yolo to run them.
-		if permissionMode != "auto" {
-			if isMCP && !mcpMgr.IsReadOnlyTool(name) {
-				return fmt.Sprintf("MCP tool %q is not marked read-only and requires --yolo flag for headless execution", name), true
-			}
-			if !isMCP && tools.IsDestructive(name) {
-				return fmt.Sprintf("tool %q requires --yolo flag for headless execution", name), true
-			}
-		}
-		// Route MCP tools to the MCP manager.
-		if isMCP {
-			rec.ToolCall(name, argsJSON)
-			content, isErr := mcpMgr.Execute(ctx, name, argsJSON)
-			rec.ToolResult(name, content, isErr)
-			return content, isErr
-		}
-		rec.ToolCall(name, argsJSON)
-		result := tools.Execute(ctx, name, argsJSON)
-		rec.ToolResult(name, result.Content, result.IsError)
-		return result.Content, result.IsError
+		return tui.Execute(ctx, p, rec, name, argsJSON)
 	}
 }
 

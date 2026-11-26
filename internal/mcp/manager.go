@@ -69,6 +69,9 @@ func (m *Manager) Start(ctx context.Context, configs []ServerConfig) []error {
 			continue
 		}
 		m.clients[r.name] = r.client
+		for _, bad := range r.client.skipped {
+			errs = append(errs, fmt.Errorf("mcp server %q: skipped a tool with an unusable name %q", r.name, bad))
+		}
 		for _, tool := range r.client.Tools() {
 			qualified := "mcp__" + r.name + "__" + tool.Name
 			m.toolMap[qualified] = r.name
